@@ -76,19 +76,12 @@ internal sealed class SqlServerBulkMerge
         }
         finally
         {
-            // Best effort: if the statement above failed the connection may be in no state to run
-            // this, and the temp table dies with the session anyway. Letting it throw here would
-            // replace the real error with a misleading one.
-            try
-            {
-                await ExecuteNonQueryAsync(
+            await StagingCleanup.RunAsync(
+                    staging,
+                    () => ExecuteNonQueryAsync(
                         connection, transaction, $"DROP TABLE IF EXISTS {staging};",
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (SqlException)
-            {
-            }
+                        CancellationToken.None))
+                .ConfigureAwait(false);
         }
     }
 

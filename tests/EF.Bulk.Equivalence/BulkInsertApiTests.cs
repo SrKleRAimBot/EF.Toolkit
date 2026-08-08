@@ -551,6 +551,48 @@ public abstract class BulkInsertApiTests(DatabaseFixture fixture)
         result.Inserted.ShouldBe(2);
     }
 
+    [Fact]
+    public async Task A_failed_staged_statement_reports_its_own_cause()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        // Two incoming rows share a match value, which neither engine will accept: PostgreSQL
+        // rejects "ON CONFLICT DO UPDATE command cannot affect row a second time", SQL Server
+        // rejects a MERGE that would touch the same target row twice.
+        var incoming = Customers(50);
+        incoming[^1].Email = incoming[0].Email;
+
+        var exception = await Should.ThrowAsync<Exception>(
+            () => context.BulkMergeAsync(
+                incoming, o => o.MatchOn(c => c.Email), TestContext.Current.CancellationToken));
+
+        var message = Flatten(exception);
+
+        // Staging cleanup runs in a finally, so a throwing DROP would replace this with its own
+        // failure. On PostgreSQL that is guaranteed to happen — the transaction is already aborted,
+        // so the DROP cannot succeed — and the caller would be told the transaction was aborted
+        // rather than why.
+        message.ShouldNotContain("current transaction is aborted");
+        message.ShouldNotContain("DROP TABLE");
+
+        // Whatever the engine's wording, the cause has to survive rather than be swallowed.
+        message.ShouldSatisfyAllConditions(
+            () => message.ShouldNotBeNullOrWhiteSpace(),
+            () => message.Length.ShouldBeGreaterThan(20));
+    }
+
+    private static string Flatten(Exception exception)
+    {
+        var builder = new System.Text.StringBuilder();
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            builder.AppendLine(current.Message);
+        }
+
+        return builder.ToString();
+    }
+
     private readonly record struct BulkProgressSnapshot(int Completed, int Total);
 
     private async Task ResetAsync()

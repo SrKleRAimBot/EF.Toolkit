@@ -42,7 +42,25 @@ public static class BulkDiagnostics
     /// </summary>
     public const string ExplicitFallback = "EFBulk.ExplicitFallback";
 
+    /// <summary>
+    ///     Raised when a staging table could not be dropped. Payload:
+    ///     <see cref="StagingCleanupFailedEvent" />.
+    /// </summary>
+    /// <remarks>
+    ///     Never thrown, because cleanup runs in a <c>finally</c> and would otherwise replace the
+    ///     real exception — but reported, so a leak is visible rather than silent.
+    /// </remarks>
+    public const string StagingCleanupFailed = "EFBulk.StagingCleanupFailed";
+
     internal static readonly DiagnosticListener Listener = new(ListenerName);
+
+    internal static void ReportStagingCleanupFailed(string table, Exception exception)
+    {
+        if (Listener.IsEnabled(StagingCleanupFailed))
+        {
+            Listener.Write(StagingCleanupFailed, new StagingCleanupFailedEvent(table, exception));
+        }
+    }
 
     internal static void ReportExplicitFallback(Type entityType, int rowCount, string? reason)
     {
@@ -74,6 +92,11 @@ public static class BulkDiagnostics
         }
     }
 }
+
+/// <summary>Payload of <see cref="BulkDiagnostics.StagingCleanupFailed" />.</summary>
+/// <param name="Table">The staging table that could not be dropped.</param>
+/// <param name="Exception">Why it could not be dropped.</param>
+public sealed record StagingCleanupFailedEvent(string Table, Exception Exception);
 
 /// <summary>Payload of <see cref="BulkDiagnostics.ExplicitFallback" />.</summary>
 /// <param name="EntityType">The entity type being written.</param>
