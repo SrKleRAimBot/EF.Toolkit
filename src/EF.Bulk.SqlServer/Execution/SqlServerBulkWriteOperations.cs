@@ -177,11 +177,19 @@ internal sealed class SqlServerBulkWriteOperations
         }
         finally
         {
-            // Temp tables die with the session, but connections are pooled and reused, so one left
-            // behind would outlive the operation that created it.
-            await ExecuteNonQueryAsync(
-                    connection, transaction, $"DROP TABLE IF EXISTS {staging};", CancellationToken.None)
-                .ConfigureAwait(false);
+            // Best effort: if the statement above failed the connection may be in no state to
+            // run this, and the temp table dies with the session anyway. Letting it throw here
+            // would replace the real error with a misleading one.
+            try
+            {
+                await ExecuteNonQueryAsync(
+                        connection, transaction, $"DROP TABLE IF EXISTS {staging};",
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (SqlException)
+            {
+            }
         }
     }
 

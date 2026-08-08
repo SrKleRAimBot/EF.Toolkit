@@ -163,7 +163,36 @@ iterations after warmup, Docker on an M-series Mac — read the ratios, not the 
 | | `SaveChanges()`, EF.Bulk | 526 ms | **4.7x** | 466 MB |
 | | `BulkInsertAsync` | 233 ms | **10.6x** | 16.6 MB |
 
-Reproduce with `dotnet run --project tests/EF.Bulk.Benchmarks -c Release -- --filter "*Insert*"`.
+Update, delete and upsert at 10,000 rows. Seeding and loading happen outside the measurement, so
+only the write is timed:
+
+| | Time | vs baseline | Allocated |
+| --- | ---: | ---: | ---: |
+| Update — `SaveChanges()`, stock EF | 319 ms | — | 45.0 MB |
+| Update — `SaveChanges()`, EF.Bulk | 143 ms | **2.2x** | 33.0 MB |
+| Update — `BulkUpdateAsync` | 73 ms | **4.4x** | 7.5 MB |
+| Delete — `SaveChanges()`, stock EF | 277 ms | — | 33.2 MB |
+| Delete — `SaveChanges()`, EF.Bulk | 135 ms | **2.1x** | 31.2 MB |
+| Delete — `BulkDeleteAsync` | 22 ms | **12.6x** | 6.5 MB |
+| Upsert — read-then-decide, then `SaveChanges()` | 435 ms | — | 65.9 MB |
+| Upsert — `BulkMergeAsync` | 120 ms | **3.6x** | 9.6 MB |
+
+EF Core has no upsert, so the merge baseline is what an application actually writes by hand: load
+the existing rows, decide per item whether to add or update, save. Besides being slower it also
+races — another writer can insert between the read and the write — which the merge cannot, because
+the database makes the decision.
+
+Reproduce with `dotnet run --project tests/EF.Bulk.Benchmarks -c Release -- --filter "*"`.
+
+## Sample
+
+A runnable walkthrough of every operation lives in `samples/EF.Bulk.Sample`. It starts its own
+PostgreSQL in Docker, so it needs no setup:
+
+```bash
+dotnet run --project samples/EF.Bulk.Sample
+dotnet run --project samples/EF.Bulk.Sample -- "Host=localhost;Database=shop;Username=postgres;Password=postgres"
+```
 
 **Transparent mode** replaces how EF executes a batch, but everything before that still happens:
 change detection, a modification command per row, and the dependency ordering that keeps foreign

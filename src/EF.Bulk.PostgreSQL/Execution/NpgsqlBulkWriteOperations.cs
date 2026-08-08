@@ -166,11 +166,18 @@ internal sealed class NpgsqlBulkWriteOperations
         }
         finally
         {
-            // Temp tables live as long as the session, and Npgsql pools sessions, so one left
-            // behind would outlive the operation that created it.
-            await ExecuteNonQueryAsync(
-                    connection, $"DROP TABLE IF EXISTS {staging}", CancellationToken.None)
-                .ConfigureAwait(false);
+            // Best effort. If the statement above failed, PostgreSQL has aborted the transaction
+            // and will reject this too -- and the temp table dies with the rollback regardless.
+            // Letting it throw here would replace the real error with a misleading one.
+            try
+            {
+                await ExecuteNonQueryAsync(
+                        connection, $"DROP TABLE IF EXISTS {staging}", CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (PostgresException)
+            {
+            }
         }
     }
 

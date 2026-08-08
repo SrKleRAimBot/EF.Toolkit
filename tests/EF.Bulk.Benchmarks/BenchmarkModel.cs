@@ -21,6 +21,10 @@ public class BenchmarkContext(DbContextOptions<BenchmarkContext> options) : DbCo
             b.Property(x => x.Name).HasMaxLength(200).IsRequired();
             b.Property(x => x.Email).HasMaxLength(320).IsRequired();
             b.Property(x => x.Balance).HasPrecision(18, 2);
+
+            // MergeBenchmarks matches on Email, and ON CONFLICT needs a unique index to define
+            // what a conflict is.
+            b.HasIndex(x => x.Email).IsUnique();
         });
 }
 

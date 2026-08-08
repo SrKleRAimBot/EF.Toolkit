@@ -77,12 +77,19 @@ internal sealed class SqlServerStagingInsert
         }
         finally
         {
-            // Temp tables die with the session, but connections are pooled and reused, so leaving
-            // them behind would accumulate for the life of the pool.
-            await ExecuteNonQueryAsync(
-                    connection, transaction, $"DROP TABLE IF EXISTS {stagingRef};",
-                    CancellationToken.None)
-                .ConfigureAwait(false);
+            // Best effort: if the statement above failed the connection may be in no state to
+            // run this, and the temp table dies with the session anyway. Letting it throw here
+            // would replace the real error with a misleading one.
+            try
+            {
+                await ExecuteNonQueryAsync(
+                        connection, transaction, $"DROP TABLE IF EXISTS {stagingRef};",
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (SqlException)
+            {
+            }
         }
     }
 

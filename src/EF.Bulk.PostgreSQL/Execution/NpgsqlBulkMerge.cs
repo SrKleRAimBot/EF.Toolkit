@@ -126,9 +126,18 @@ internal sealed class NpgsqlBulkMerge
         }
         finally
         {
-            await ExecuteNonQueryAsync(
-                    connection, $"DROP TABLE IF EXISTS {staging}", CancellationToken.None)
-                .ConfigureAwait(false);
+            // Best effort. If the statement above failed, PostgreSQL has aborted the transaction
+            // and will reject this too -- and the temp table dies with the rollback regardless.
+            // Letting it throw here would replace the real error with a misleading one.
+            try
+            {
+                await ExecuteNonQueryAsync(
+                        connection, $"DROP TABLE IF EXISTS {staging}", CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (PostgresException)
+            {
+            }
         }
     }
 
