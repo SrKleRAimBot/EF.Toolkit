@@ -1,5 +1,6 @@
 using EFBulk.Configuration;
 using EFBulk.Execution;
+using EFBulk.Planning;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -115,6 +116,148 @@ internal static class BulkOperations
         return kind is BulkOperationKind.Merge or BulkOperationKind.Synchronize
             ? merged
             : Result(kind, written);
+    }
+
+    /// <summary>
+    ///     Inserts everything reachable from <paramref name="roots" />, principals first.
+    /// </summary>
+    /// <remarks>
+    ///     The whole graph goes in one transaction. A half-written graph would leave dependents
+    ///     referencing principals that do not exist, which is worse than not starting.
+    /// </remarks>
+    public static async Task<BulkResult> InsertGraphAsync<TEntity>(
+        DbContext context,
+        IReadOnlyList<TEntity> roots,
+        BulkOperationOptions options,
+        CancellationToken cancellationToken)
+        where TEntity : class
+    {
+        if (roots.Count == 0)
+        {
+            return BulkResult.ForInsert(0);
+        }
+
+        var bulkOptions = Resolve<BulkOptions>(context, "UseBulkOperations()");
+        var executor = Resolve<IBulkOperationExecutor>(context, "UseBulkOperations()");
+        var connection = context.GetService<IRelationalConnection>();
+
+        var rootType = context.Model.FindEntityType(typeof(TEntity))
+            ?? throw new BulkNotSupportedException(
+                $"'{typeof(TEntity).Name}' is not part of the model for "
+                + $"'{context.GetType().Name}'.");
+
+        var byType = EntityGraphCollector.Collect(context.Model, rootType, roots);
+        var order = EntityTypeGraph.TopologicalOrder(context.Model);
+        var batchSize = options.BatchSize ?? bulkOptions.MaxBatchSize;
+
+        var ownsTransaction = context.Database.CurrentTransaction is null;
+        var transaction = ownsTransaction
+            ? await context.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+
+        var written = 0;
+        var total = byType.Sum(kv => kv.Value.Count);
+
+        try
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                foreach (var entityType in order)
+                {
+                    if (!byType.TryGetValue(entityType, out var entities) || entities.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    var plan = BulkEntityPlan.For(entityType, EntityState.Added);
+                    var graph = EntityGraphPlan.For(entityType);
+
+                    foreach (var layer in EntityGraphCollector.LayerBySelfReference(entityType, entities))
+                    {
+                        // Principals in earlier types and layers now have their keys, so the
+                        // foreign keys pointing at them can be filled in. This is the step change
+                        // tracking would normally perform.
+                        foreach (var entity in layer)
+                        {
+                            foreach (var fixup in graph.Fixups)
+                            {
+                                fixup.Apply(entity);
+                            }
+                        }
+
+                        written += await WriteAsync(
+                                executor, connection, plan, layer, batchSize, cancellationToken)
+                            .ConfigureAwait(false);
+
+                        options.Progress?.Invoke(new BulkProgress(written, total));
+                    }
+                }
+            }
+            finally
+            {
+                await connection.CloseAsync().ConfigureAwait(false);
+            }
+
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            if (transaction is not null)
+            {
+                await transaction.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        foreach (var (_, entities) in byType)
+        {
+            Reconcile(context, entities, EntityState.Added, options.Track);
+        }
+
+        return BulkResult.ForInsert(written);
+    }
+
+    private static async Task<int> WriteAsync(
+        IBulkOperationExecutor executor,
+        IRelationalConnection connection,
+        BulkEntityPlan plan,
+        List<object> entities,
+        int batchSize,
+        CancellationToken cancellationToken)
+    {
+        var written = 0;
+
+        for (var offset = 0; offset < entities.Count; offset += batchSize)
+        {
+            var slice = entities.GetRange(offset, Math.Min(batchSize, entities.Count - offset));
+            var rows = new EntityRowSet(slice, plan, EntityState.Added, BulkOperationKind.Insert);
+
+            if (!executor.CanExecute(rows, out var reason))
+            {
+                throw new BulkNotSupportedException(
+                    $"EF.Bulk cannot insert '{plan.TableName}' as part of a graph: "
+                    + $"{reason ?? "no reason given."} Graph inserts cannot fall back per entity "
+                    + "type, because the rows already written would be left behind.");
+            }
+
+            var result = await executor.ExecuteAsync(rows, connection, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!result.Handled)
+            {
+                throw new BulkNotSupportedException(
+                    $"EF.Bulk cannot insert '{plan.TableName}' as part of a graph: "
+                    + $"{result.DeclinedReason ?? "no reason given."}");
+            }
+
+            written += result.RowsAffected;
+        }
+
+        return written;
     }
 
     private static BulkResult Result(BulkOperationKind kind, int rows)

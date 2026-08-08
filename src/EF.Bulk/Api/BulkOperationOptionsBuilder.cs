@@ -52,6 +52,21 @@ public class BulkOperationOptionsBuilder<TEntity>
         return this;
     }
 
+    /// <summary>
+    ///     Follows navigations and writes everything reachable, principals before dependents.
+    /// </summary>
+    /// <returns>The same builder, for chaining.</returns>
+    /// <remarks>
+    ///     Foreign keys are filled in from the navigations as each principal is written, which is
+    ///     the job change tracking would normally do — so assigning <c>order.Customer</c> is enough
+    ///     and <c>order.CustomerId</c> takes care of itself.
+    /// </remarks>
+    public virtual BulkOperationOptionsBuilder<TEntity> IncludeGraph()
+    {
+        Options = Options with { IncludeGraph = true };
+        return this;
+    }
+
     /// <summary>Sets the maximum number of rows sent to the server in one operation.</summary>
     /// <param name="rows">Row count; must be at least 1.</param>
     /// <returns>The same builder, for chaining.</returns>

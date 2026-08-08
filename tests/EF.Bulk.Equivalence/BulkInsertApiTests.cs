@@ -441,6 +441,116 @@ public abstract class BulkInsertApiTests(DatabaseFixture fixture)
             .ShouldBe(200);
     }
 
+    [Fact]
+    public async Task Include_graph_writes_a_three_level_graph_in_dependency_order()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var customers = Customers(100);
+        foreach (var customer in customers)
+        {
+            var order = new Order
+            {
+                Customer = customer,
+                Reference = customer.Email,
+                Status = OrderStatus.Placed,
+                PlacedAt = Epoch
+            };
+
+            for (var line = 1; line <= 3; line++)
+            {
+                order.Lines.Add(new OrderLine
+                {
+                    Order = order,
+                    Sku = $"SKU-{line}",
+                    Quantity = line,
+                    UnitPrice = 9.99m * line
+                });
+            }
+
+            customer.Orders.Add(order);
+        }
+
+        // Only Customers are passed in; Orders and OrderLines are reached through navigations.
+        var result = await context.BulkInsertAsync(
+            customers, o => o.IncludeGraph(), TestContext.Current.CancellationToken);
+
+        result.Inserted.ShouldBe(100 + 100 + 300);
+
+        // Nothing set CustomerId or OrderId by hand — the foreign keys were filled in from the
+        // navigations as each principal was written, which is what change tracking normally does.
+        customers.ShouldAllBe(c => c.Id > 0);
+        customers.ShouldAllBe(c => c.Orders[0].CustomerId == c.Id);
+        customers.ShouldAllBe(c => c.Orders[0].Lines[0].OrderId == c.Orders[0].Id);
+
+        (await context.OrderLines.AsNoTracking().CountAsync(TestContext.Current.CancellationToken))
+            .ShouldBe(300);
+    }
+
+    [Fact]
+    public async Task Include_graph_orders_a_self_referencing_tree_by_depth()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var roots = new List<Category>();
+        for (var r = 0; r < 15; r++)
+        {
+            var root = new Category { Name = $"Root {r}" };
+            for (var c = 0; c < 4; c++)
+            {
+                var mid = new Category { Name = $"Mid {r}.{c}", Parent = root };
+                mid.Children.Add(new Category { Name = $"Leaf {r}.{c}", Parent = mid });
+                root.Children.Add(mid);
+            }
+
+            roots.Add(root);
+        }
+
+        // One table whose rows depend on each other: table-level ordering cannot resolve this, so
+        // the rows have to be layered by depth.
+        var result = await context.BulkInsertAsync(
+            roots, o => o.IncludeGraph(), TestContext.Current.CancellationToken);
+
+        result.Inserted.ShouldBe(15 + 60 + 60);
+
+        var stored = await context.Categories.AsNoTracking()
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        stored.Count.ShouldBe(135);
+        stored.Count(c => c.ParentId is null).ShouldBe(15);
+
+        // Every non-root points at a row that actually exists.
+        var ids = stored.Select(c => c.Id).ToHashSet();
+        stored.Where(c => c.ParentId is not null)
+            .ShouldAllBe(c => ids.Contains(c.ParentId!.Value));
+    }
+
+    [Fact]
+    public async Task Include_graph_visits_each_entity_once()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var customer = Customers(1)[0];
+        var order = new Order
+        {
+            Customer = customer,
+            Reference = "R1",
+            Status = OrderStatus.Placed,
+            PlacedAt = Epoch
+        };
+
+        // Both directions of the same relationship, so a naive walk would revisit forever.
+        customer.Orders.Add(order);
+
+        var result = await context.BulkInsertAsync(
+            new[] { customer }, o => o.IncludeGraph(), TestContext.Current.CancellationToken);
+
+        result.Inserted.ShouldBe(2);
+    }
+
     private readonly record struct BulkProgressSnapshot(int Completed, int Total);
 
     private async Task ResetAsync()

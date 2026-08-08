@@ -42,6 +42,11 @@ public sealed record BulkOperationOptions
     ///     Columns a merge matches on. When <see langword="null" />, the primary key is used.
     /// </summary>
     public LambdaExpression? Match { get; init; }
+
+    /// <summary>
+    ///     Whether to follow navigations and write the whole reachable graph, principals first.
+    /// </summary>
+    public bool IncludeGraph { get; init; }
 }
 
 /// <summary>Progress through a bulk operation.</summary>

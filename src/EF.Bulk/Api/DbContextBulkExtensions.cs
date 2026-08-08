@@ -52,14 +52,14 @@ public static class DbContextBulkExtensions
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(entities);
 
-        return BulkOperations.ExecuteAsync(
-            context,
-            entities as IReadOnlyList<TEntity> ?? [.. entities],
-            EntityState.Added,
-            BulkOperationKind.Insert,
-            matchProperties: null,
-            Build(configure),
-            cancellationToken);
+        var options = Build(configure);
+        var materialized = entities as IReadOnlyList<TEntity> ?? [.. entities];
+
+        return options.IncludeGraph
+            ? BulkOperations.InsertGraphAsync(context, materialized, options, cancellationToken)
+            : BulkOperations.ExecuteAsync(
+                context, materialized, EntityState.Added, BulkOperationKind.Insert,
+                matchProperties: null, options, cancellationToken);
     }
 
     /// <summary>

@@ -102,7 +102,32 @@ never seen half-synchronised.
 `BulkSaveChangesAsync` is a synonym for `SaveChangesAsync`: once `UseBulkOperations()` is applied
 every save already goes through EF.Bulk. It exists because it is the name people look for.
 
-`IncludeGraph()` is not implemented yet — insert principals before their dependents yourself.
+### Writing a whole graph
+
+By default you order writes yourself. `IncludeGraph()` does it for you: it follows navigations from
+the entities you pass in, orders the entity types so principals come first, and fills in each
+foreign key from its navigation once the principal has a key — the job change tracking would
+normally do.
+
+```csharp
+foreach (var customer in customers)
+{
+    var order = new Order { Customer = customer, ... };   // no CustomerId
+    order.Lines.Add(new OrderLine { Order = order, ... }); // no OrderId
+    customer.Orders.Add(order);
+}
+
+// Only the customers are passed; orders and lines are reached through navigations.
+await context.BulkInsertAsync(customers, o => o.IncludeGraph());
+```
+
+A table that references itself is layered by depth, because there the ordering depends on the data
+rather than the schema. Two entity types that reference *each other* are rejected with a clear
+error: breaking such a cycle needs a second pass that fills the foreign keys after both rows exist,
+which `SaveChanges()` does and this does not.
+
+The whole graph goes in one transaction — a half-written graph would leave dependents pointing at
+principals that were never inserted.
 
 ### Change tracking
 
