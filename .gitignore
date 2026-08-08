@@ -20,6 +20,7 @@ coverage*.info
 
 ## BenchmarkDotNet
 BenchmarkDotNet.Artifacts/
+bench-artifacts/
 
 ## NuGet
 *.nupkg

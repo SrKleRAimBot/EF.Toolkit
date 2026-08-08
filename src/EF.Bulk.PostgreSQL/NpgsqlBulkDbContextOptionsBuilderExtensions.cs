@@ -73,4 +73,18 @@ public static class NpgsqlBulkDbContextOptionsBuilderExtensions
         this DbContextOptionsBuilder optionsBuilder,
         Action<NpgsqlBulkOptionsBuilder>? configure = null)
         => UseBulkOperations(optionsBuilder, configure);
+
+    /// <summary>
+    ///     Unambiguous alias for the strongly-typed
+    ///     <see cref="UseBulkOperations{TContext}(DbContextOptionsBuilder{TContext}, Action{NpgsqlBulkOptionsBuilder})" />.
+    /// </summary>
+    /// <typeparam name="TContext">The context type.</typeparam>
+    /// <param name="optionsBuilder">The builder being configured. Call after <c>UseNpgsql</c>.</param>
+    /// <param name="configure">Optional settings.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    public static DbContextOptionsBuilder<TContext> UseNpgsqlBulk<TContext>(
+        this DbContextOptionsBuilder<TContext> optionsBuilder,
+        Action<NpgsqlBulkOptionsBuilder>? configure = null)
+        where TContext : DbContext
+        => UseBulkOperations(optionsBuilder, configure);
 }

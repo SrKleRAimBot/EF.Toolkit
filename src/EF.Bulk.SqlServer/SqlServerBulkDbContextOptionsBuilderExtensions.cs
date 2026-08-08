@@ -72,4 +72,18 @@ public static class SqlServerBulkDbContextOptionsBuilderExtensions
         this DbContextOptionsBuilder optionsBuilder,
         Action<SqlServerBulkOptionsBuilder>? configure = null)
         => UseBulkOperations(optionsBuilder, configure);
+
+    /// <summary>
+    ///     Unambiguous alias for the strongly-typed
+    ///     <see cref="UseBulkOperations{TContext}(DbContextOptionsBuilder{TContext}, Action{SqlServerBulkOptionsBuilder})" />.
+    /// </summary>
+    /// <typeparam name="TContext">The context type.</typeparam>
+    /// <param name="optionsBuilder">The builder being configured. Call after <c>UseSqlServer</c>.</param>
+    /// <param name="configure">Optional settings.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    public static DbContextOptionsBuilder<TContext> UseSqlServerBulk<TContext>(
+        this DbContextOptionsBuilder<TContext> optionsBuilder,
+        Action<SqlServerBulkOptionsBuilder>? configure = null)
+        where TContext : DbContext
+        => UseBulkOperations(optionsBuilder, configure);
 }

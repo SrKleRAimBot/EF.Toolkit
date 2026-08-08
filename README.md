@@ -148,30 +148,34 @@ write, so a later `SaveChanges()` cannot re-insert them.
 
 ## What to expect from each mode
 
-The two modes have genuinely different performance ceilings, and it is worth knowing which one
-your workload needs.
+Inserting one table with server-generated keys into PostgreSQL 16. BenchmarkDotNet, five
+iterations after warmup, Docker on an M-series Mac — read the ratios, not the absolute times.
 
-**Transparent mode** replaces how EF *executes* a batch, but everything EF does before that still
-happens: change detection, building a modification command per row, and the dependency ordering
-that makes foreign keys safe. Measured on 5,000 rows, that pipeline is around 70% of the total
-time on PostgreSQL — so even an instantaneous write would cap the gain near 2x. It is free to turn
-on and it never changes results, but it is not where large numbers come from.
+| Rows | | Time | vs stock | Allocated |
+| ---: | --- | ---: | ---: | ---: |
+| 1,000 | `SaveChanges()`, stock EF | 49 ms | — | 8.5 MB |
+| | `SaveChanges()`, EF.Bulk | 31 ms | **1.6x** | 5.0 MB |
+| | `BulkInsertAsync` | 8 ms | **6.2x** | 0.3 MB |
+| 10,000 | `SaveChanges()`, stock EF | 363 ms | — | 77.6 MB |
+| | `SaveChanges()`, EF.Bulk | 278 ms | **1.3x** | 47.3 MB |
+| | `BulkInsertAsync` | 44 ms | **8.3x** | 2.1 MB |
+| 100,000 | `SaveChanges()`, stock EF | 2,464 ms | — | 766 MB |
+| | `SaveChanges()`, EF.Bulk | 526 ms | **4.7x** | 466 MB |
+| | `BulkInsertAsync` | 233 ms | **10.6x** | 16.6 MB |
 
-**The explicit API** skips that pipeline entirely — no change detection, no modification commands,
-no dependency graph — and reads values straight off your objects through compiled accessors. The
-trade is that you take responsibility for ordering: insert principals before their dependents.
+Reproduce with `dotnet run --project tests/EF.Bulk.Benchmarks -c Release -- --filter "*Insert*"`.
 
-Inserting 5,000 rows, one table, server-generated keys:
+**Transparent mode** replaces how EF executes a batch, but everything before that still happens:
+change detection, a modification command per row, and the dependency ordering that keeps foreign
+keys safe. That fixed cost is why the gain is modest on small saves — but it does not stay modest.
+At 100,000 rows stock EF allocates 766 MB and starts collecting gen-2, and avoiding most of that
+work is worth 4.7x. Turning it on is free and never changes results.
 
-| | PostgreSQL 16 | SQL Server 2022 |
-| --- | --- | --- |
-| `SaveChanges()`, stock EF | 273 ms | 358 ms |
-| `SaveChanges()`, EF.Bulk | 181 ms — **1.5x** | 215 ms — **1.7x** |
-| `BulkInsertAsync` | 31 ms — **8.9x** | 134 ms — **2.7x** |
-
-Local Docker, single connection; treat them as shape rather than absolutes. SQL Server was measured
-under arm64 emulation, and its figures are additionally held back by the staging table an `IDENTITY`
-column requires — PostgreSQL reserves sequence values up front instead and needs no staging.
+**The explicit API** skips that pipeline entirely and reads values straight off your objects
+through compiled accessors, in exchange for you ordering principals before dependents (or using
+`IncludeGraph()`). It is faster at every size, and the memory difference is the more striking
+number: **46x less allocated at 100,000 rows**, with no gen-2 collections at all. If you are
+loading data rather than saving a graph you have been working with, use it.
 
 ## Limitations
 
