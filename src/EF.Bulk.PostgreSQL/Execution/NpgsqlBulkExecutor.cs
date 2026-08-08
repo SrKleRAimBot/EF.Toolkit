@@ -80,27 +80,9 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
 
             case EntityState.Modified:
             case EntityState.Deleted:
-                foreach (var column in rows.Columns)
-                {
-                    if (column.IsRead)
-                    {
-                        reason = $"'{column.Name}' is store-generated and must be read back after "
-                            + "the write, which the set-based path does not yet support.";
-                        return false;
-                    }
-
-                    if (column.IsWrite && column.IsCondition)
-                    {
-                        // Such a column needs its loaded value in the WHERE clause and its new
-                        // value in the SET clause at once — two values for one column, which the
-                        // row set exposes only one of. A rowversion updated in place is the case
-                        // that hits this.
-                        reason = $"'{column.Name}' is both written and used to locate the row, "
-                            + "so it needs its original and current values simultaneously.";
-                        return false;
-                    }
-                }
-
+                // Concurrency tokens are handled rather than declined: the loaded value is staged
+                // to join on, the new value is staged separately to assign, and RETURNING carries
+                // back whatever the database regenerated.
                 reason = null;
                 return true;
 
@@ -286,6 +268,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         var writeIndices = new List<int>();
         var conditionIndices = new List<int>();
         var keyIndices = new List<int>();
+        var readIndices = new List<int>();
 
         for (var i = 0; i < rows.Columns.Count; i++)
         {
@@ -300,9 +283,17 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             {
                 conditionIndices.Add(i);
             }
-            else if (column.IsWrite)
+
+            // A column can be both written and a condition -- a client-managed concurrency token
+            // is the usual case -- so this is not an else.
+            if (column.IsWrite)
             {
                 writeIndices.Add(i);
+            }
+
+            if (column.IsRead)
+            {
+                readIndices.Add(i);
             }
         }
 
@@ -325,7 +316,8 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
                 .ConfigureAwait(false)
             : await operations
                 .UpdateAsync(
-                    rows, connection, writeIndices, conditionIndices, keyIndices, cancellationToken)
+                    rows, connection, writeIndices, conditionIndices, keyIndices, readIndices,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
         return BulkExecutionResult.Executed(affected);
@@ -335,13 +327,13 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
     private async Task CopyIntoAsync(
         NpgsqlConnection connection,
         string table,
-        IReadOnlyList<int> columnIndices,
+        IReadOnlyList<StagingColumn> staged,
         IBulkRowSet rows,
         CancellationToken cancellationToken)
     {
         var columnList = string.Join(
             ", ",
-            columnIndices.Select(i => _sqlHelper.DelimitIdentifier(rows.Columns[i].Name)));
+            staged.Select(c => _sqlHelper.DelimitIdentifier(c.Name)));
 
         var importer = await connection
             .BeginBinaryImportAsync(
@@ -359,12 +351,11 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             {
                 await importer.StartRowAsync(cancellationToken).ConfigureAwait(false);
 
-                foreach (var index in columnIndices)
+                foreach (var staging in staged)
                 {
-                    var column = rows.Columns[index];
-                    var value = column.ToProviderValue(rows.GetValue(row, index));
-
-                    await WriteValueAsync(importer, column, value, cancellationToken)
+                    await WriteValueAsync(
+                            importer, rows.Columns[staging.Index], staging.ValueFor(rows, row),
+                            cancellationToken)
                         .ConfigureAwait(false);
                 }
             }

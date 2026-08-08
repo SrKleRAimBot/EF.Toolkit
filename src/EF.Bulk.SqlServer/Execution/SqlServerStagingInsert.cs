@@ -64,7 +64,8 @@ internal sealed class SqlServerStagingInsert
 
                 await bulkCopy
                     .WriteToServerAsync(
-                        new BulkRowSetDataReader(rows, writeIndices, includeOrdinal: true),
+                        new BulkRowSetDataReader(
+                            rows, StagingColumn.ForWrite(rows, writeIndices), includeOrdinal: true),
                         cancellationToken)
                     .ConfigureAwait(false);
             }

@@ -45,6 +45,13 @@ internal sealed class EntityRowSet : IBulkRowSet
         => _plan.Getters[column](_entities[row]);
 
     /// <remarks>
+    ///     A detached entity keeps no before-image, so the current value is the only one available.
+    ///     For a concurrency token that is the right answer anyway: the value on the object is the
+    ///     one that was loaded, and the database supplies the next one.
+    /// </remarks>
+    public object? GetOriginalValue(int row, int column) => GetValue(row, column);
+
+    /// <remarks>
     ///     Writing the value onto the entity is what makes <c>order.Id</c> populated when the call
     ///     returns, independently of whether the caller asked for change tracking. Tracking is the
     ///     expensive part; getting your keys back is not.

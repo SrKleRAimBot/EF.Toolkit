@@ -177,6 +177,18 @@ through compiled accessors, in exchange for you ordering principals before depen
 number: **46x less allocated at 100,000 rows**, with no gen-2 collections at all. If you are
 loading data rather than saving a graph you have been working with, use it.
 
+### Concurrency tokens
+
+Optimistic concurrency works under transparent mode. The value the row was loaded with is staged to
+locate it, the new value is staged separately to assign, and anything the database regenerates is
+read back — so a token column, which is written *and* used to find the row, gets both of its values
+into the same statement.
+
+A row that no longer matches raises `DbUpdateConcurrencyException` naming the affected entities, as
+it would under stock EF. That takes some doing: a bulk statement reports one affected-row count for
+the whole set, so each statement returns the keys it actually touched and anything missing from
+that set is a conflict.
+
 ## Limitations
 
 - `IDbCommandInterceptor` does not fire for `COPY` / `SqlBulkCopy` paths — these are not

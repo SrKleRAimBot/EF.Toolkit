@@ -82,8 +82,14 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
     public object? GetValue(int row, int column)
     {
         var modification = Resolve(row, column);
-        return modification.IsCondition ? modification.OriginalValue : modification.Value;
+
+        // A column that is only a condition carries no new value -- on a delete, Value is null for
+        // every key -- so the loaded value is the one to use.
+        return modification.IsWrite ? modification.Value : modification.OriginalValue;
     }
+
+    /// <inheritdoc />
+    public object? GetOriginalValue(int row, int column) => Resolve(row, column).OriginalValue;
 
     /// <remarks>
     ///     Assigning <see cref="IColumnModification.Value" /> is what keeps change tracking intact:

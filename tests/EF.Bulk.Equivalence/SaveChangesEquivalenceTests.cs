@@ -230,6 +230,64 @@ public abstract class SaveChangesEquivalenceTests(DatabaseFixture fixture)
         });
 
     [Fact]
+    public Task Update_with_a_concurrency_token()
+        => AssertEquivalent(async context =>
+        {
+            context.Inventories.AddRange(Inventories(200));
+            await context.SaveChangesAsync();
+
+            // The token is both written and used to locate the row, so a staged update has to
+            // carry its loaded value and its new value at the same time.
+            foreach (var item in await context.Inventories.OrderBy(i => i.Id).ToListAsync())
+            {
+                item.Quantity += 10;
+                item.Version++;
+            }
+
+            await context.SaveChangesAsync();
+        });
+
+    [Fact]
+    public Task Concurrency_conflict_fails_the_same_way()
+        => AssertEquivalent(async context =>
+        {
+            context.Inventories.AddRange(Inventories(150));
+            await context.SaveChangesAsync();
+
+            var items = await context.Inventories.OrderBy(i => i.Id).ToListAsync();
+
+            // Simulate someone else having written row 40 since it was loaded: its stored Version
+            // no longer matches the one this context holds. ExecuteUpdate bypasses the change
+            // tracker, so the loaded entity keeps its now-stale value -- exactly the situation
+            // optimistic concurrency exists to catch.
+            var staleId = items[40].Id;
+            await context.Inventories
+                .Where(i => i.Id == staleId)
+                .ExecuteUpdateAsync(u => u.SetProperty(i => i.Version, i => i.Version + 1));
+
+            foreach (var item in items)
+            {
+                item.Quantity += 1;
+                item.Version++;
+            }
+
+            await context.SaveChangesAsync();
+        });
+
+    [Fact]
+    public Task Delete_with_a_concurrency_token()
+        => AssertEquivalent(async context =>
+        {
+            context.Inventories.AddRange(Inventories(200));
+            await context.SaveChangesAsync();
+
+            var items = await context.Inventories.OrderBy(i => i.Id).Take(120).ToListAsync();
+            context.Inventories.RemoveRange(items);
+
+            await context.SaveChangesAsync();
+        });
+
+    [Fact]
     public Task Unique_constraint_violation_fails_the_same_way()
         => AssertEquivalent(async context =>
         {
@@ -253,6 +311,17 @@ public abstract class SaveChangesEquivalenceTests(DatabaseFixture fixture)
     /// </remarks>
     private static Guid NoteId(int seed)
         => new(seed, 0, 0, [0, 0, 0, 0, 0, 0, 0, 0]);
+
+    private static List<Inventory> Inventories(int count)
+        =>
+        [
+            .. Enumerable.Range(0, count).Select(i => new Inventory
+            {
+                Sku = $"SKU-{i:D5}",
+                Quantity = i,
+                Version = 1
+            })
+        ];
 
     private static List<Customer> Customers(int count, int startAt = 0)
         =>

@@ -14,27 +14,27 @@ namespace EFBulk.SqlServer.Execution;
 internal sealed class BulkRowSetDataReader : IDataReader
 {
     private readonly IBulkRowSet _rows;
-    private readonly IReadOnlyList<int> _columnIndices;
+    private readonly IReadOnlyList<StagingColumn> _columns;
     private readonly int _ordinalColumn;
     private int _row = -1;
 
     /// <param name="rows">The rows to stream.</param>
-    /// <param name="columnIndices">Indices into <see cref="IBulkRowSet.Columns" />, in write order.</param>
+    /// <param name="columns">The staging layout, in write order.</param>
     /// <param name="includeOrdinal">
     ///     Whether to append a synthetic trailing column carrying each row's position, used to
     ///     correlate server-generated values back through <c>MERGE ... OUTPUT</c>.
     /// </param>
     public BulkRowSetDataReader(
         IBulkRowSet rows,
-        IReadOnlyList<int> columnIndices,
+        IReadOnlyList<StagingColumn> columns,
         bool includeOrdinal)
     {
         _rows = rows;
-        _columnIndices = columnIndices;
-        _ordinalColumn = includeOrdinal ? columnIndices.Count : -1;
+        _columns = columns;
+        _ordinalColumn = includeOrdinal ? columns.Count : -1;
     }
 
-    public int FieldCount => _columnIndices.Count + (_ordinalColumn >= 0 ? 1 : 0);
+    public int FieldCount => _columns.Count + (_ordinalColumn >= 0 ? 1 : 0);
 
     public bool Read() => ++_row < _rows.RowCount;
 
@@ -45,12 +45,10 @@ internal sealed class BulkRowSetDataReader : IDataReader
             return _row;
         }
 
-        var index = _columnIndices[i];
-        var column = _rows.Columns[index];
-
-        // A bulk copy bypasses EF's parameter construction, which is where value converters would
-        // normally run, so they have to be applied explicitly here.
-        return column.ToProviderValue(_rows.GetValue(_row, index)) ?? DBNull.Value;
+        // ValueFor picks the loaded or the new value as the staging layout requires, and applies
+        // the value converter -- a bulk copy bypasses EF's parameter construction, where that would
+        // normally happen.
+        return _columns[i].ValueFor(_rows, _row) ?? DBNull.Value;
     }
 
     public bool IsDBNull(int i) => GetValue(i) == DBNull.Value;
@@ -58,10 +56,10 @@ internal sealed class BulkRowSetDataReader : IDataReader
     public string GetName(int i)
         => i == _ordinalColumn
             ? SqlServerStagingInsert.OrdinalColumnName
-            : _rows.Columns[_columnIndices[i]].Name;
+            : _columns[i].Name;
 
     public Type GetFieldType(int i)
-        => i == _ordinalColumn ? typeof(int) : _rows.Columns[_columnIndices[i]].ProviderClrType;
+        => i == _ordinalColumn ? typeof(int) : _rows.Columns[_columns[i].Index].ProviderClrType;
 
     public int GetOrdinal(string name)
     {

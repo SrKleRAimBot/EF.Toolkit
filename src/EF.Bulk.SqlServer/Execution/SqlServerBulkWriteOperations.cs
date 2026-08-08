@@ -33,13 +33,14 @@ internal sealed class SqlServerBulkWriteOperations
         IReadOnlyList<int> writeIndices,
         IReadOnlyList<int> conditionIndices,
         IReadOnlyList<int> keyIndices,
+        IReadOnlyList<int> readIndices,
         CancellationToken cancellationToken)
     {
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
-        var staged = Union(conditionIndices, writeIndices);
+        var staged = StagingColumn.ForUpdate(rows, conditionIndices, writeIndices);
 
         return WithStagingAsync(
-            rows, connection, transaction, staged, keyIndices,
+            rows, connection, transaction, staged, keyIndices, readIndices,
             staging =>
             {
                 var assignments = string.Join(
@@ -47,14 +48,15 @@ internal sealed class SqlServerBulkWriteOperations
                     writeIndices.Select(i =>
                     {
                         var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
-                        return $"t.{column} = s.{column}";
+                        var source = _sqlHelper.DelimitIdentifier(StagedName(staged, i, false));
+                        return $"t.{column} = s.{source}";
                     }));
 
                 // OUTPUT precedes FROM in SQL Server's UPDATE ... FROM form.
                 return $"UPDATE t SET {assignments} "
-                    + $"OUTPUT {Output(rows, keyIndices, "inserted")} "
+                    + $"OUTPUT {Output(rows, keyIndices, readIndices, "inserted")} "
                     + $"FROM {target} AS t INNER JOIN {staging} AS s "
-                    + $"ON {JoinPredicate(rows, conditionIndices)};";
+                    + $"ON {JoinPredicate(rows, conditionIndices, staged)};";
             },
             cancellationToken);
     }
@@ -68,13 +70,14 @@ internal sealed class SqlServerBulkWriteOperations
         CancellationToken cancellationToken)
     {
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
+        var staged = StagingColumn.ForDelete(rows, conditionIndices);
 
         return WithStagingAsync(
-            rows, connection, transaction, conditionIndices, keyIndices,
+            rows, connection, transaction, staged, keyIndices, [],
             staging =>
-                $"DELETE t OUTPUT {Output(rows, keyIndices, "deleted")} "
+                $"DELETE t OUTPUT {Output(rows, keyIndices, [], "deleted")} "
                 + $"FROM {target} AS t INNER JOIN {staging} AS s "
-                + $"ON {JoinPredicate(rows, conditionIndices)};",
+                + $"ON {JoinPredicate(rows, conditionIndices, staged)};",
             cancellationToken);
     }
 
@@ -82,23 +85,26 @@ internal sealed class SqlServerBulkWriteOperations
         IBulkRowSet rows,
         SqlConnection connection,
         SqlTransaction? transaction,
-        IReadOnlyList<int> stagedIndices,
+        List<StagingColumn> staged,
         IReadOnlyList<int> keyIndices,
+        IReadOnlyList<int> readIndices,
         Func<string, string> buildSql,
         CancellationToken cancellationToken)
     {
         var staging = _sqlHelper.DelimitIdentifier($"#efbulk_{Guid.NewGuid():N}");
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
 
-        var columnList = string.Join(
+        // Aliased so a column staged twice -- a concurrency token's loaded and new values -- gets
+        // two distinct staging columns of the correct type.
+        var projection = string.Join(
             ", ",
-            stagedIndices.Select(i => _sqlHelper.DelimitIdentifier(rows.Columns[i].Name)));
+            staged.Select(c =>
+                $"{_sqlHelper.DelimitIdentifier(rows.Columns[c.Index].Name)} AS "
+                + $"{_sqlHelper.DelimitIdentifier(c.Name)}"));
 
-        // Deriving the staging table from the target keeps the column types exactly right without
-        // having to translate EF's store types back into DDL.
         await ExecuteNonQueryAsync(
                 connection, transaction,
-                $"SELECT TOP 0 {columnList} INTO {staging} FROM {target};",
+                $"SELECT TOP 0 {projection} INTO {staging} FROM {target};",
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -107,20 +113,27 @@ internal sealed class SqlServerBulkWriteOperations
             using (var bulkCopy = _createBulkCopy())
             {
                 bulkCopy.DestinationTableName = staging;
-                for (var i = 0; i < stagedIndices.Count; i++)
+                for (var i = 0; i < staged.Count; i++)
                 {
-                    bulkCopy.ColumnMappings.Add(i, rows.Columns[stagedIndices[i]].Name);
+                    bulkCopy.ColumnMappings.Add(i, staged[i].Name);
                 }
 
                 await bulkCopy
                     .WriteToServerAsync(
-                        new BulkRowSetDataReader(rows, stagedIndices, includeOrdinal: false),
+                        new BulkRowSetDataReader(rows, staged, includeOrdinal: false),
                         cancellationToken)
                     .ConfigureAwait(false);
             }
 
             var matched = new HashSet<string>(StringComparer.Ordinal);
-            var values = new object?[keyIndices.Count];
+            var byKey = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            for (var row = 0; row < rows.RowCount; row++)
+            {
+                byKey[BulkRowMatching.KeyOf(rows, row, keyIndices)] = row;
+            }
+
+            var keyValues = new object?[keyIndices.Count];
 
             await using (var command = connection.CreateCommand())
             {
@@ -134,12 +147,28 @@ internal sealed class SqlServerBulkWriteOperations
                 {
                     for (var i = 0; i < keyIndices.Count; i++)
                     {
-                        values[i] = await reader.IsDBNullAsync(i, cancellationToken).ConfigureAwait(false)
+                        keyValues[i] = await reader.IsDBNullAsync(i, cancellationToken).ConfigureAwait(false)
                             ? null
                             : reader.GetValue(i);
                     }
 
-                    matched.Add(BulkRowMatching.KeyOf(values));
+                    var key = BulkRowMatching.KeyOf(keyValues);
+                    matched.Add(key);
+
+                    // Anything the database regenerated -- a concurrency token, a computed column
+                    // -- comes back here so the entity ends up matching the row.
+                    if (readIndices.Count > 0 && byKey.TryGetValue(key, out var row))
+                    {
+                        for (var i = 0; i < readIndices.Count; i++)
+                        {
+                            var ordinal = keyIndices.Count + i;
+                            var value = await reader.IsDBNullAsync(ordinal, cancellationToken).ConfigureAwait(false)
+                                ? null
+                                : reader.GetValue(ordinal);
+
+                            rows.SetGeneratedValue(row, readIndices[i], value);
+                        }
+                    }
                 }
             }
 
@@ -156,32 +185,45 @@ internal sealed class SqlServerBulkWriteOperations
         }
     }
 
-    private string JoinPredicate(IBulkRowSet rows, IReadOnlyList<int> conditionIndices)
+    private string JoinPredicate(
+        IBulkRowSet rows,
+        IReadOnlyList<int> conditionIndices,
+        IReadOnlyList<StagingColumn> staged)
         => string.Join(
             " AND ",
             conditionIndices.Select(i =>
             {
                 var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
-                return $"t.{column} = s.{column}";
+                var source = _sqlHelper.DelimitIdentifier(StagedName(staged, i, true));
+                return $"t.{column} = s.{source}";
             }));
 
-    private string Output(IBulkRowSet rows, IReadOnlyList<int> keyIndices, string source)
+    private string Output(
+        IBulkRowSet rows,
+        IReadOnlyList<int> keyIndices,
+        IReadOnlyList<int> readIndices,
+        string source)
         => string.Join(
             ", ",
-            keyIndices.Select(i => $"{source}.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
+            keyIndices.Concat(readIndices)
+                .Select(i => $"{source}.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
 
-    private static List<int> Union(IReadOnlyList<int> first, IReadOnlyList<int> second)
+    private static string StagedName(
+        IReadOnlyList<StagingColumn> staged,
+        int index,
+        bool original)
     {
-        var result = new List<int>(first);
-        foreach (var index in second)
+        foreach (var column in staged)
         {
-            if (!result.Contains(index))
+            if (column.Index == index && column.UseOriginal == original)
             {
-                result.Add(index);
+                return column.Name;
             }
         }
 
-        return result;
+        throw new BulkNotSupportedException(
+            $"Column index {index} was not staged, which indicates a bug in EF.Bulk's staging "
+            + "layout.");
     }
 
     private static async Task ExecuteNonQueryAsync(

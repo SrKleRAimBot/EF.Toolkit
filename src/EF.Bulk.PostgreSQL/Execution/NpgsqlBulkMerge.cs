@@ -22,11 +22,11 @@ namespace EFBulk.PostgreSQL.Execution;
 internal sealed class NpgsqlBulkMerge
 {
     private readonly ISqlGenerationHelper _sqlHelper;
-    private readonly Func<NpgsqlConnection, string, IReadOnlyList<int>, IBulkRowSet, CancellationToken, Task> _copyInto;
+    private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> _copyInto;
 
     public NpgsqlBulkMerge(
         ISqlGenerationHelper sqlHelper,
-        Func<NpgsqlConnection, string, IReadOnlyList<int>, IBulkRowSet, CancellationToken, Task> copyInto)
+        Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> copyInto)
     {
         _sqlHelper = sqlHelper;
         _copyInto = copyInto;
@@ -56,7 +56,9 @@ internal sealed class NpgsqlBulkMerge
 
         try
         {
-            await _copyInto(connection, staging, writeIndices, rows, cancellationToken)
+            await _copyInto(
+                    connection, staging, StagingColumn.ForWrite(rows, writeIndices), rows,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             var conflictTarget = string.Join(

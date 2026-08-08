@@ -46,6 +46,19 @@ public interface IBulkRowSet
     object? GetValue(int row, int column);
 
     /// <summary>
+    ///     Reads the value of <paramref name="column" /> at <paramref name="row" /> as it was
+    ///     loaded from the database.
+    /// </summary>
+    /// <remarks>
+    ///     A concurrency token needs both of its values at once: the loaded value locates the row,
+    ///     and the new value is what gets written. Returning only one would make optimistic
+    ///     concurrency impossible to express.
+    /// </remarks>
+    /// <param name="row">Zero-based row index.</param>
+    /// <param name="column">Index into <see cref="Columns" />.</param>
+    object? GetOriginalValue(int row, int column);
+
+    /// <summary>
     ///     Writes a store-generated value back, so the caller's entities and EF's change tracker end
     ///     up in the state a normal save would have left them in.
     /// </summary>

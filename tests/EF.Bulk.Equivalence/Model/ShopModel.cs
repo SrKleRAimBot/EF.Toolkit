@@ -68,6 +68,20 @@ public class OrderNote
 }
 
 /// <summary>
+///     Carries a client-managed concurrency token. Its column is both written and used to locate
+///     the row, so a staged update has to carry the loaded value and the new value at once.
+/// </summary>
+public class Inventory
+{
+    public int Id { get; set; }
+    public string Sku { get; set; } = "";
+    public int Quantity { get; set; }
+
+    /// <summary>Incremented by the application on every write.</summary>
+    public int Version { get; set; }
+}
+
+/// <summary>
 ///     Self-referencing table. Rows within a single insert can depend on each other, so this is the
 ///     case where table-level ordering is not enough and row-level layering is required.
 /// </summary>

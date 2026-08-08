@@ -211,6 +211,53 @@ public abstract class PartitioningTests(DatabaseFixture fixture)
             "Deletes fell back: " + string.Join("; ", deletes.Select(e => e.FallbackReason)));
     }
 
+    [Fact]
+    public async Task Concurrency_token_updates_are_accelerated()
+    {
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        await fixture.ResetAsync();
+
+        await using (var seed = fixture.CreateBulkContext())
+        {
+            seed.Inventories.AddRange(Enumerable.Range(0, 300).Select(i => new Inventory
+            {
+                Sku = $"SKU-{i:D5}",
+                Quantity = i,
+                Version = 1
+            }));
+
+            await seed.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        using var recorder = new PartitionRecorder();
+
+        await using (var context = fixture.CreateBulkContext())
+        {
+            foreach (var item in await context.Inventories
+                .ToListAsync(TestContext.Current.CancellationToken))
+            {
+                item.Quantity += 5;
+                item.Version++;
+            }
+
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var updates = recorder.Executions
+            .Where(e => e.Partition.EntityState == EntityState.Modified)
+            .ToList();
+
+        updates.ShouldNotBeEmpty();
+
+        // A token column is written and used to locate the row at the same time. Before the
+        // staging layout carried both values it was declined outright, and the equivalence suite
+        // could not tell the difference because falling back is also correct.
+        updates.ShouldAllBe(
+            e => e.Accelerated,
+            "Concurrency-token updates fell back: "
+            + string.Join("; ", updates.Select(e => e.FallbackReason)));
+    }
+
     private static List<Customer> Customers(int count)
         =>
         [

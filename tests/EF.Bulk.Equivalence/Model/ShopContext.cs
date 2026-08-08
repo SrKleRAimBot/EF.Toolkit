@@ -9,6 +9,7 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
     public DbSet<OrderLine> OrderLines => Set<OrderLine>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<OrderNote> OrderNotes => Set<OrderNote>();
+    public DbSet<Inventory> Inventories => Set<Inventory>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -60,6 +61,15 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
                 .WithMany(x => x.Notes)
                 .HasForeignKey(x => x.OrderId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Inventory>(b =>
+        {
+            b.Property(x => x.Sku).HasMaxLength(64).IsRequired();
+
+            // A client-managed token: EF puts it in the WHERE clause using the loaded value while
+            // the SET clause assigns the new one, so the column is both a condition and written.
+            b.Property(x => x.Version).IsConcurrencyToken();
         });
 
         modelBuilder.Entity<Category>(b =>

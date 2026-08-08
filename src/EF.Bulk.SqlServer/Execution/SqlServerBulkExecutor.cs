@@ -54,26 +54,9 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
 
         if (rows.EntityState is EntityState.Modified or EntityState.Deleted)
         {
-            foreach (var column in rows.Columns)
-            {
-                if (column.IsRead)
-                {
-                    reason = $"'{column.Name}' is store-generated and must be read back after the "
-                        + "write, which the set-based path does not yet support.";
-                    return false;
-                }
-
-                if (column.IsWrite && column.IsCondition)
-                {
-                    // Such a column needs its loaded value in the WHERE clause and its new value in
-                    // the SET clause at once — two values for one column, which the row set exposes
-                    // only one of. A rowversion updated in place is the case that hits this.
-                    reason = $"'{column.Name}' is both written and used to locate the row, so it "
-                        + "needs its original and current values simultaneously.";
-                    return false;
-                }
-            }
-
+            // Concurrency tokens are handled rather than declined: the loaded value is staged to
+            // join on, the new value is staged separately to assign, and OUTPUT carries back
+            // whatever the database regenerated.
             reason = null;
             return true;
         }
@@ -153,7 +136,8 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
 
             await bulkCopy
                 .WriteToServerAsync(
-                    new BulkRowSetDataReader(rows, writeIndices, includeOrdinal: false),
+                    new BulkRowSetDataReader(
+                        rows, StagingColumn.ForWrite(rows, writeIndices), includeOrdinal: false),
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -223,6 +207,7 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
         var writeIndices = new List<int>();
         var conditionIndices = new List<int>();
         var keyIndices = new List<int>();
+        var readIndices = new List<int>();
 
         for (var i = 0; i < rows.Columns.Count; i++)
         {
@@ -237,9 +222,17 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
             {
                 conditionIndices.Add(i);
             }
-            else if (column.IsWrite)
+
+            // A column can be both written and a condition -- a client-managed concurrency token
+            // is the usual case -- so this is not an else.
+            if (column.IsWrite)
             {
                 writeIndices.Add(i);
+            }
+
+            if (column.IsRead)
+            {
+                readIndices.Add(i);
             }
         }
 
@@ -266,7 +259,7 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
             : await operations
                 .UpdateAsync(
                     rows, connection, transaction, writeIndices, conditionIndices, keyIndices,
-                    cancellationToken)
+                    readIndices, cancellationToken)
                 .ConfigureAwait(false);
 
         return BulkExecutionResult.Executed(affected);

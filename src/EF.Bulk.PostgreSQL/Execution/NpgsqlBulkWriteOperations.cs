@@ -23,29 +23,30 @@ namespace EFBulk.PostgreSQL.Execution;
 internal sealed class NpgsqlBulkWriteOperations
 {
     private readonly ISqlGenerationHelper _sqlHelper;
-    private readonly Func<NpgsqlConnection, string, IReadOnlyList<int>, IBulkRowSet, CancellationToken, Task> _copyInto;
+    private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> _copyInto;
 
     public NpgsqlBulkWriteOperations(
         ISqlGenerationHelper sqlHelper,
-        Func<NpgsqlConnection, string, IReadOnlyList<int>, IBulkRowSet, CancellationToken, Task> copyInto)
+        Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> copyInto)
     {
         _sqlHelper = sqlHelper;
         _copyInto = copyInto;
     }
 
-    public async Task<int> UpdateAsync(
+    public Task<int> UpdateAsync(
         IBulkRowSet rows,
         NpgsqlConnection connection,
         IReadOnlyList<int> writeIndices,
         IReadOnlyList<int> conditionIndices,
         IReadOnlyList<int> keyIndices,
+        IReadOnlyList<int> readIndices,
         CancellationToken cancellationToken)
     {
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
-        var staged = Union(conditionIndices, writeIndices);
+        var staged = StagingColumn.ForUpdate(rows, conditionIndices, writeIndices);
 
-        return await WithStagingAsync(
-            rows, connection, staged, keyIndices,
+        return WithStagingAsync(
+            rows, connection, staged, keyIndices, readIndices,
             staging =>
             {
                 var assignments = string.Join(
@@ -53,19 +54,18 @@ internal sealed class NpgsqlBulkWriteOperations
                     writeIndices.Select(i =>
                     {
                         var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
-                        return $"{column} = s.{column}";
+                        var source = _sqlHelper.DelimitIdentifier(StagedName(staged, i, false));
+                        return $"{column} = s.{source}";
                     }));
 
-                var sql = $"UPDATE {target} AS t SET {assignments} FROM {staging} AS s "
-                    + $"WHERE {JoinPredicate(rows, conditionIndices)} "
-                    + $"RETURNING {Returning(rows, keyIndices, "t")}";
-
-                return sql;
+                return $"UPDATE {target} AS t SET {assignments} FROM {staging} AS s "
+                    + $"WHERE {JoinPredicate(rows, conditionIndices, staged)} "
+                    + $"RETURNING {Returning(rows, keyIndices, readIndices)}";
             },
             cancellationToken);
     }
 
-    public async Task<int> DeleteAsync(
+    public Task<int> DeleteAsync(
         IBulkRowSet rows,
         NpgsqlConnection connection,
         IReadOnlyList<int> conditionIndices,
@@ -73,46 +73,57 @@ internal sealed class NpgsqlBulkWriteOperations
         CancellationToken cancellationToken)
     {
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
+        var staged = StagingColumn.ForDelete(rows, conditionIndices);
 
-        return await WithStagingAsync(
-            rows, connection, conditionIndices, keyIndices,
+        return WithStagingAsync(
+            rows, connection, staged, keyIndices, [],
             staging =>
                 $"DELETE FROM {target} AS t USING {staging} AS s "
-                + $"WHERE {JoinPredicate(rows, conditionIndices)} "
-                + $"RETURNING {Returning(rows, keyIndices, "t")}",
+                + $"WHERE {JoinPredicate(rows, conditionIndices, staged)} "
+                + $"RETURNING {Returning(rows, keyIndices, [])}",
             cancellationToken);
     }
 
     private async Task<int> WithStagingAsync(
         IBulkRowSet rows,
         NpgsqlConnection connection,
-        IReadOnlyList<int> stagedIndices,
+        IReadOnlyList<StagingColumn> staged,
         IReadOnlyList<int> keyIndices,
+        IReadOnlyList<int> readIndices,
         Func<string, string> buildSql,
         CancellationToken cancellationToken)
     {
         var staging = _sqlHelper.DelimitIdentifier($"efbulk_{Guid.NewGuid():N}");
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
 
-        var columnList = string.Join(
+        // Aliased so a column staged twice -- a concurrency token's loaded and new values -- gets
+        // two distinct staging columns of the correct type.
+        var projection = string.Join(
             ", ",
-            stagedIndices.Select(i => _sqlHelper.DelimitIdentifier(rows.Columns[i].Name)));
+            staged.Select(c =>
+                $"{_sqlHelper.DelimitIdentifier(rows.Columns[c.Index].Name)} AS "
+                + $"{_sqlHelper.DelimitIdentifier(c.Name)}"));
 
-        // Deriving the staging table from the target keeps the column types exactly right without
-        // having to translate EF's store types back into DDL.
         await ExecuteNonQueryAsync(
                 connection,
-                $"CREATE TEMP TABLE {staging} AS SELECT {columnList} FROM {target} WITH NO DATA",
+                $"CREATE TEMP TABLE {staging} AS SELECT {projection} FROM {target} WITH NO DATA",
                 cancellationToken)
             .ConfigureAwait(false);
 
         try
         {
-            await _copyInto(connection, staging, stagedIndices, rows, cancellationToken)
+            await _copyInto(connection, staging, staged, rows, cancellationToken)
                 .ConfigureAwait(false);
 
             var matched = new HashSet<string>(StringComparer.Ordinal);
-            var values = new object?[keyIndices.Count];
+            var byKey = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            for (var row = 0; row < rows.RowCount; row++)
+            {
+                byKey[BulkRowMatching.KeyOf(rows, row, keyIndices)] = row;
+            }
+
+            var keyValues = new object?[keyIndices.Count];
 
             await using (var command = connection.CreateCommand())
             {
@@ -125,12 +136,28 @@ internal sealed class NpgsqlBulkWriteOperations
                 {
                     for (var i = 0; i < keyIndices.Count; i++)
                     {
-                        values[i] = await reader.IsDBNullAsync(i, cancellationToken).ConfigureAwait(false)
+                        keyValues[i] = await reader.IsDBNullAsync(i, cancellationToken).ConfigureAwait(false)
                             ? null
                             : reader.GetValue(i);
                     }
 
-                    matched.Add(BulkRowMatching.KeyOf(values));
+                    var key = BulkRowMatching.KeyOf(keyValues);
+                    matched.Add(key);
+
+                    // Anything the database regenerated -- a concurrency token, a computed column
+                    // -- comes back here so the entity ends up matching the row.
+                    if (readIndices.Count > 0 && byKey.TryGetValue(key, out var row))
+                    {
+                        for (var i = 0; i < readIndices.Count; i++)
+                        {
+                            var ordinal = keyIndices.Count + i;
+                            var value = await reader.IsDBNullAsync(ordinal, cancellationToken).ConfigureAwait(false)
+                                ? null
+                                : reader.GetValue(ordinal);
+
+                            rows.SetGeneratedValue(row, readIndices[i], value);
+                        }
+                    }
                 }
             }
 
@@ -147,32 +174,44 @@ internal sealed class NpgsqlBulkWriteOperations
         }
     }
 
-    private string JoinPredicate(IBulkRowSet rows, IReadOnlyList<int> conditionIndices)
+    private string JoinPredicate(
+        IBulkRowSet rows,
+        IReadOnlyList<int> conditionIndices,
+        IReadOnlyList<StagingColumn> staged)
         => string.Join(
             " AND ",
             conditionIndices.Select(i =>
             {
                 var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
-                return $"t.{column} = s.{column}";
+                var source = _sqlHelper.DelimitIdentifier(StagedName(staged, i, true));
+                return $"t.{column} = s.{source}";
             }));
 
-    private string Returning(IBulkRowSet rows, IReadOnlyList<int> keyIndices, string alias)
+    private string Returning(
+        IBulkRowSet rows,
+        IReadOnlyList<int> keyIndices,
+        IReadOnlyList<int> readIndices)
         => string.Join(
             ", ",
-            keyIndices.Select(i => $"{alias}.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
+            keyIndices.Concat(readIndices)
+                .Select(i => $"t.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
 
-    private static List<int> Union(IReadOnlyList<int> first, IReadOnlyList<int> second)
+    private static string StagedName(
+        IReadOnlyList<StagingColumn> staged,
+        int index,
+        bool original)
     {
-        var result = new List<int>(first);
-        foreach (var index in second)
+        foreach (var column in staged)
         {
-            if (!result.Contains(index))
+            if (column.Index == index && column.UseOriginal == original)
             {
-                result.Add(index);
+                return column.Name;
             }
         }
 
-        return result;
+        throw new BulkNotSupportedException(
+            $"Column index {index} was not staged, which indicates a bug in EF.Bulk's staging "
+            + "layout.");
     }
 
     private static async Task ExecuteNonQueryAsync(
