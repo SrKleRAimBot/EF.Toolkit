@@ -1,4 +1,5 @@
 using EFBulk.Planning;
+using EFBulk.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Update;
 
@@ -44,6 +45,9 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
     };
     public IReadOnlyList<BulkColumnInfo> Columns { get; }
     public int RowCount => _commands.Count;
+
+    /// <remarks>Never consulted: SaveChanges resolves inserts and updates before it gets here.</remarks>
+    public MergeCounts MergeCounts => MergeCounts.Exact;
 
     /// <summary>Builds a row set over <paramref name="partition" />.</summary>
     public static ModificationCommandRowSet Create(BulkPartition partition)

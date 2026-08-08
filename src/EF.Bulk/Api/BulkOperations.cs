@@ -42,6 +42,7 @@ internal static class BulkOperations
             ? BulkEntityPlan.For(entityType, state)
             : BulkEntityPlan.ForMerge(entityType, matchProperties);
         var batchSize = options.BatchSize ?? bulkOptions.MaxBatchSize;
+        var mergeCounts = options.MergeCounts ?? bulkOptions.MergeCounts;
 
         // Take the whole operation as one unit, matching SaveChanges: a partially-applied bulk
         // insert is far harder to reason about than a slow one.
@@ -62,7 +63,7 @@ internal static class BulkOperations
                 for (var offset = 0; offset < entities.Count; offset += batchSize)
                 {
                     var slice = Slice(entities, offset, Math.Min(batchSize, entities.Count - offset));
-                    var rows = new EntityRowSet(slice, plan, state, kind);
+                    var rows = new EntityRowSet(slice, plan, state, kind, mergeCounts);
 
                     if (!executor.CanExecute(rows, out var reason))
                     {
@@ -234,7 +235,8 @@ internal static class BulkOperations
         for (var offset = 0; offset < entities.Count; offset += batchSize)
         {
             var slice = entities.GetRange(offset, Math.Min(batchSize, entities.Count - offset));
-            var rows = new EntityRowSet(slice, plan, EntityState.Added, BulkOperationKind.Insert);
+            var rows = new EntityRowSet(
+                slice, plan, EntityState.Added, BulkOperationKind.Insert, MergeCounts.Exact);
 
             if (!executor.CanExecute(rows, out var reason))
             {

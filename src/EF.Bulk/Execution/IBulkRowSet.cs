@@ -1,3 +1,4 @@
+using EFBulk.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Update;
 
@@ -32,6 +33,12 @@ public interface IBulkRowSet
 
     /// <summary>What the database is being asked to do with these rows.</summary>
     BulkOperationKind Operation { get; }
+
+    /// <summary>
+    ///     How an upsert should work out its insert-versus-update split. Ignored for every other
+    ///     operation.
+    /// </summary>
+    MergeCounts MergeCounts { get; }
 
     /// <summary>Number of rows.</summary>
     int RowCount { get; }

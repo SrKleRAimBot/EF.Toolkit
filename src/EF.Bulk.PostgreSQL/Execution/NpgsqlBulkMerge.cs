@@ -1,3 +1,4 @@
+using EFBulk.Configuration;
 using EFBulk.Execution;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
@@ -88,18 +89,39 @@ internal sealed class NpgsqlBulkMerge
                 returning.Add(_sqlHelper.DelimitIdentifier(rows.Columns[i].Name));
             }
 
-            // xmax is zero on a freshly inserted tuple and non-zero on one that was updated. This
-            // is a well-known convention rather than a documented guarantee, so it is used only to
-            // split the reported counts -- never to decide what data gets written.
-            returning.Add("(xmax = 0) AS __efbulk_inserted");
+            var approximate = rows.MergeCounts == MergeCounts.Approximate;
+
+            if (approximate)
+            {
+                // xmax is zero on a freshly inserted tuple and non-zero on one that was updated.
+                // A widely-used convention rather than a documented guarantee, so it only ever
+                // splits the reported counts -- never decides what data gets written.
+                returning.Add("(xmax = 0) AS __efbulk_inserted");
+            }
+
+            // Counted before the merge and inside the same transaction, so it reflects the rows
+            // the merge is about to match. One indexed existence check over the staged values.
+            var willUpdate = approximate
+                ? 0
+                : await CountExistingAsync(
+                        connection, target, staging, rows, matchIndices, cancellationToken)
+                    .ConfigureAwait(false);
 
             var sql = $"INSERT INTO {target} ({columnList}) SELECT {columnList} FROM {staging} "
                 + $"ON CONFLICT ({conflictTarget}) {conflictAction} "
                 + $"RETURNING {string.Join(", ", returning)}";
 
             var (inserted, updated) = await ApplyAsync(
-                    rows, connection, sql, matchIndices, readIndices, cancellationToken)
+                    rows, connection, sql, matchIndices, readIndices, approximate,
+                    cancellationToken)
                 .ConfigureAwait(false);
+
+            if (!approximate)
+            {
+                // ApplyAsync counted rows, not outcomes, when it had no xmax column to read.
+                updated = willUpdate;
+                inserted = rows.RowCount - willUpdate;
+            }
 
             var deleted = 0;
             if (deleteMissing)
@@ -140,6 +162,7 @@ internal sealed class NpgsqlBulkMerge
         string sql,
         IReadOnlyList<int> matchIndices,
         IReadOnlyList<int> readIndices,
+        bool approximate,
         CancellationToken cancellationToken)
     {
         // Rows are found by their match values, which the statement returns alongside whatever the
@@ -169,14 +192,16 @@ internal sealed class NpgsqlBulkMerge
                     : reader.GetValue(i);
             }
 
-            var wasInserted = reader.GetBoolean(reader.FieldCount - 1);
-            if (wasInserted)
+            if (approximate)
             {
-                inserted++;
-            }
-            else
-            {
-                updated++;
+                if (reader.GetBoolean(reader.FieldCount - 1))
+                {
+                    inserted++;
+                }
+                else
+                {
+                    updated++;
+                }
             }
 
             if (!byMatch.TryGetValue(BulkRowMatching.KeyOf(returnedMatch), out var row))
@@ -204,6 +229,32 @@ internal sealed class NpgsqlBulkMerge
         }
 
         return (inserted, updated);
+    }
+
+    /// <summary>Counts how many of the staged match values already exist in the target.</summary>
+    private async Task<int> CountExistingAsync(
+        NpgsqlConnection connection,
+        string target,
+        string staging,
+        IBulkRowSet rows,
+        IReadOnlyList<int> matchIndices,
+        CancellationToken cancellationToken)
+    {
+        var predicate = string.Join(
+            " AND ",
+            matchIndices.Select(i =>
+            {
+                var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
+                return $"t.{column} = s.{column}";
+            }));
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"SELECT count(*) FROM {target} AS t "
+            + $"WHERE EXISTS (SELECT 1 FROM {staging} AS s WHERE {predicate})";
+
+        var count = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return Convert.ToInt32(count, provider: null);
     }
 
     private static async Task ExecuteNonQueryAsync(

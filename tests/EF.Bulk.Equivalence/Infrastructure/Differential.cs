@@ -26,8 +26,8 @@ public static class Differential
 
         await fixture.ResetAsync();
 
-        var stock = await RunAsync(fixture.CreateStockContext, scenario);
-        var bulk = await RunAsync(fixture.CreateBulkContext, scenario);
+        var stock = await RunAsync(() => fixture.CreateStockContext(), scenario);
+        var bulk = await RunAsync(() => fixture.CreateBulkContext(), scenario);
 
         // Every divergence is reported together rather than failing on the first. A wrong bulk
         // path usually breaks the stored rows and the tracker at once, and seeing only the first

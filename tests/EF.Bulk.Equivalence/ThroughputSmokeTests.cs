@@ -26,14 +26,14 @@ public abstract class ThroughputSmokeTests(DatabaseFixture fixture, ITestOutputH
 
         // Warm both sides: first-call costs (model building, sequence discovery, connection
         // establishment) would otherwise dominate a run this short.
-        await InsertAsync(fixture.CreateStockContext, 50, 0);
-        await InsertAsync(fixture.CreateBulkContext, 50, 0);
+        await InsertAsync(() => fixture.CreateStockContext(), 50, 0);
+        await InsertAsync(() => fixture.CreateBulkContext(), 50, 0);
         await fixture.ResetAsync();
 
-        var stock = await InsertAsync(fixture.CreateStockContext, Rows, 0);
+        var stock = await InsertAsync(() => fixture.CreateStockContext(), Rows, 0);
 
         using var recorder = new PartitionRecorder();
-        var bulk = await InsertAsync(fixture.CreateBulkContext, Rows, 0);
+        var bulk = await InsertAsync(() => fixture.CreateBulkContext(), Rows, 0);
 
         output.WriteLine($"stock EF : {stock.TotalMilliseconds,8:F0} ms  "
             + $"({Rows / stock.TotalSeconds,9:F0} rows/sec)");
@@ -48,7 +48,7 @@ public abstract class ThroughputSmokeTests(DatabaseFixture fixture, ITestOutputH
         // building one ModificationCommand per row — before either touches the database. That work
         // is a floor on what transparent acceleration can achieve, so it is worth quantifying
         // rather than reading a modest speedup as a defect in the copy path.
-        var detect = await MeasureChangeTrackingAsync(fixture.CreateBulkContext, Rows);
+        var detect = await MeasureChangeTrackingAsync(() => fixture.CreateBulkContext(), Rows);
         var inExecutor = recorder.Executions.Aggregate(TimeSpan.Zero, (t, e) => t + e.Duration);
 
         output.WriteLine($"  of which change detection : {detect.TotalMilliseconds,6:F0} ms");
@@ -97,15 +97,15 @@ public abstract class ThroughputSmokeTests(DatabaseFixture fixture, ITestOutputH
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
         await fixture.ResetAsync();
 
-        await InsertAsync(fixture.CreateStockContext, 50, 0);
-        await ExplicitInsertAsync(fixture.CreateBulkContext, 50, 0);
+        await InsertAsync(() => fixture.CreateStockContext(), 50, 0);
+        await ExplicitInsertAsync(() => fixture.CreateBulkContext(), 50, 0);
         await fixture.ResetAsync();
 
-        var stock = await InsertAsync(fixture.CreateStockContext, Rows, 0);
+        var stock = await InsertAsync(() => fixture.CreateStockContext(), Rows, 0);
         await fixture.ResetAsync();
-        var transparent = await InsertAsync(fixture.CreateBulkContext, Rows, 0);
+        var transparent = await InsertAsync(() => fixture.CreateBulkContext(), Rows, 0);
         await fixture.ResetAsync();
-        var explicitApi = await ExplicitInsertAsync(fixture.CreateBulkContext, Rows, 0);
+        var explicitApi = await ExplicitInsertAsync(() => fixture.CreateBulkContext(), Rows, 0);
 
         output.WriteLine($"stock SaveChanges   : {stock.TotalMilliseconds,8:F0} ms  "
             + $"({Rows / stock.TotalSeconds,9:F0} rows/sec)");

@@ -51,6 +51,15 @@ public class BulkOptionsBuilder
         return this;
     }
 
+    /// <summary>Sets how an upsert works out its insert-versus-update split.</summary>
+    /// <param name="counts">Exact, or the cheaper approximation.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOptionsBuilder MergeCounts(MergeCounts counts)
+    {
+        Options = Options with { MergeCounts = counts };
+        return this;
+    }
+
     /// <summary>Sets what happens when a write cannot be accelerated.</summary>
     /// <param name="behavior">Fall back to stock EF, or throw.</param>
     /// <returns>The same builder, for chaining.</returns>

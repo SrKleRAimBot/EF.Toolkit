@@ -1,3 +1,4 @@
+using EFBulk.Configuration;
 using EFBulk.Equivalence.Model;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -66,8 +67,10 @@ public abstract class PostgreSqlFixture : DatabaseFixture
         string connectionString)
         => builder.UseNpgsql(connectionString);
 
-    protected override void ConfigureBulk(DbContextOptionsBuilder<ShopContext> builder)
-        => builder.UseNpgsqlBulk();
+    protected override void ConfigureBulk(
+        DbContextOptionsBuilder<ShopContext> builder,
+        Action<BulkOptionsBuilder>? configure)
+        => builder.UseNpgsqlBulk(b => configure?.Invoke(b));
 
     public override async ValueTask DisposeAsync()
     {

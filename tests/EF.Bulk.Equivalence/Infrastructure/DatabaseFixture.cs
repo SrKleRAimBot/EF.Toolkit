@@ -1,3 +1,4 @@
+using EFBulk.Configuration;
 using EFBulk.Equivalence.Model;
 using Microsoft.EntityFrameworkCore;
 
@@ -96,11 +97,12 @@ public abstract class DatabaseFixture : IAsyncLifetime
     }
 
     /// <summary>A context that writes through EF.Bulk.</summary>
-    public ShopContext CreateBulkContext()
+    /// <param name="configure">Optional context-wide EF.Bulk settings.</param>
+    public ShopContext CreateBulkContext(Action<BulkOptionsBuilder>? configure = null)
     {
         var builder = new DbContextOptionsBuilder<ShopContext>();
         ConfigureProvider(builder, BulkConnectionString);
-        ConfigureBulk(builder);
+        ConfigureBulk(builder, configure);
         return new ShopContext(builder.Options);
     }
 
@@ -120,5 +122,9 @@ public abstract class DatabaseFixture : IAsyncLifetime
         string connectionString);
 
     /// <summary>Applies <c>UseBulkOperations()</c> to <paramref name="builder" />.</summary>
-    protected abstract void ConfigureBulk(DbContextOptionsBuilder<ShopContext> builder);
+    /// <param name="builder">The builder being configured.</param>
+    /// <param name="configure">Optional context-wide EF.Bulk settings.</param>
+    protected abstract void ConfigureBulk(
+        DbContextOptionsBuilder<ShopContext> builder,
+        Action<BulkOptionsBuilder>? configure);
 }

@@ -1,4 +1,5 @@
 using EFBulk.Execution;
+using EFBulk.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Update;
 
@@ -23,18 +24,21 @@ internal sealed class EntityRowSet : IBulkRowSet
         IReadOnlyList<object> entities,
         BulkEntityPlan plan,
         EntityState entityState,
-        BulkOperationKind operation)
+        BulkOperationKind operation,
+        MergeCounts mergeCounts)
     {
         _entities = entities;
         _plan = plan;
         EntityState = entityState;
         Operation = operation;
+        MergeCounts = mergeCounts;
     }
 
     public string? Schema => _plan.Schema;
     public string TableName => _plan.TableName;
     public EntityState EntityState { get; }
     public BulkOperationKind Operation { get; }
+    public MergeCounts MergeCounts { get; }
     public int RowCount => _entities.Count;
     public IReadOnlyList<BulkColumnInfo> Columns => _plan.Columns;
 

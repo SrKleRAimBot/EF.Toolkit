@@ -35,6 +35,17 @@ public sealed record BulkOptions
     public Unsupported OnUnsupported { get; init; } = Unsupported.FallBack;
 
     /// <summary>
+    ///     How an upsert works out its insert-versus-update split. See <see cref="MergeCounts" />.
+    /// </summary>
+    /// <remarks>
+    ///     Defaults to <see cref="MergeCounts.Exact" />. SQL Server reports the split exactly at no
+    ///     cost, so a default of anything else would make the same property mean different things
+    ///     on different databases — and the cost of being right on PostgreSQL is one round trip on
+    ///     an operation that is not usually the hot path.
+    /// </remarks>
+    public MergeCounts MergeCounts { get; init; } = MergeCounts.Exact;
+
+    /// <summary>
     ///     Overrides the command timeout for bulk operations. When <see langword="null" />, the
     ///     context's configured command timeout applies.
     /// </summary>

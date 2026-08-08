@@ -1,4 +1,5 @@
 using BenchmarkDotNet.Attributes;
+using EFBulk.Configuration;
 using Microsoft.EntityFrameworkCore;
 
 namespace EFBulk.Benchmarks;
@@ -22,6 +23,10 @@ public class MergeBenchmarks
 
     [Params(10_000)]
     public int Rows { get; set; }
+
+    /// <summary>What the exactness of the reported insert/update split costs.</summary>
+    [Params(MergeCounts.Exact, MergeCounts.Approximate)]
+    public MergeCounts Counts { get; set; }
 
     /// <summary>How many of the incoming rows already exist. The rest are inserts.</summary>
     private int Existing => Rows / 2;
@@ -74,6 +79,7 @@ public class MergeBenchmarks
     public async Task BulkMerge()
     {
         await using var context = _database.BulkContext();
-        await context.BulkMergeAsync(_incoming, o => o.MatchOn(c => c.Email));
+        await context.BulkMergeAsync(
+            _incoming, o => o.MatchOn(c => c.Email).MergeCounts(Counts));
     }
 }

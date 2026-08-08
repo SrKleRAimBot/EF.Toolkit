@@ -94,6 +94,31 @@ have a unique index — `ON CONFLICT` needs one to define what a conflict *is*, 
 `MERGE` would happily match several rows at once. Store-generated keys are populated on the
 entities that turned out to be inserts.
 
+#### How the insert/update split is counted
+
+`BulkResult.Inserted` and `.Updated` are exact by default. SQL Server reports this for free through
+`MERGE`'s `$action`; PostgreSQL has no equivalent, so EF.Bulk counts the rows that already exist
+immediately before the merge, inside the same transaction.
+
+That count is an indexed existence check, and it turns out to cost almost nothing — 116 ms versus
+119 ms on the 10,000-row merge above, which is inside the noise. So there is rarely a reason to
+change this. If you are merging at a scale where it does show up, you can trade the exactness away:
+
+```csharp
+await context.BulkMergeAsync(customers, o => o
+    .MatchOn(c => c.Email)
+    .MergeCounts(MergeCounts.Approximate));
+
+// or context-wide
+.UseBulkOperations(b => b.MergeCounts(MergeCounts.Approximate))
+```
+
+`Approximate` reads each returned row's `xmax`, which PostgreSQL leaves at zero on a freshly
+inserted tuple. That is a widely-used convention rather than a documented guarantee and it can
+misreport under concurrent access — but it is free, and it only ever affects the reported numbers.
+**Both settings write identical data**, and the setting is ignored on SQL Server, which is exact
+either way.
+
 `BulkSynchronizeAsync` **deletes every row the source does not contain** — that is what makes it a
 synchronise rather than a merge, and it is easy to trigger with a partial list by accident. It
 refuses an empty source rather than emptying the table, and runs in one transaction so the table is

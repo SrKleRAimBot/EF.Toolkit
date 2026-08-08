@@ -1,3 +1,4 @@
+using EFBulk.Configuration;
 using EFBulk.Equivalence.Infrastructure;
 using EFBulk.Equivalence.Model;
 using Microsoft.EntityFrameworkCore;
@@ -580,6 +581,58 @@ public abstract class BulkInsertApiTests(DatabaseFixture fixture)
         message.ShouldSatisfyAllConditions(
             () => message.ShouldNotBeNullOrWhiteSpace(),
             () => message.Length.ShouldBeGreaterThan(20));
+    }
+
+    [Theory]
+    [InlineData(MergeCounts.Exact)]
+    [InlineData(MergeCounts.Approximate)]
+    public async Task Merge_counts_agree_between_modes(MergeCounts counts)
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        await context.BulkInsertAsync(
+            Customers(100), cancellationToken: TestContext.Current.CancellationToken);
+
+        var incoming = Customers(60);
+        incoming.AddRange(Customers(40, startAt: 700));
+
+        var result = await context.BulkMergeAsync(
+            incoming,
+            o => o.MatchOn(c => c.Email).MergeCounts(counts),
+            TestContext.Current.CancellationToken);
+
+        // With no concurrent writer the two settings must produce the same answer; they differ
+        // only in how much they are prepared to pay to stay right when there is one.
+        result.Updated.ShouldBe(60);
+        result.Inserted.ShouldBe(40);
+        result.Total.ShouldBe(100);
+
+        (await context.Customers.AsNoTracking().CountAsync(TestContext.Current.CancellationToken))
+            .ShouldBe(140);
+    }
+
+    [Fact]
+    public async Task Merge_counts_can_be_defaulted_context_wide()
+    {
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        await fixture.ResetAsync();
+
+        // The per-call setting overrides a context-wide default; with neither, Exact applies.
+        await using var context = fixture.CreateBulkContext(
+            b => b.MergeCounts(MergeCounts.Approximate));
+
+        await context.BulkInsertAsync(
+            Customers(50), cancellationToken: TestContext.Current.CancellationToken);
+
+        var incoming = Customers(30);
+        incoming.AddRange(Customers(20, startAt: 800));
+
+        var result = await context.BulkMergeAsync(
+            incoming, o => o.MatchOn(c => c.Email), TestContext.Current.CancellationToken);
+
+        result.Updated.ShouldBe(30);
+        result.Inserted.ShouldBe(20);
     }
 
     private static string Flatten(Exception exception)

@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using EFBulk.Configuration;
 
 namespace EFBulk.Api;
 
@@ -64,6 +65,21 @@ public class BulkOperationOptionsBuilder<TEntity>
     public virtual BulkOperationOptionsBuilder<TEntity> IncludeGraph()
     {
         Options = Options with { IncludeGraph = true };
+        return this;
+    }
+
+    /// <summary>
+    ///     Sets how this upsert works out its insert-versus-update split.
+    /// </summary>
+    /// <param name="counts">Exact, or the cheaper approximation.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    /// <remarks>
+    ///     Affects only the numbers in <see cref="BulkResult" /> — both settings write identical
+    ///     data — and only on PostgreSQL, since SQL Server reports the split exactly for free.
+    /// </remarks>
+    public virtual BulkOperationOptionsBuilder<TEntity> MergeCounts(MergeCounts counts)
+    {
+        Options = Options with { MergeCounts = counts };
         return this;
     }
 

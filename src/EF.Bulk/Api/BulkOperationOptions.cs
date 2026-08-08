@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using EFBulk.Configuration;
 
 namespace EFBulk.Api;
 
@@ -47,6 +48,12 @@ public sealed record BulkOperationOptions
     ///     Whether to follow navigations and write the whole reachable graph, principals first.
     /// </summary>
     public bool IncludeGraph { get; init; }
+
+    /// <summary>
+    ///     How an upsert works out its insert-versus-update split. When <see langword="null" />,
+    ///     the context-wide setting applies.
+    /// </summary>
+    public MergeCounts? MergeCounts { get; init; }
 }
 
 /// <summary>Progress through a bulk operation.</summary>

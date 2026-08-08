@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using EFBulk.Configuration;
 using EFBulk.Equivalence.Model;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -115,8 +116,10 @@ public sealed class SqlServerFixture : DatabaseFixture
         string connectionString)
         => builder.UseSqlServer(connectionString);
 
-    protected override void ConfigureBulk(DbContextOptionsBuilder<ShopContext> builder)
-        => builder.UseSqlServerBulk();
+    protected override void ConfigureBulk(
+        DbContextOptionsBuilder<ShopContext> builder,
+        Action<BulkOptionsBuilder>? configure)
+        => builder.UseSqlServerBulk(b => configure?.Invoke(b));
 
     public override async ValueTask DisposeAsync()
     {
