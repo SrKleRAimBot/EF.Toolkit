@@ -14,6 +14,21 @@ namespace EFBulk.Equivalence.Infrastructure;
 /// </remarks>
 public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListener>
 {
+    /// <summary>
+    ///     Identifies the async flow a recorder was created on, so it records only its own work.
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="BulkDiagnostics" /> publishes to a process-wide listener, and the engine
+    ///     suites run in parallel — so without this a recorder in one collection captures partitions
+    ///     from another and the assertions become a race. An <see cref="AsyncLocal{T}" /> set before
+    ///     the work starts flows through every await into the library, and diagnostic events are
+    ///     raised synchronously on that same flow, so the value is still visible when the event
+    ///     arrives.
+    /// </remarks>
+    private static readonly AsyncLocal<Guid?> Scope = new();
+
+    private readonly Guid _scopeId = Guid.NewGuid();
+
     private readonly List<IDisposable> _subscriptions = [];
     private readonly IDisposable _allListeners;
     private readonly Lock _gate = new();
@@ -22,7 +37,10 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
     private readonly List<PartitionExecutedEvent> _executions = [];
 
     public PartitionRecorder()
-        => _allListeners = DiagnosticListener.AllListeners.Subscribe(this);
+    {
+        Scope.Value = _scopeId;
+        _allListeners = DiagnosticListener.AllListeners.Subscribe(this);
+    }
 
     /// <summary>The partition sets planned, one entry per batch.</summary>
     public IReadOnlyList<IReadOnlyList<BulkPartition>> Batches
@@ -55,6 +73,11 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
     {
         public void OnNext(KeyValuePair<string, object?> value)
         {
+            if (Scope.Value != owner._scopeId)
+            {
+                return;
+            }
+
             lock (owner._gate)
             {
                 switch (value.Value)
@@ -75,6 +98,8 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
 
     public void Dispose()
     {
+        Scope.Value = null;
+
         foreach (var subscription in _subscriptions)
         {
             subscription.Dispose();

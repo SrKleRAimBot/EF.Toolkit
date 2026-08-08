@@ -174,6 +174,13 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             .BeginBinaryImportAsync(CopySql(rows, qualifiedTable, writeIndices), cancellationToken)
             .ConfigureAwait(false);
 
+        // Resolved once per column, not once per value: how to write a column does not change
+        // between rows, and doing the lookup per value dominated the copy.
+        var writers = writeIndices.Select(i => NpgsqlColumnWriter.For(rows.Columns[i])).ToArray();
+        var reservedKeys = writeIndices
+            .Select(i => reserved.TryGetValue(i, out var keys) ? keys : null)
+            .ToArray();
+
         ulong written;
         await using (importer.ConfigureAwait(false))
         {
@@ -186,17 +193,16 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             {
                 await importer.StartRowAsync(cancellationToken).ConfigureAwait(false);
 
-                foreach (var index in writeIndices)
+                for (var i = 0; i < writeIndices.Count; i++)
                 {
-                    var column = rows.Columns[index];
-
                     // Reserved keys stream from the local array rather than from the row set, so
                     // the entities stay untouched until the copy has actually succeeded.
-                    var value = reserved.TryGetValue(index, out var keys)
+                    var value = reservedKeys[i] is { } keys
                         ? keys[row]
-                        : column.ToProviderValue(rows.GetValue(row, index));
+                        : rows.Columns[writeIndices[i]].ToProviderValue(
+                            rows.GetValue(row, writeIndices[i]));
 
-                    await WriteValueAsync(importer, column, value, cancellationToken)
+                    await writers[i].WriteAsync(importer, value, cancellationToken)
                         .ConfigureAwait(false);
                 }
             }
@@ -347,15 +353,16 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
                 importer.Timeout = timeout;
             }
 
+            var writers = staged.Select(c => NpgsqlColumnWriter.For(rows.Columns[c.Index])).ToArray();
+
             for (var row = 0; row < rows.RowCount; row++)
             {
                 await importer.StartRowAsync(cancellationToken).ConfigureAwait(false);
 
-                foreach (var staging in staged)
+                for (var i = 0; i < staged.Count; i++)
                 {
-                    await WriteValueAsync(
-                            importer, rows.Columns[staging.Index], staging.ValueFor(rows, row),
-                            cancellationToken)
+                    await writers[i]
+                        .WriteAsync(importer, staged[i].ValueFor(rows, row), cancellationToken)
                         .ConfigureAwait(false);
                 }
             }
@@ -381,9 +388,26 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT nextval(@sequence) FROM generate_series(1, @count)";
+
+        // Aggregated into a single array rather than returned as one row per value. nextval is
+        // still evaluated once per generated row -- same atomicity, same values -- but a hundred
+        // thousand of them come back as one row instead of a hundred thousand, which is most of
+        // what the reservation used to cost. nextval is parallel-unsafe, so the plan stays serial
+        // and the values arrive in generation order.
+        command.CommandText =
+            "SELECT array_agg(nextval(@sequence)) FROM generate_series(1, @count)";
         command.Parameters.AddWithValue("sequence", sequenceName);
         command.Parameters.AddWithValue("count", count);
+
+        var reserved = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+            as long[];
+
+        if (reserved is null || reserved.Length != count)
+        {
+            throw new BulkNotSupportedException(
+                $"Reserved {reserved?.Length ?? 0} value(s) from sequence '{sequenceName}' but "
+                + $"needed {count}.");
+        }
 
         // nextval returns bigint regardless of the column's width, so values are narrowed to the
         // key's actual CLR type before they reach either the copy stream or the caller's entities.
@@ -391,20 +415,11 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         var keyType = Nullable.GetUnderlyingType(clrType) ?? clrType;
 
         var values = new object?[count];
-        var index = 0;
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        for (var i = 0; i < count; i++)
         {
-            values[index++] = Convert.ChangeType(reader.GetInt64(0), keyType, provider: null);
-        }
-
-        if (index != count)
-        {
-            throw new BulkNotSupportedException(
-                $"Reserved {index} value(s) from sequence '{sequenceName}' but needed {count}.");
+            values[i] = keyType == typeof(long)
+                ? reserved[i]
+                : Convert.ChangeType(reserved[i], keyType, provider: null);
         }
 
         return values;
@@ -425,23 +440,4 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         return $"COPY {qualifiedTable} ({columnList}) FROM STDIN (FORMAT BINARY)";
     }
 
-    private static async Task WriteValueAsync(
-        NpgsqlBinaryImporter importer,
-        BulkColumnInfo column,
-        object? value,
-        CancellationToken cancellationToken)
-    {
-        if (value is null)
-        {
-            await importer.WriteNullAsync(cancellationToken).ConfigureAwait(false);
-        }
-        else if (column.TypeMapping?.StoreTypeNameBase is { } storeType)
-        {
-            await importer.WriteAsync(value, storeType, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            await importer.WriteAsync(value, cancellationToken).ConfigureAwait(false);
-        }
-    }
 }
