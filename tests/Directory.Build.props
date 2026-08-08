@@ -1,0 +1,18 @@
+<Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- Test assemblies are not part of the public contract. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- CA1707: xunit test names read as sentences. CA1711: xunit's *Collection convention. -->
+    <NoWarn>$(NoWarn);CA1707;CA1711;CA1861;CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'EF.Bulk.Benchmarks'">
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+</Project>

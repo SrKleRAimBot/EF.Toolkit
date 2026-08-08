@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Bulk</PackageId>
+    <Description>
+      High-performance bulk operations for EF Core. Accelerates SaveChanges() transparently and
+      adds an explicit BulkInsert/Update/Merge/Delete API, while preserving change tracking and
+      EF semantics. Provider-neutral core; install EF.Bulk.SqlServer or EF.Bulk.PostgreSQL.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Bulk.SqlServer" />
+    <InternalsVisibleTo Include="EF.Bulk.PostgreSQL" />
+    <InternalsVisibleTo Include="EF.Bulk.Tests" />
+    <InternalsVisibleTo Include="EF.Bulk.Equivalence" />
+  </ItemGroup>
+
+</Project>
