@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- BenchmarkDotNet requires optimized builds to produce meaningful numbers. -->
+    <Optimize>true</Optimize>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.MsSql" />
+  </ItemGroup>
+
+</Project>

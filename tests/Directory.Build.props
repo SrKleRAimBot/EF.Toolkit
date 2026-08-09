@@ -15,8 +15,8 @@
     this directory, so it inherits these props but references neither package — excluding by name
     missed it and broke every benchmark run with an unresolved global using.
   -->
-  <ItemGroup Condition="'$(MSBuildProjectName)' == 'EF.Bulk.Tests'
-                        or '$(MSBuildProjectName)' == 'EF.Bulk.Equivalence'">
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'EF.Toolkit.Bulk.Tests'
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Bulk.Equivalence'">
     <Using Include="Xunit" />
     <Using Include="Shouldly" />
   </ItemGroup>

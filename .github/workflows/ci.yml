@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, 'release/**']
+    branches: [master, 'release/**']
   pull_request:
-    branches: [main, 'release/**']
+    branches: [master, 'release/**']
 
 env:
   DOTNET_NOLOGO: true
@@ -23,7 +23,7 @@ jobs:
       - run: dotnet restore
       - run: dotnet build -c Release --no-restore
       - name: Unit tests
-        run: dotnet test tests/EF.Bulk.Tests -c Release --no-build --verbosity normal
+        run: dotnet test tests/EF.Toolkit.Bulk.Tests -c Release --no-build --verbosity normal
       - name: Pack
         run: dotnet pack -c Release --no-build -o artifacts
       - uses: actions/upload-artifact@v4
@@ -33,7 +33,7 @@ jobs:
 
   equivalence:
     # The differential harness is the primary correctness gate: it runs each scenario against
-    # stock EF and against EF.Bulk on real engines, then asserts the database contents and the
+    # stock EF and against EF.Toolkit.Bulk on real engines, then asserts the database contents and the
     # change-tracker state match. It needs Docker, so it is a separate job.
     name: Equivalence (${{ matrix.engine }})
     runs-on: ubuntu-latest
@@ -50,5 +50,5 @@ jobs:
       - run: dotnet build -c Release --no-restore
       - name: Equivalence tests
         run: >
-          dotnet test tests/EF.Bulk.Equivalence -c Release --no-build --verbosity normal
+          dotnet test tests/EF.Toolkit.Bulk.Equivalence -c Release --no-build --verbosity normal
           --filter "Engine=${{ matrix.engine }}"

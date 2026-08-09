@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CA1848;CA1303</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- So the sample runs with no setup: it starts its own PostgreSQL when given no connection string. -->
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
+</Project>

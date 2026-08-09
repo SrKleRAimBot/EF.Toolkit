@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/EF.Toolkit.Bulk.Sample/EF.Toolkit.Bulk.Sample.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
+    <Project Path="src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
+    <Project Path="src/EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EF.Toolkit.Bulk.Benchmarks/EF.Toolkit.Bulk.Benchmarks.csproj" />
+    <Project Path="tests/EF.Toolkit.Bulk.Equivalence/EF.Toolkit.Bulk.Equivalence.csproj" />
+    <Project Path="tests/EF.Toolkit.Bulk.Tests/EF.Toolkit.Bulk.Tests.csproj" />
+  </Folder>
+</Solution>

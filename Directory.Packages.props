@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <!--
-    EF Core dependencies are floated within the current major only. EF.Bulk hooks public but
+    EF Core dependencies are floated within the current major only. EF.Toolkit.Bulk hooks public but
     low-level update-pipeline services, so it must never silently resolve across an EF major.
   -->
   <ItemGroup Label="EF Core">
