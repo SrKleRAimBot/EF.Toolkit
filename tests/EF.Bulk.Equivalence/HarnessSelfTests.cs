@@ -87,6 +87,23 @@ public abstract class HarnessSelfTests(DatabaseFixture fixture)
         failure.ShouldContain("succeeded under stock EF but threw under EF.Bulk");
     }
 
+    [Fact]
+    public async Task Detects_the_same_failure_reported_differently()
+    {
+        var failure = await CaptureFailure(context =>
+        {
+            // Same exception type on both sides, different detail. This is the divergence a
+            // type-only comparison would wave through: an application that branches on what went
+            // wrong -- which constraint, which row -- would behave differently under EF.Bulk.
+            throw new InvalidOperationException(
+                IsBulkSide(context) ? "row 41 was already taken" : "row 40 was already taken");
+        });
+
+        failure.ShouldContain("different messages");
+        failure.ShouldContain("row 40 was already taken");
+        failure.ShouldContain("row 41 was already taken");
+    }
+
     private async Task<string> CaptureFailure(Func<ShopContext, Task> divergentScenario)
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");

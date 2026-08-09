@@ -88,33 +88,40 @@ public static class BulkPartitioner
             .Append('|').Append((int)command.EntityState)
             .Append("|W:");
 
-        foreach (var column in command.ColumnModifications)
+        // Every command in every batch is keyed, so the columns are walked once and the three
+        // lists collected side by side rather than in a pass each. Indexing rather than foreach
+        // keeps the walk itself free of enumerator allocations, and the two extra buffers are only
+        // created for categories the command actually has -- an insert usually has no conditions,
+        // a delete no writes.
+        StringBuilder? reads = null;
+        StringBuilder? conditions = null;
+
+        var modifications = command.ColumnModifications;
+        for (var i = 0; i < modifications.Count; i++)
         {
+            var column = modifications[i];
+
+            // A column can fall into more than one category at once -- a client-managed
+            // concurrency token is both written and a condition -- so these are not else-ifs.
             if (column.IsWrite)
             {
                 sb.Append(column.ColumnName).Append(',');
             }
-        }
 
-        sb.Append("|R:");
-        foreach (var column in command.ColumnModifications)
-        {
             if (column.IsRead)
             {
-                sb.Append(column.ColumnName).Append(',');
+                (reads ??= new StringBuilder()).Append(column.ColumnName).Append(',');
             }
-        }
 
-        sb.Append("|C:");
-        foreach (var column in command.ColumnModifications)
-        {
             if (column.IsCondition)
             {
-                sb.Append(column.ColumnName).Append(',');
+                (conditions ??= new StringBuilder()).Append(column.ColumnName).Append(',');
             }
         }
 
-        sb.Append("|RA:").Append(command.RowsAffectedColumn?.Name ?? "");
+        sb.Append("|R:").Append(reads)
+            .Append("|C:").Append(conditions)
+            .Append("|RA:").Append(command.RowsAffectedColumn?.Name ?? "");
 
         return sb.ToString();
     }

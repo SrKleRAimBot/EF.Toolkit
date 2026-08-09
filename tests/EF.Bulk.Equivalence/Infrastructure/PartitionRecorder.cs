@@ -24,10 +24,17 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
     ///     the work starts flows through every await into the library, and diagnostic events are
     ///     raised synchronously on that same flow, so the value is still visible when the event
     ///     arrives.
+    ///     <para>
+    ///         The value is pushed and popped rather than set and cleared, so nesting two recorders
+    ///         on one flow is safe: the inner one takes over while it lives and the outer one
+    ///         resumes when it is disposed. Clearing unconditionally would leave the outer recorder
+    ///         silently capturing nothing for the rest of its life.
+    ///     </para>
     /// </remarks>
     private static readonly AsyncLocal<Guid?> Scope = new();
 
     private readonly Guid _scopeId = Guid.NewGuid();
+    private readonly Guid? _enclosingScope;
 
     private readonly List<IDisposable> _subscriptions = [];
     private readonly IDisposable _allListeners;
@@ -38,6 +45,7 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
 
     public PartitionRecorder()
     {
+        _enclosingScope = Scope.Value;
         Scope.Value = _scopeId;
         _allListeners = DiagnosticListener.AllListeners.Subscribe(this);
     }
@@ -98,7 +106,7 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
 
     public void Dispose()
     {
-        Scope.Value = null;
+        Scope.Value = _enclosingScope;
 
         foreach (var subscription in _subscriptions)
         {

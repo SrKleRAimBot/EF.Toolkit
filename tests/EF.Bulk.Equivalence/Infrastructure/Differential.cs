@@ -20,7 +20,16 @@ public static class Differential
     /// </summary>
     /// <param name="fixture">Supplies the two databases.</param>
     /// <param name="scenario">The work to perform. Runs once against each database.</param>
-    public static async Task AssertAsync(DatabaseFixture fixture, Func<ShopContext, Task> scenario)
+    /// <param name="failureMessagesDifferBecause">
+    ///     Why the two sides' failure messages are expected to read differently, for the rare
+    ///     scenario where they legitimately do. Supplying it relaxes only the message comparison —
+    ///     the exception types, at every level of nesting, must still match. Leave it null, which
+    ///     is the norm: a differing message is usually a real divergence in failure behaviour.
+    /// </param>
+    public static async Task AssertAsync(
+        DatabaseFixture fixture,
+        Func<ShopContext, Task> scenario,
+        string? failureMessagesDifferBecause = null)
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
 
@@ -34,7 +43,8 @@ public static class Differential
         // symptom sends you looking in the wrong place.
         var failures = new List<string>();
 
-        if (DescribeExceptionMismatch(stock.Exception, bulk.Exception) is { } exceptionDiff)
+        if (DescribeExceptionMismatch(stock.Exception, bulk.Exception, failureMessagesDifferBecause)
+            is { } exceptionDiff)
         {
             failures.Add(exceptionDiff);
         }
@@ -81,24 +91,90 @@ public static class Differential
         return new Run(exception, tracker, tables);
     }
 
-    private static string? DescribeExceptionMismatch(Exception? stock, Exception? bulk)
-        => (stock, bulk) switch
+    /// <summary>
+    ///     Describes how the two sides' failures differ, or <see langword="null" /> if they match.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Matching on the exception type alone is too weak: a bulk path that reported the
+    ///         wrong constraint, the wrong parameter or the wrong row count would still throw the
+    ///         same type as stock EF, and applications routinely branch on what the message says.
+    ///         So the whole nesting chain of types is compared, and so is the message an
+    ///         application actually sees.
+    ///     </para>
+    ///     <para>
+    ///         Messages of <em>inner</em> exceptions are deliberately not compared. Those are the
+    ///         store's own words about a statement, and the statement genuinely differs: stock EF
+    ///         violates a constraint with an <c>INSERT</c>, EF.Bulk with a bulk copy or a staged
+    ///         set-based statement, and the same fault is worded differently by both engines. The
+    ///         type of the inner exception is the part that is contractual, and that is compared.
+    ///     </para>
+    /// </remarks>
+    private static string? DescribeExceptionMismatch(
+        Exception? stock,
+        Exception? bulk,
+        string? messagesMayDiffer)
+    {
+        switch (stock, bulk)
         {
-            (null, null) => null,
+            case (null, null):
+                return null;
 
-            (null, not null) =>
-                "Scenario succeeded under stock EF but threw under EF.Bulk:"
-                + Environment.NewLine + bulk,
+            case (null, not null):
+                return "Scenario succeeded under stock EF but threw under EF.Bulk:"
+                    + Environment.NewLine + bulk;
 
-            (not null, null) =>
-                "Scenario threw under stock EF but succeeded under EF.Bulk:"
-                + Environment.NewLine + stock,
+            case (not null, null):
+                return "Scenario threw under stock EF but succeeded under EF.Bulk:"
+                    + Environment.NewLine + stock;
+        }
 
-            _ when stock!.GetType() != bulk!.GetType() =>
-                $"Stock EF threw {stock.GetType().Name} but EF.Bulk threw {bulk.GetType().Name}."
-                + Environment.NewLine + "stock: " + stock
-                + Environment.NewLine + "bulk : " + bulk,
+        if (DescribeTypeMismatch(stock!, bulk!) is { } typeDiff)
+        {
+            return typeDiff + Environment.NewLine + Both(stock!, bulk!);
+        }
 
-            _ => null
-        };
+        if (messagesMayDiffer is null
+            && !string.Equals(stock!.Message, bulk!.Message, StringComparison.Ordinal))
+        {
+            return $"Both sides threw {stock.GetType().Name}, but with different messages."
+                + Environment.NewLine + Both(stock, bulk);
+        }
+
+        return null;
+    }
+
+    /// <summary>Compares the two exceptions' types, and those of every exception they wrap.</summary>
+    private static string? DescribeTypeMismatch(Exception stock, Exception bulk)
+    {
+        var stockLink = (Exception?)stock;
+        var bulkLink = (Exception?)bulk;
+
+        for (var depth = 0; stockLink is not null || bulkLink is not null; depth++)
+        {
+            if (stockLink is null || bulkLink is null)
+            {
+                return "The two failures wrap different numbers of exceptions: at nesting depth "
+                    + $"{depth} stock EF has {Name(stockLink)} and EF.Bulk has {Name(bulkLink)}.";
+            }
+
+            if (stockLink.GetType() != bulkLink.GetType())
+            {
+                var where = depth == 0 ? "" : $" at nesting depth {depth}";
+
+                return $"Stock EF threw {Name(stockLink)} but EF.Bulk threw {Name(bulkLink)}{where}.";
+            }
+
+            stockLink = stockLink.InnerException;
+            bulkLink = bulkLink.InnerException;
+        }
+
+        return null;
+    }
+
+    private static string Name(Exception? exception)
+        => exception is null ? "nothing" : exception.GetType().Name;
+
+    private static string Both(Exception stock, Exception bulk)
+        => "stock: " + stock + Environment.NewLine + "bulk : " + bulk;
 }

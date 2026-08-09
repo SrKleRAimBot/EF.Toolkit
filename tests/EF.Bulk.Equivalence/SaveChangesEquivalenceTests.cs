@@ -16,8 +16,10 @@ public abstract class SaveChangesEquivalenceTests(DatabaseFixture fixture)
 {
     private static readonly DateTime Epoch = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
-    private Task AssertEquivalent(Func<ShopContext, Task> scenario)
-        => Differential.AssertAsync(fixture, scenario);
+    private Task AssertEquivalent(
+        Func<ShopContext, Task> scenario,
+        string? failureMessagesDifferBecause = null)
+        => Differential.AssertAsync(fixture, scenario, failureMessagesDifferBecause);
 
     [Fact]
     public Task Insert_single_table_above_threshold()
@@ -272,7 +274,13 @@ public abstract class SaveChangesEquivalenceTests(DatabaseFixture fixture)
             }
 
             await context.SaveChangesAsync();
-        });
+        },
+        // The type, and the entries the exception carries, must match; the wording cannot. Stock
+        // EF fails the one statement whose row vanished and counts in ones, while a bulk update is
+        // a single statement that reports how many of the 150 rows it matched in total.
+        failureMessagesDifferBecause:
+            "a bulk statement reports one aggregate affected-row count where stock EF reports "
+            + "a per-row one.");
 
     [Fact]
     public Task Delete_with_a_concurrency_token()

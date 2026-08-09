@@ -258,6 +258,38 @@ public abstract class PartitioningTests(DatabaseFixture fixture)
             + string.Join("; ", updates.Select(e => e.FallbackReason)));
     }
 
+    [Fact]
+    public async Task An_outer_recorder_resumes_when_an_inner_one_is_disposed()
+    {
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        await fixture.ResetAsync();
+
+        using var outer = new PartitionRecorder();
+
+        using (var inner = new PartitionRecorder())
+        {
+            await using var seed = fixture.CreateBulkContext();
+            seed.Customers.AddRange(Customers(5));
+            await seed.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+            inner.Batches.ShouldNotBeEmpty("The innermost recorder did not capture its own work.");
+            outer.Batches.ShouldBeEmpty("Work inside a nested scope belongs to the inner recorder.");
+        }
+
+        await using (var context = fixture.CreateBulkContext())
+        {
+            context.Categories.AddRange(
+                Enumerable.Range(0, 5).Select(i => new Category { Name = $"Category {i}" }));
+
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        // A recorder that stopped seeing events halfway through would not fail loudly: the
+        // assertions it feeds are all "did this happen", so it would simply report less work than
+        // was done and any test relying on it would start passing for the wrong reason.
+        outer.Batches.ShouldNotBeEmpty("Disposing the nested recorder silenced the outer one.");
+    }
+
     private static List<Customer> Customers(int count)
         =>
         [
