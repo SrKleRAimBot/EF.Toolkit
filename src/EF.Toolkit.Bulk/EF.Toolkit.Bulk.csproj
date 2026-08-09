@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Bulk</PackageId>
+    <Description>
+      High-performance bulk operations for EF Core. Accelerates SaveChanges() transparently and
+      adds an explicit BulkInsert/Update/Merge/Delete API, while preserving change tracking and
+      EF semantics. Provider-neutral core; install EF.Toolkit.Bulk.SqlServer or EF.Toolkit.Bulk.PostgreSQL.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.SqlServer" />
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.PostgreSQL" />
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.Equivalence" />
+  </ItemGroup>
+
+</Project>

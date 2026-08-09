@@ -8,13 +8,20 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
+
+    <!--
+      Package IDs are dotted (EF.Toolkit.Bulk); the CLR namespace deliberately is not. A root
+      namespace segment of "EF" would shadow EF Core's own EF class, breaking EF.Property and
+      EF.Functions in any consumer file that imports ours.
+    -->
+    <RootNamespace>$(MSBuildProjectName.Replace('EF.Toolkit', 'EFToolkit'))</RootNamespace>
   </PropertyGroup>
 
   <!--
-    EF.Bulk version-aligns with EF Core: the EF pin is a package-level decision, not a
+    EF.Toolkit.Bulk version-aligns with EF Core: the EF pin is a package-level decision, not a
     TFM-level one, so we do not multi-target a single package across EF majors.
-      main             -> EF.Bulk 10.x, net10.0, EF Core [10.0.0,11.0.0)
-      release/ef9      -> EF.Bulk  9.x, net8.0,  EF Core  [9.0.0,10.0.0)
+      master           -> EF.Toolkit.Bulk 10.x, net10.0, EF Core [10.0.0,11.0.0)
+      release/ef9      -> EF.Toolkit.Bulk  9.x, net8.0,  EF Core  [9.0.0,10.0.0)
     The hook signatures we depend on are identical across both majors, so the source is shared.
   -->
   <PropertyGroup>
@@ -25,11 +32,11 @@
   <PropertyGroup Label="Package metadata">
     <Authors>Jake Seracino</Authors>
     <Company>Jake Seracino</Company>
-    <Product>EF.Bulk</Product>
+    <Product>EF.Toolkit</Product>
     <Copyright>Copyright (c) 2026 Jake Seracino</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/SrKleRAimBot/EF.Bulk</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/SrKleRAimBot/EF.Bulk</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/SrKleRAimBot/EF.Toolkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/SrKleRAimBot/EF.Toolkit</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;performance;sqlserver;postgresql</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>

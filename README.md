@@ -1,9 +1,9 @@
-# EF.Bulk
+# EF.Toolkit.Bulk
 
 High-performance bulk operations for [EF Core](https://learn.microsoft.com/ef/core) — an
 open-source alternative to the commercial [Entity Framework Extensions](https://entityframework-extensions.net/).
 
-EF.Bulk **extends** EF Core from the outside. It is not a fork, and it does not bundle EF — you
+EF.Toolkit.Bulk **extends** EF Core from the outside. It is not a fork, and it does not bundle EF — you
 install it alongside whatever EF Core version your app already uses.
 
 - **Transparent.** `SaveChanges()` gets faster with no call-site changes.
@@ -12,7 +12,7 @@ install it alongside whatever EF Core version your app already uses.
 - **Change tracking preserved.** Store-generated keys are propagated and entities end in the state
   stock EF would have left them in.
 - **Correct by construction.** Foreign-key ordering is inherited from EF's own dependency analysis;
-  anything EF.Bulk cannot accelerate falls back to stock EF rather than changing results.
+  anything EF.Toolkit.Bulk cannot accelerate falls back to stock EF rather than changing results.
 
 > **Status: pre-release.** Under active development toward `10.0.0`.
 
@@ -34,15 +34,15 @@ install it alongside whatever EF Core version your app already uses.
 ## Install
 
 ```bash
-dotnet add package EF.Bulk.PostgreSQL   # or EF.Bulk.SqlServer
+dotnet add package EF.Toolkit.Bulk.PostgreSQL   # or EF.Toolkit.Bulk.SqlServer
 ```
 
 | Package | EF Core | TFM |
 | --- | --- | --- |
-| `EF.Bulk 10.x` | 10.x | `net10.0` |
-| `EF.Bulk 9.x` | 9.x | `net8.0` |
+| `EF.Toolkit.Bulk 10.x` | 10.x | `net10.0` |
+| `EF.Toolkit.Bulk 9.x` | 9.x | `net8.0` |
 
-The version tracks EF Core's, because EF.Bulk hooks low-level update-pipeline services and must
+The version tracks EF Core's, because EF.Toolkit.Bulk hooks low-level update-pipeline services and must
 never resolve across an EF major.
 
 ## Setup
@@ -92,7 +92,7 @@ Everything `SaveChanges()` guarantees still holds: dependency ordering, change t
 `ISaveChangesInterceptor`.
 
 `BulkSaveChangesAsync()` exists as a synonym, because it is the name people look for — but once
-`UseBulkOperations()` is applied every save already goes through EF.Bulk.
+`UseBulkOperations()` is applied every save already goes through EF.Toolkit.Bulk.
 
 ---
 
@@ -247,7 +247,7 @@ nobody notices.
 <summary><strong>How the merge insert/update split is counted</strong></summary>
 
 `BulkResult.Inserted` and `.Updated` are exact by default. SQL Server reports this for free through
-`MERGE`'s `$action`; PostgreSQL has no equivalent, so EF.Bulk counts the rows that already exist
+`MERGE`'s `$action`; PostgreSQL has no equivalent, so EF.Toolkit.Bulk counts the rows that already exist
 immediately before the merge, inside the same transaction.
 
 That count is an indexed existence check and costs almost nothing — 116 ms versus 119 ms on the
@@ -269,19 +269,19 @@ setting is ignored on SQL Server, which is exact either way.
 ## Diagnostics
 
 `IDbCommandInterceptor` cannot see bulk writes: `COPY` and `SqlBulkCopy` are not `DbCommand`s. So
-EF.Bulk publishes its own events, which is also how you confirm the fast path is engaging:
+EF.Toolkit.Bulk publishes its own events, which is also how you confirm the fast path is engaging:
 
 ```csharp
 DiagnosticListener.AllListeners.Subscribe(new ListenerObserver());
-// listener name: "EFBulk"
+// listener name: "EF.Toolkit.Bulk"
 ```
 
 | Event | Payload | Raised |
 | --- | --- | --- |
-| `EFBulk.PartitionsPlanned` | `PartitionsPlannedEvent` | once per batch, after grouping |
-| `EFBulk.PartitionExecuted` | `PartitionExecutedEvent` | per partition, with `Accelerated` and `Duration` |
-| `EFBulk.ExplicitFallback` | `ExplicitFallbackEvent` | an explicit call ran through EF Core instead |
-| `EFBulk.StagingCleanupFailed` | `StagingCleanupFailedEvent` | a staging table could not be dropped |
+| `EF.Toolkit.Bulk.PartitionsPlanned` | `PartitionsPlannedEvent` | once per batch, after grouping |
+| `EF.Toolkit.Bulk.PartitionExecuted` | `PartitionExecutedEvent` | per partition, with `Accelerated` and `Duration` |
+| `EF.Toolkit.Bulk.ExplicitFallback` | `ExplicitFallbackEvent` | an explicit call ran through EF Core instead |
+| `EF.Toolkit.Bulk.StagingCleanupFailed` | `StagingCleanupFailedEvent` | a staging table could not be dropped |
 
 `PartitionExecutedEvent.Accelerated` is the one to watch. A silent fallback is correct but slow, and
 without this it looks identical to success.
@@ -294,7 +294,7 @@ BenchmarkDotNet, five iterations after warmup, PostgreSQL 16 in Docker on an M-s
 ratios rather than the absolute times, and reproduce with:
 
 ```bash
-dotnet run --project tests/EF.Bulk.Benchmarks -c Release -- --filter "*"
+dotnet run --project tests/EF.Toolkit.Bulk.Benchmarks -c Release -- --filter "*"
 ```
 
 **Insert**, one table, server-generated keys:
@@ -302,13 +302,13 @@ dotnet run --project tests/EF.Bulk.Benchmarks -c Release -- --filter "*"
 | Rows | | Time | vs stock | Allocated |
 | ---: | --- | ---: | ---: | ---: |
 | 1,000 | `SaveChanges()`, stock EF | 53 ms | — | 8.3 MB |
-| | `SaveChanges()`, EF.Bulk | 32 ms | **1.7x** | 4.9 MB |
+| | `SaveChanges()`, EF.Toolkit.Bulk | 32 ms | **1.7x** | 4.9 MB |
 | | `BulkInsertAsync` | 7.9 ms | **6.8x** | 0.24 MB |
 | 10,000 | `SaveChanges()`, stock EF | 385 ms | — | 75.8 MB |
-| | `SaveChanges()`, EF.Bulk | 262 ms | **1.5x** | 46.3 MB |
+| | `SaveChanges()`, EF.Toolkit.Bulk | 262 ms | **1.5x** | 46.3 MB |
 | | `BulkInsertAsync` | 41 ms | **9.3x** | 1.8 MB |
 | 100,000 | `SaveChanges()`, stock EF | 2,620 ms | — | 748 MB |
-| | `SaveChanges()`, EF.Bulk | 627 ms | **4.2x** | 456 MB |
+| | `SaveChanges()`, EF.Toolkit.Bulk | 627 ms | **4.2x** | 456 MB |
 | | `BulkInsertAsync` | 266 ms | **9.9x** | 16.9 MB |
 
 **Update, delete and upsert** at 10,000 rows. Seeding and loading happen outside the measurement, so
@@ -317,10 +317,10 @@ only the write is timed:
 | | Time | vs baseline | Allocated |
 | --- | ---: | ---: | ---: |
 | Update — `SaveChanges()`, stock EF | 319 ms | — | 45.0 MB |
-| Update — `SaveChanges()`, EF.Bulk | 143 ms | **2.2x** | 33.0 MB |
+| Update — `SaveChanges()`, EF.Toolkit.Bulk | 143 ms | **2.2x** | 33.0 MB |
 | Update — `BulkUpdateAsync` | 73 ms | **4.4x** | 7.5 MB |
 | Delete — `SaveChanges()`, stock EF | 277 ms | — | 33.2 MB |
-| Delete — `SaveChanges()`, EF.Bulk | 135 ms | **2.1x** | 31.2 MB |
+| Delete — `SaveChanges()`, EF.Toolkit.Bulk | 135 ms | **2.1x** | 31.2 MB |
 | Delete — `BulkDeleteAsync` | 22 ms | **12.6x** | 6.5 MB |
 | Upsert — read-then-decide, then `SaveChanges()` | 435 ms | — | 65.9 MB |
 | Upsert — `BulkMergeAsync` | 120 ms | **3.6x** | 9.6 MB |
@@ -339,7 +339,7 @@ how a batch is executed, but everything before that still happens: change detect
 command per row, and the dependency ordering that keeps foreign keys safe. That cost is largely
 fixed, so its share shrinks as the row count grows.
 
-**The explicit API is bounded by your database, not by EF.Bulk.** At 100,000 rows, dropping the
+**The explicit API is bounded by your database, not by EF.Toolkit.Bulk.** At 100,000 rows, dropping the
 unique index from the benchmark table takes the same insert from ~253 ms to a 160 ms median — about
 a third of the time is index maintenance no client-side change can touch. That is the healthy
 outcome: at scale the remaining cost is the work the database genuinely has to do.
@@ -349,7 +349,7 @@ outcome: at scale the remaining cost is the work the database genuinely has to d
 ## How it works
 
 **Transparent mode** replaces `IModificationCommandBatchFactory` through EF's public
-`ReplaceService`. That places EF.Bulk *downstream* of `ICommandBatchPreparer`, which has already
+`ReplaceService`. That places EF.Toolkit.Bulk *downstream* of `ICommandBatchPreparer`, which has already
 built a dependency multigraph over the modification commands, topologically sorted it, and filled
 each batch from a single dependency-independent set. Ordering correctness is therefore inherited
 rather than re-derived — regrouping commands within a batch cannot violate a foreign key.
@@ -382,7 +382,7 @@ never change results.
 ### Correctness
 
 The primary gate is a differential harness: every scenario runs against two structurally identical
-databases — once through stock EF, once through EF.Bulk — comparing raw table contents (read over
+databases — once through stock EF, once through EF.Toolkit.Bulk — comparing raw table contents (read over
 ADO, not through EF, so a self-consistently wrong conversion cannot hide), full change-tracker state
 including original values, and failure behaviour. Four negative controls prove the harness detects
 divergence rather than silently comparing nothing.
@@ -394,7 +394,7 @@ divergence rather than silently comparing nothing.
 ## Limitations
 
 - `IDbCommandInterceptor` does not fire for `COPY` / `SqlBulkCopy` paths — these are not
-  `DbCommand`s. EF.Bulk emits [its own events](#diagnostics) instead. `ISaveChangesInterceptor` is
+  `DbCommand`s. EF.Toolkit.Bulk emits [its own events](#diagnostics) instead. `ISaveChangesInterceptor` is
   unaffected.
 - JSON-column and stored-procedure-mapped writes always take the stock EF path.
 - The explicit API cannot read shadow properties — it works from your objects, and there is no entry
@@ -406,12 +406,12 @@ divergence rather than silently comparing nothing.
 
 ## Sample
 
-A runnable walkthrough of every operation lives in `samples/EF.Bulk.Sample`. It starts its own
+A runnable walkthrough of every operation lives in `samples/EF.Toolkit.Bulk.Sample`. It starts its own
 PostgreSQL in Docker, so it needs no setup:
 
 ```bash
-dotnet run --project samples/EF.Bulk.Sample
-dotnet run --project samples/EF.Bulk.Sample -- "Host=localhost;Database=shop;Username=postgres;Password=postgres"
+dotnet run --project samples/EF.Toolkit.Bulk.Sample
+dotnet run --project samples/EF.Toolkit.Bulk.Sample -- "Host=localhost;Database=shop;Username=postgres;Password=postgres"
 ```
 
 ## License

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Bulk.SqlServer</PackageId>
+    <Description>
+      SQL Server provider for EF.Toolkit.Bulk. Uses SqlBulkCopy, sequence block reservation and
+      staging-table MERGE ... OUTPUT readback to make EF Core writes dramatically faster.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.Equivalence" />
+  </ItemGroup>
+
+</Project>
