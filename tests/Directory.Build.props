@@ -1,0 +1,24 @@
+<Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- Test assemblies are not part of the public contract. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- CA1707: xunit test names read as sentences. CA1711: xunit's *Collection convention. -->
+    <NoWarn>$(NoWarn);CA1707;CA1711;CA1861;CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    An allowlist rather than an exclusion. BenchmarkDotNet generates a helper project underneath
+    this directory, so it inherits these props but references neither package — excluding by name
+    missed it and broke every benchmark run with an unresolved global using.
+  -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'EF.Bulk.Tests'
+                        or '$(MSBuildProjectName)' == 'EF.Bulk.Equivalence'">
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+</Project>

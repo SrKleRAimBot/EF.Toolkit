@@ -1,0 +1,47 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+  </PropertyGroup>
+
+  <!--
+    EF.Bulk version-aligns with EF Core: the EF pin is a package-level decision, not a
+    TFM-level one, so we do not multi-target a single package across EF majors.
+      main             -> EF.Bulk 10.x, net10.0, EF Core [10.0.0,11.0.0)
+      release/ef9      -> EF.Bulk  9.x, net8.0,  EF Core  [9.0.0,10.0.0)
+    The hook signatures we depend on are identical across both majors, so the source is shared.
+  -->
+  <PropertyGroup>
+    <VersionPrefix>10.0.0</VersionPrefix>
+    <VersionSuffix>alpha.1</VersionSuffix>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package metadata">
+    <Authors>Jake Seracino</Authors>
+    <Company>Jake Seracino</Company>
+    <Product>EF.Bulk</Product>
+    <Copyright>Copyright (c) 2026 Jake Seracino</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/SrKleRAimBot/EF.Bulk</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/SrKleRAimBot/EF.Bulk</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;performance;sqlserver;postgresql</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Reproducible builds">
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+</Project>
