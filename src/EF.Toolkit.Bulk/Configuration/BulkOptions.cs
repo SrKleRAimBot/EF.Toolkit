@@ -28,6 +28,20 @@ public sealed record BulkOptions
     /// </summary>
     public int MaxBatchSize { get; init; } = DefaultMaxBatchSize;
 
+    /// <summary>
+    ///     Whether upserts may use <c>MERGE</c> where the server supports it, or
+    ///     <see langword="null" /> to decide from the server version.
+    /// </summary>
+    /// <remarks>
+    ///     PostgreSQL 17 gained <c>MERGE ... RETURNING</c> with <c>merge_action()</c>, which reports
+    ///     the insert-versus-update split exactly and for free, carries a source ordinal so
+    ///     generated values correlate precisely, and folds a synchronise's delete into the same
+    ///     statement. Detection is automatic; this exists because a pooler or a
+    ///     PostgreSQL-compatible engine can report a version whose capabilities it does not
+    ///     actually have. Ignored on SQL Server, which has always used <c>MERGE</c>.
+    /// </remarks>
+    public bool? UseMerge { get; init; }
+
     /// <summary>What to do with writes that cannot be accelerated. See <see cref="Unsupported" />.</summary>
     public Unsupported OnUnsupported { get; init; } = Unsupported.FallBack;
 

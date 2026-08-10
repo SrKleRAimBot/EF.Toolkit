@@ -64,6 +64,13 @@ public sealed class SqlServerPartitioningTests(SqlServerFixture fixture)
 public sealed class PostgreSql16BulkInsertApiTests(PostgreSql16Fixture fixture)
     : BulkInsertApiTests(fixture);
 
+// PostgreSQL 17 takes a different upsert path from 16 -- MERGE rather than ON CONFLICT -- so the
+// API suite has to run there too, or the whole of that path ships unexercised.
+[Trait("Engine", "postgres17")]
+[Collection("postgres17")]
+public sealed class PostgreSql17BulkInsertApiTests(PostgreSql17Fixture fixture)
+    : BulkInsertApiTests(fixture);
+
 [Trait("Engine", "sqlserver")]
 [Collection("sqlserver")]
 public sealed class SqlServerBulkInsertApiTests(SqlServerFixture fixture)

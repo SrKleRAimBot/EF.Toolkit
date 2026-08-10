@@ -42,6 +42,20 @@ public class BulkOptionsBuilder
         return this;
     }
 
+    /// <summary>
+    ///     Forces upserts to use <c>MERGE</c>, or to avoid it, instead of deciding from the server
+    ///     version.
+    /// </summary>
+    /// <param name="useMerge">
+    ///     <see langword="true" /> to require it, <see langword="false" /> to avoid it.
+    /// </param>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOptionsBuilder UseMerge(bool useMerge)
+    {
+        Options = Options with { UseMerge = useMerge };
+        return this;
+    }
+
     /// <summary>Sets how an upsert works out its insert-versus-update split.</summary>
     /// <param name="counts">Exact, or the cheaper approximation.</param>
     /// <returns>The same builder, for chaining.</returns>

@@ -203,6 +203,65 @@ public abstract class CorrectnessTests(DatabaseFixture fixture)
         conflict.Message.ShouldContain("expected to affect");
     }
 
+    /// <summary>
+    ///     PostgreSQL 17 upserts through <c>MERGE</c> where earlier versions use
+    ///     <c>ON CONFLICT</c>. The two paths must be indistinguishable from outside — same rows,
+    ///     same counts, same generated keys.
+    /// </summary>
+    /// <remarks>
+    ///     On PostgreSQL 16 and SQL Server both arms run the same path, so this costs a little time
+    ///     and proves nothing; on 17 it is the only thing comparing the new statement against the
+    ///     old one on identical input.
+    /// </remarks>
+    [Fact]
+    public async Task Both_upsert_paths_produce_the_same_result()
+    {
+        var byDefault = await MergeAndSnapshotAsync(useMerge: null);
+        var forcedOld = await MergeAndSnapshotAsync(useMerge: false);
+
+        byDefault.ShouldBe(forcedOld);
+    }
+
+    private async Task<string> MergeAndSnapshotAsync(bool? useMerge)
+    {
+        await ResetAsync();
+
+        await using var context = fixture.CreateBulkContext(
+            b =>
+            {
+                if (useMerge is { } value)
+                {
+                    b.UseMerge(value);
+                }
+            });
+
+        await context.BulkInsertAsync(
+            Customers(200), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Half overlap the existing rows, half are new.
+        var incoming = Customers(100);
+        foreach (var customer in incoming)
+        {
+            customer.Name += " (merged)";
+        }
+
+        incoming.AddRange(Customers(100, startAt: 900));
+
+        var result = await context.BulkMergeAsync(
+            incoming, o => o.MatchOn(c => c.Email), TestContext.Current.CancellationToken);
+
+        // Generated keys have to land on the rows that were actually inserted.
+        var keyed = incoming.Count(c => c.Id > 0);
+
+        var stored = await context.Customers.AsNoTracking()
+            .OrderBy(c => c.Email)
+            .Select(c => c.Email + "|" + c.Name)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        return $"{result.Inserted}/{result.Updated}/{result.Deleted} keys={keyed} "
+            + string.Join(",", stored);
+    }
+
     private async Task ResetAsync()
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");

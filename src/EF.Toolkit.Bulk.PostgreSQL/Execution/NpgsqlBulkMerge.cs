@@ -26,14 +26,17 @@ internal sealed class NpgsqlBulkMerge
     private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, bool, CancellationToken, Task> _copyInto;
 
     private readonly BulkExecutionSettings _settings;
+    private readonly bool? _useMerge;
 
     public NpgsqlBulkMerge(
         ISqlGenerationHelper sqlHelper,
         BulkExecutionSettings settings,
+        bool? useMerge,
         Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, bool, CancellationToken, Task> copyInto)
     {
         _sqlHelper = sqlHelper;
         _settings = settings;
+        _useMerge = useMerge;
         _copyInto = copyInto;
     }
 
@@ -48,25 +51,39 @@ internal sealed class NpgsqlBulkMerge
     {
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
         var staging = _sqlHelper.DelimitIdentifier($"efbulk_{Guid.NewGuid():N}");
+        var ordinalColumn = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
+
+        var useMerge = SupportsMerge(connection);
 
         var columnList = string.Join(
             ", ",
             writeIndices.Select(i => _sqlHelper.DelimitIdentifier(rows.Columns[i].Name)));
 
+        // MERGE's RETURNING can name the source, so the ordinal is worth staging there; ON CONFLICT
+        // cannot, so staging it would be dead weight on every row.
+        var ordinalProjection = useMerge ? $", 0 AS {ordinalColumn}" : "";
+
         await ExecuteNonQueryAsync(
                 connection,
-                $"CREATE TEMP TABLE {staging} AS SELECT {columnList} FROM {target} WITH NO DATA",
+                $"CREATE TEMP TABLE {staging} AS "
+                + $"SELECT {columnList}{ordinalProjection} FROM {target} WITH NO DATA",
                 cancellationToken)
             .ConfigureAwait(false);
 
         try
         {
-            // No ordinal: INSERT ... ON CONFLICT ... RETURNING can only name columns of the target
-            // row, never the source, so a merge here correlates by match value instead.
             await _copyInto(
                     connection, staging, StagingColumn.ForWrite(rows, writeIndices), rows,
-                    false, cancellationToken)
+                    useMerge, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (useMerge)
+            {
+                return await MergeAsync(
+                        rows, connection, staging, target, columnList, writeIndices, matchIndices,
+                        readIndices, deleteMissing, cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             var conflictTarget = string.Join(
                 ", ",
@@ -161,6 +178,149 @@ internal sealed class NpgsqlBulkMerge
                         connection, $"DROP TABLE IF EXISTS {staging}", CancellationToken.None))
                 .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    ///     Whether this server can run <c>MERGE ... RETURNING merge_action()</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The version comes from the startup packet, so this costs nothing. It is only a
+    ///     capability probe by proxy, which is why the setting can override it: a pooler or a
+    ///     PostgreSQL-compatible engine can report 17 without implementing what 17 added.
+    /// </remarks>
+    private bool SupportsMerge(NpgsqlConnection connection)
+        => _useMerge ?? connection.PostgreSqlVersion.Major >= 17;
+
+    /// <summary>
+    ///     Upserts through <c>MERGE</c>, available from PostgreSQL 17.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         This is strictly better than <c>ON CONFLICT</c> where it exists.
+    ///         <c>merge_action()</c> states per row whether it was inserted, updated or deleted, so
+    ///         the counts are exact without the extra pre-merge count the older path needs and
+    ///         without reading <c>xmax</c>, which is a convention rather than a guarantee.
+    ///         <c>RETURNING</c> may name the source, so generated values correlate by ordinal
+    ///         rather than by match value. And <c>WHEN NOT MATCHED BY SOURCE</c> folds a
+    ///         synchronise's delete into the same statement.
+    ///     </para>
+    ///     <para>
+    ///         One behavioural difference is worth knowing. <c>MERGE</c> has none of
+    ///         <c>ON CONFLICT</c>'s speculative-insertion locking, so under <c>READ COMMITTED</c> a
+    ///         concurrent insert of the same key surfaces as a unique violation rather than being
+    ///         absorbed into an update. It also raises an error when the source joins the same
+    ///         target row twice, where <c>ON CONFLICT</c> would take the last write.
+    ///     </para>
+    /// </remarks>
+    private async Task<(int Inserted, int Updated, int Deleted)> MergeAsync(
+        IBulkRowSet rows,
+        NpgsqlConnection connection,
+        string staging,
+        string target,
+        string columnList,
+        IReadOnlyList<int> writeIndices,
+        IReadOnlyList<int> matchIndices,
+        IReadOnlyList<int> readIndices,
+        bool deleteMissing,
+        CancellationToken cancellationToken)
+    {
+        var match = new HashSet<int>(matchIndices);
+
+        var on = string.Join(
+            " AND ",
+            matchIndices.Select(i =>
+            {
+                var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
+                return $"t.{column} = s.{column}";
+            }));
+
+        // Match columns identify the row, so they are never themselves reassigned.
+        var assignments = writeIndices
+            .Where(i => !match.Contains(i))
+            .Select(i =>
+            {
+                var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
+                return $"{column} = s.{column}";
+            })
+            .ToList();
+
+        var matched = assignments.Count == 0
+            ? ""
+            : $"WHEN MATCHED THEN UPDATE SET {string.Join(", ", assignments)}\n";
+
+        var values = string.Join(
+            ", ",
+            writeIndices.Select(i => $"s.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
+
+        var notMatchedBySource = deleteMissing
+            ? "\nWHEN NOT MATCHED BY SOURCE THEN DELETE"
+            : "";
+
+        var returning = new List<string>
+        {
+            "merge_action()",
+            $"s.{_sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName)}"
+        };
+
+        returning.AddRange(
+            readIndices.Select(i => $"t.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
+
+        var sql =
+            $"MERGE INTO {target} AS t\n"
+            + $"USING {staging} AS s\n"
+            + $"ON {on}\n"
+            + matched
+            + $"WHEN NOT MATCHED THEN INSERT ({columnList}) VALUES ({values})"
+            + notMatchedBySource
+            + $"\nRETURNING {string.Join(", ", returning)}";
+
+        var inserted = 0;
+        var updated = 0;
+        var deleted = 0;
+
+        await using var command = connection.CreateCommand();
+        _settings.Apply(command);
+        command.CommandText = sql;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var action = reader.GetString(0);
+
+            if (string.Equals(action, "DELETE", StringComparison.Ordinal))
+            {
+                // A deleted row came from the target, so there is no source ordinal and nothing to
+                // propagate back.
+                deleted++;
+                continue;
+            }
+
+            if (string.Equals(action, "INSERT", StringComparison.Ordinal))
+            {
+                inserted++;
+            }
+            else
+            {
+                updated++;
+            }
+
+            var row = reader.GetInt32(1);
+
+            for (var i = 0; i < readIndices.Count; i++)
+            {
+                var position = 2 + i;
+                var value = await reader.IsDBNullAsync(position, cancellationToken)
+                    .ConfigureAwait(false)
+                    ? null
+                    : reader.GetValue(position);
+
+                rows.SetGeneratedValue(row, readIndices[i], value);
+            }
+        }
+
+        return (inserted, updated, deleted);
     }
 
     private async Task<(int Inserted, int Updated)> ApplyAsync(

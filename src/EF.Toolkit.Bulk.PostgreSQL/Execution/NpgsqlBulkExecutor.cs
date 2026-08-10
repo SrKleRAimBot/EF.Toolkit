@@ -259,6 +259,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         var (inserted, updated, deleted) = await new NpgsqlBulkMerge(
                 _sqlHelper,
                 settings,
+                _options.UseMerge,
                 (c, t, staged, r, ordinal, ct) => CopyIntoAsync(settings, c, t, staged, r, ordinal, ct))
             .ExecuteAsync(
                 rows, connection, writeIndices, matchIndices, readIndices,
