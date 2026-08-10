@@ -192,7 +192,9 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
                 importer.Timeout = timeout;
             }
 
-            for (var row = 0; row < rows.RowCount; row++)
+            var cursor = new BulkRowCursor(rows, StagingColumn.ForWrite(rows, writeIndices));
+
+            while (cursor.MoveNext())
             {
                 await importer.StartRowAsync(cancellationToken).ConfigureAwait(false);
 
@@ -200,10 +202,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
                 {
                     // Reserved keys stream from the local array rather than from the row set, so
                     // the entities stay untouched until the copy has actually succeeded.
-                    var value = reservedKeys[i] is { } keys
-                        ? keys[row]
-                        : rows.Columns[writeIndices[i]].ToProviderValue(
-                            rows.GetValue(row, writeIndices[i]));
+                    var value = reservedKeys[i] is { } keys ? keys[cursor.Row] : cursor[i];
 
                     await writers[i].WriteAsync(importer, value, cancellationToken)
                         .ConfigureAwait(false);
@@ -366,15 +365,16 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             }
 
             var writers = staged.Select(c => NpgsqlColumnWriter.For(rows.Columns[c.Index])).ToArray();
+            var cursor = new BulkRowCursor(rows, staged);
 
-            for (var row = 0; row < rows.RowCount; row++)
+            while (cursor.MoveNext())
             {
                 await importer.StartRowAsync(cancellationToken).ConfigureAwait(false);
 
                 for (var i = 0; i < staged.Count; i++)
                 {
                     await writers[i]
-                        .WriteAsync(importer, staged[i].ValueFor(rows, row), cancellationToken)
+                        .WriteAsync(importer, cursor[i], cancellationToken)
                         .ConfigureAwait(false);
                 }
             }

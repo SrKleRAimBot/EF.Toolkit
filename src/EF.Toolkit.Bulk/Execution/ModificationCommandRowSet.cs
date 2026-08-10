@@ -1,6 +1,7 @@
 using EFToolkit.Bulk.Planning;
 using EFToolkit.Bulk.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Update;
 
 namespace EFToolkit.Bulk.Execution;
@@ -13,14 +14,17 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
 {
     private readonly IReadOnlyList<IReadOnlyModificationCommand> _commands;
     private readonly int[] _indices;
+    private readonly IColumnBase?[] _templateColumns;
 
     private ModificationCommandRowSet(
         BulkPartition partition,
         IReadOnlyList<BulkColumnInfo> columns,
-        int[] indices)
+        int[] indices,
+        IColumnBase?[] templateColumns)
     {
         _commands = partition.Commands;
         _indices = indices;
+        _templateColumns = templateColumns;
 
         Schema = partition.Schema;
         TableName = partition.TableName;
@@ -62,6 +66,7 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
         var template = partition.Commands[0];
         var columns = new List<BulkColumnInfo>(template.ColumnModifications.Count);
         var indices = new int[template.ColumnModifications.Count];
+        var templateColumns = new IColumnBase?[template.ColumnModifications.Count];
 
         for (var i = 0; i < template.ColumnModifications.Count; i++)
         {
@@ -77,9 +82,10 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
                 modification.IsCondition));
 
             indices[i] = i;
+            templateColumns[i] = modification.Column;
         }
 
-        return new ModificationCommandRowSet(partition, columns, indices);
+        return new ModificationCommandRowSet(partition, columns, indices, templateColumns);
     }
 
     public IReadOnlyList<IUpdateEntry> GetEntries(int row) => _commands[row].Entries;
@@ -123,16 +129,30 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
     {
         var modifications = _commands[row].ColumnModifications;
         var index = _indices[column];
-        var name = Columns[column].Name;
 
         // Partitioning guarantees a uniform shape, so the cached index is right in every observed
-        // case; the name check keeps a partitioning bug from silently writing into the wrong
-        // column, which no type error would reveal.
-        if ((uint)index < (uint)modifications.Count
-            && string.Equals(modifications[index].ColumnName, name, StringComparison.Ordinal))
+        // case; the check keeps a partitioning bug from silently writing into the wrong column,
+        // which no type error would reveal.
+        //
+        // It compares the model's column object by reference rather than comparing names. Both
+        // catch the same mistake, but this runs once per cell -- a hundred thousand rows times
+        // thirty columns is three million comparisons -- and a reference check is a single
+        // instruction where a string comparison walks the characters.
+        if ((uint)index < (uint)modifications.Count)
         {
-            return modifications[index];
+            var candidate = modifications[index];
+            var expected = _templateColumns[column];
+
+            if (expected is not null
+                ? ReferenceEquals(candidate.Column, expected)
+                : string.Equals(
+                    candidate.ColumnName, Columns[column].Name, StringComparison.Ordinal))
+            {
+                return candidate;
+            }
         }
+
+        var name = Columns[column].Name;
 
         foreach (var modification in modifications)
         {
