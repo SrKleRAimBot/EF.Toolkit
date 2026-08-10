@@ -12,6 +12,8 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
     public DbSet<Inventory> Inventories => Set<Inventory>();
     public DbSet<Shipment> Shipments => Set<Shipment>();
     public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
+    public DbSet<Reading> Readings => Set<Reading>();
+    public DbSet<Sensor> Sensors => Set<Sensor>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -93,6 +95,23 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
             // A database default on a non-key column. EF omits the column from the insert whenever
             // the property holds the CLR default and reads the generated value back instead.
             b.Property(x => x.Severity).HasDefaultValue(3);
+        });
+
+        modelBuilder.Entity<Sensor>(b => b.Property(x => x.Name).HasMaxLength(64).IsRequired());
+
+        modelBuilder.Entity<Reading>(b =>
+        {
+            // A CHECK constraint and a foreign key, both of which SqlBulkCopy skips unless asked.
+            b.ToTable(t => t.HasCheckConstraint("CK_Reading_Value", "\"Value\" >= 0"));
+
+            b.HasOne(x => x.Sensor)
+                .WithMany()
+                .HasForeignKey(x => x.SensorId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // A default on a nullable column: without KeepNulls the server substitutes this
+            // wherever a null is written, so an explicit null would silently become 'unlabelled'.
+            b.Property(x => x.Label).HasMaxLength(64).HasDefaultValue("unlabelled");
         });
 
         modelBuilder.Entity<Category>(b =>

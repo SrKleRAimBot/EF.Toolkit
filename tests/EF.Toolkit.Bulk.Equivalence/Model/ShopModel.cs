@@ -126,6 +126,32 @@ public class AuditEntry
     public int Severity { get; set; }
 }
 
+/// <summary>
+///     Carries the things a bulk copy can silently skip: a CHECK constraint, a foreign key, and a
+///     nullable column with a database default. SqlBulkCopy validates none of them by default and
+///     substitutes the default wherever a null is written, so an accelerated insert could accept
+///     rows stock EF rejects and store values it was never given.
+/// </summary>
+public class Reading
+{
+    public int Id { get; set; }
+
+    public int SensorId { get; set; }
+    public Sensor? Sensor { get; set; }
+
+    /// <summary>Constrained to be non-negative.</summary>
+    public int Value { get; set; }
+
+    /// <summary>Nullable with a database default, so KeepNulls decides what a null means.</summary>
+    public string? Label { get; set; }
+}
+
+public class Sensor
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+}
+
 public enum OrderStatus
 {
     Draft,

@@ -59,6 +59,37 @@ public sealed record BulkOptions
     /// </remarks>
     public int StagingIndexThreshold { get; init; } = DefaultStagingIndexThreshold;
 
+    /// <summary>
+    ///     Whether CHECK and foreign-key constraints are enforced on rows written by a bulk copy.
+    ///     Defaults to <see langword="true" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Only SQL Server can skip them: <c>SqlBulkCopy</c> disables constraint validation by
+    ///         default, while PostgreSQL's <c>COPY</c> always enforces it. Skipping is faster, and
+    ///         it is the wrong default for a library whose contract is that accelerating a write
+    ///         does not change its result — stock <c>SaveChanges</c> enforces both.
+    ///     </para>
+    ///     <para>
+    ///         There is a second cost that outlives the operation. Rows loaded without validation
+    ///         leave the table's CHECK and foreign-key constraints marked untrusted, and the query
+    ///         optimiser ignores untrusted constraints when simplifying plans — permanently, until
+    ///         someone revalidates them by hand.
+    ///     </para>
+    /// </remarks>
+    public bool ValidateConstraints { get; init; } = true;
+
+    /// <summary>
+    ///     Whether triggers fire for rows written by a bulk copy. Defaults to
+    ///     <see langword="true" />.
+    /// </summary>
+    /// <remarks>
+    ///     As with <see cref="ValidateConstraints" />, only SQL Server can skip them, and stock
+    ///     <c>SaveChanges</c> does not. Turning this off is faster and makes an accelerated write
+    ///     observably different from an unaccelerated one.
+    /// </remarks>
+    public bool FireTriggers { get; init; } = true;
+
     /// <summary>What to do with writes that cannot be accelerated. See <see cref="Unsupported" />.</summary>
     public Unsupported OnUnsupported { get; init; } = Unsupported.FallBack;
 

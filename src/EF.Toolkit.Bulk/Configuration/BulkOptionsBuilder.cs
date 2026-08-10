@@ -68,6 +68,29 @@ public class BulkOptionsBuilder
         return this;
     }
 
+    /// <summary>
+    ///     Sets whether CHECK and foreign-key constraints are enforced on bulk-copied rows.
+    /// </summary>
+    /// <param name="validate">
+    ///     <see langword="false" /> to skip validation. Faster, and it leaves the table's
+    ///     constraints untrusted, which the query optimiser then ignores when building plans.
+    /// </param>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOptionsBuilder ValidateConstraints(bool validate)
+    {
+        Options = Options with { ValidateConstraints = validate };
+        return this;
+    }
+
+    /// <summary>Sets whether triggers fire for bulk-copied rows.</summary>
+    /// <param name="fire"><see langword="false" /> to suppress them.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOptionsBuilder FireTriggers(bool fire)
+    {
+        Options = Options with { FireTriggers = fire };
+        return this;
+    }
+
     /// <summary>Sets how an upsert works out its insert-versus-update split.</summary>
     /// <param name="counts">Exact, or the cheaper approximation.</param>
     /// <returns>The same builder, for chaining.</returns>

@@ -262,6 +262,141 @@ public abstract class CorrectnessTests(DatabaseFixture fixture)
             + string.Join(",", stored);
     }
 
+    /// <summary>
+    ///     A CHECK constraint has to reject the same rows whether or not the write was
+    ///     accelerated. SqlBulkCopy skips constraint validation by default, so an accelerated
+    ///     insert would have accepted rows stock EF rejects — and left the constraint untrusted,
+    ///     which the optimiser then ignores for every later query against the table.
+    /// </summary>
+    [Fact]
+    public async Task A_check_constraint_rejects_bulk_inserted_rows()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var sensor = new Sensor { Name = "S1" };
+        await context.BulkInsertAsync(
+            new List<Sensor> { sensor }, cancellationToken: TestContext.Current.CancellationToken);
+
+        var readings = Enumerable.Range(0, 200)
+            .Select(i => new Reading { SensorId = sensor.Id, Value = i, Label = "ok" })
+            .ToList();
+
+        readings[100].Value = -1;
+
+        await Should.ThrowAsync<Exception>(
+            () => context.BulkInsertAsync(
+                readings, cancellationToken: TestContext.Current.CancellationToken));
+
+        (await context.Readings.AsNoTracking()
+                .CountAsync(TestContext.Current.CancellationToken))
+            .ShouldBe(0);
+    }
+
+    /// <summary>
+    ///     A foreign key likewise. Without validation a bulk copy will happily write a row
+    ///     referencing a principal that does not exist.
+    /// </summary>
+    [Fact]
+    public async Task A_foreign_key_rejects_bulk_inserted_rows()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var orphans = Enumerable.Range(0, 200)
+            .Select(i => new Reading { SensorId = 987_654, Value = i })
+            .ToList();
+
+        await Should.ThrowAsync<Exception>(
+            () => context.BulkInsertAsync(
+                orphans, cancellationToken: TestContext.Current.CancellationToken));
+
+        (await context.Readings.AsNoTracking()
+                .CountAsync(TestContext.Current.CancellationToken))
+            .ShouldBe(0);
+    }
+
+    /// <summary>
+    ///     Nulls written into a column that has a database default must land exactly as stock EF
+    ///     leaves them.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Stated as a differential rather than a fixed expectation, because the expectation is
+    ///         not obvious: EF omits a property from the insert when it holds the CLR default and
+    ///         the column has a store default, so the database's default applies rather than the
+    ///         null. A bulk copy has its own opinion — it substitutes column defaults for nulls
+    ///         unless told not to — and what matters is only that the two agree.
+    ///     </para>
+    ///     <para>
+    ///         Each case uses a uniform value so the batch holds a single column shape. Mixing them
+    ///         gives the table two shapes, which partitions into two groups and hands out identity
+    ///         values in a different order from stock EF — a real difference, but a different one,
+    ///         and covered separately.
+    ///     </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("labelled")]
+    public async Task Nulls_against_a_defaulted_column_match_stock_ef(string? label)
+        => await Differential.AssertAsync(
+            fixture,
+            async context =>
+            {
+                var sensor = new Sensor { Name = "S1" };
+                context.Sensors.Add(sensor);
+                await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+                context.Readings.AddRange(
+                    Enumerable.Range(0, 200).Select(i => new Reading
+                    {
+                        SensorId = sensor.Id,
+                        Value = i,
+                        Label = label
+                    }));
+
+                await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+            });
+
+    /// <summary>
+    ///     Rows of the same table but different column shape — here a nullable column with a
+    ///     database default, set on some rows and left null on others — are grouped and written
+    ///     shape by shape, so store-generated keys are handed out in a different order from stock
+    ///     EF. Each row still gets its own key and its own values; only the numbering differs.
+    /// </summary>
+    [Fact]
+    public async Task Mixed_column_shapes_keep_every_row_intact()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var sensor = new Sensor { Name = "S1" };
+        context.Sensors.Add(sensor);
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        context.Readings.AddRange(
+            Enumerable.Range(0, 200).Select(i => new Reading
+            {
+                SensorId = sensor.Id,
+                Value = i,
+                Label = i % 2 == 0 ? null : "labelled"
+            }));
+
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var stored = await context.Readings.AsNoTracking()
+            .ToDictionaryAsync(r => r.Value, r => r.Label, TestContext.Current.CancellationToken);
+
+        stored.Count.ShouldBe(200);
+
+        // Every row kept the label it was given -- the default where it was null, the value
+        // otherwise -- and no row was lost or duplicated by the grouping.
+        for (var i = 0; i < 200; i++)
+        {
+            stored[i].ShouldBe(i % 2 == 0 ? "unlabelled" : "labelled");
+        }
+    }
+
     private async Task ResetAsync()
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");

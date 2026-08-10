@@ -292,6 +292,51 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
         return BulkExecutionResult.Executed(affected);
     }
 
+    /// <summary>
+    ///     The flags that keep a bulk copy behaving the way stock <c>SaveChanges</c> does.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>SqlBulkCopy</c> defaults to skipping constraint validation and suppressing
+    ///         triggers, neither of which stock EF does. Left alone, enabling this library could
+    ///         change what a write does — and loading rows without validation additionally marks
+    ///         the table's CHECK and foreign-key constraints untrusted, which the optimiser then
+    ///         ignores when building plans for every later query.
+    ///     </para>
+    ///     <para>
+    ///         Applied only when writing to the user's own table. A staging table has no
+    ///         constraints and no triggers, so paying for either there would buy nothing —
+    ///         the merge that follows enforces them against the real table anyway.
+    ///     </para>
+    ///     <para>
+    ///         <c>KeepNulls</c> is not configurable: without it the server substitutes a column's
+    ///         default wherever a null is written, so a property EF decided to write as null would
+    ///         silently become something else.
+    ///     </para>
+    /// </remarks>
+    private SqlBulkCopyOptions Semantics(SqlBulkCopyOptions options)
+    {
+        // KeepIdentity marks the staging paths, which write to a private table.
+        if (options.HasFlag(SqlBulkCopyOptions.KeepIdentity))
+        {
+            return SqlBulkCopyOptions.Default;
+        }
+
+        var semantics = SqlBulkCopyOptions.KeepNulls;
+
+        if (_options.ValidateConstraints)
+        {
+            semantics |= SqlBulkCopyOptions.CheckConstraints;
+        }
+
+        if (_options.FireTriggers)
+        {
+            semantics |= SqlBulkCopyOptions.FireTriggers;
+        }
+
+        return semantics;
+    }
+
     /// <summary>Creates a bulk copy enlisted in the current transaction.</summary>
     /// <param name="connection">The connection to write through.</param>
     /// <param name="transaction">EF's ambient transaction, if any.</param>
@@ -308,7 +353,7 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
         BulkExecutionSettings settings,
         SqlBulkCopyOptions options = SqlBulkCopyOptions.Default)
     {
-        var bulkCopy = new SqlBulkCopy(connection, options, transaction)
+        var bulkCopy = new SqlBulkCopy(connection, options | Semantics(options), transaction)
         {
             BatchSize = _options.MaxBatchSize,
             EnableStreaming = true
