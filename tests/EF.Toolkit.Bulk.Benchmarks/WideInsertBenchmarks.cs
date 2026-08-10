@@ -4,20 +4,21 @@ using Microsoft.EntityFrameworkCore;
 namespace EFToolkit.Bulk.Benchmarks;
 
 /// <summary>
-///     Insert throughput: stock EF Core, transparent EF.Toolkit.Bulk, and the explicit API.
+///     Insert throughput on a thirty-column row.
 /// </summary>
 /// <remarks>
-///     The three are measured together because the interesting result is the gap between them.
-///     Transparent mode replaces only how a batch is executed, so it still pays EF's change
-///     detection and command materialisation; the explicit API skips that pipeline entirely.
+///     The narrow benchmark measures how fast rows reach the wire; this one measures what each
+///     column costs on the way. Per-cell work — boxing, type resolution, converter dispatch, the
+///     double read a data reader can be asked for — is invisible at five columns and dominant at
+///     thirty, which is closer to the schemas this library is actually pointed at.
 /// </remarks>
 [Config(typeof(BenchmarkConfig))]
-public class InsertBenchmarks
+public class WideInsertBenchmarks
 {
     private BenchmarkDatabase _database = null!;
-    private List<Customer> _customers = null!;
+    private List<WideCustomer> _customers = null!;
 
-    [Params(1_000, 10_000, 100_000)]
+    [Params(10_000, 100_000)]
     public int Rows { get; set; }
 
     [GlobalSetup]
@@ -26,12 +27,10 @@ public class InsertBenchmarks
     [GlobalCleanup]
     public void Cleanup() => _database.DisposeAsync().AsTask().GetAwaiter().GetResult();
 
-    // Rebuilding the entities each iteration matters: an insert writes generated keys back onto
-    // them, and a second run over the same objects would no longer be inserting fresh rows.
     [IterationSetup]
     public void IterationSetup()
     {
-        _customers = Data.Customers(Rows);
+        _customers = Data.WideCustomers(Rows);
         _database.Reset();
     }
 
@@ -39,7 +38,7 @@ public class InsertBenchmarks
     public async Task StockSaveChanges()
     {
         await using var context = _database.StockContext();
-        context.Customers.AddRange(_customers);
+        context.WideCustomers.AddRange(_customers);
         await context.SaveChangesAsync();
     }
 
@@ -47,7 +46,7 @@ public class InsertBenchmarks
     public async Task TransparentSaveChanges()
     {
         await using var context = _database.BulkContext();
-        context.Customers.AddRange(_customers);
+        context.WideCustomers.AddRange(_customers);
         await context.SaveChangesAsync();
     }
 
