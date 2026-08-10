@@ -1,4 +1,3 @@
-using System.Text;
 using EFToolkit.Bulk.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Update;
@@ -37,26 +36,29 @@ public static class BulkPartitioner
         ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(options);
 
-        var groups = new Dictionary<string, List<IReadOnlyModificationCommand>>(StringComparer.Ordinal);
-        var order = new List<string>();
+        // The first command of each group is the group's key: it already carries every field the
+        // shape is made of, so no key object is built and nothing is allocated per row. The
+        // parallel list preserves first-appearance order, which a dictionary does not promise.
+        var groups = new Dictionary<IReadOnlyModificationCommand, List<IReadOnlyModificationCommand>>(
+            ModificationCommandShapeComparer.Instance);
+
+        var order = new List<List<IReadOnlyModificationCommand>>();
 
         foreach (var command in commands)
         {
-            var key = ShapeKey(command);
-            if (!groups.TryGetValue(key, out var group))
+            if (!groups.TryGetValue(command, out var group))
             {
                 group = [];
-                groups[key] = group;
-                order.Add(key);
+                groups[command] = group;
+                order.Add(group);
             }
 
             group.Add(command);
         }
 
         var partitions = new List<BulkPartition>(order.Count);
-        foreach (var key in order)
+        foreach (var group in order)
         {
-            var group = groups[key];
             var first = group[0];
 
             partitions.Add(new BulkPartition(
@@ -69,61 +71,6 @@ public static class BulkPartitioner
         }
 
         return partitions;
-    }
-
-    /// <summary>
-    ///     Builds the key that decides which commands can share a bulk operation.
-    /// </summary>
-    /// <remarks>
-    ///     The written column list is part of the key, and in its original order rather than
-    ///     sorted: a bulk copy writes a positional stream, so two commands that write the same
-    ///     columns in a different order cannot share one. Read columns are included because a
-    ///     command that needs values back has to take a different execution path from one that does
-    ///     not, and the rows-affected column because it drives concurrency checking.
-    /// </remarks>
-    private static string ShapeKey(IReadOnlyModificationCommand command)
-    {
-        var sb = new StringBuilder();
-        sb.Append(command.Schema ?? "").Append('.').Append(command.TableName)
-            .Append('|').Append((int)command.EntityState)
-            .Append("|W:");
-
-        // Every command in every batch is keyed, so the columns are walked once and the three
-        // lists collected side by side rather than in a pass each. Indexing rather than foreach
-        // keeps the walk itself free of enumerator allocations, and the two extra buffers are only
-        // created for categories the command actually has -- an insert usually has no conditions,
-        // a delete no writes.
-        StringBuilder? reads = null;
-        StringBuilder? conditions = null;
-
-        var modifications = command.ColumnModifications;
-        for (var i = 0; i < modifications.Count; i++)
-        {
-            var column = modifications[i];
-
-            // A column can fall into more than one category at once -- a client-managed
-            // concurrency token is both written and a condition -- so these are not else-ifs.
-            if (column.IsWrite)
-            {
-                sb.Append(column.ColumnName).Append(',');
-            }
-
-            if (column.IsRead)
-            {
-                (reads ??= new StringBuilder()).Append(column.ColumnName).Append(',');
-            }
-
-            if (column.IsCondition)
-            {
-                (conditions ??= new StringBuilder()).Append(column.ColumnName).Append(',');
-            }
-        }
-
-        sb.Append("|R:").Append(reads)
-            .Append("|C:").Append(conditions)
-            .Append("|RA:").Append(command.RowsAffectedColumn?.Name ?? "");
-
-        return sb.ToString();
     }
 
     /// <summary>
