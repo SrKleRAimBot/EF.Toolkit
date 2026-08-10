@@ -26,14 +26,17 @@ internal sealed class NpgsqlBulkWriteOperations
     private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, bool, CancellationToken, Task> _copyInto;
 
     private readonly BulkExecutionSettings _settings;
+    private readonly int _indexThreshold;
 
     public NpgsqlBulkWriteOperations(
         ISqlGenerationHelper sqlHelper,
         BulkExecutionSettings settings,
+        int indexThreshold,
         Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, bool, CancellationToken, Task> copyInto)
     {
         _sqlHelper = sqlHelper;
         _settings = settings;
+        _indexThreshold = indexThreshold;
         _copyInto = copyInto;
     }
 
@@ -49,7 +52,7 @@ internal sealed class NpgsqlBulkWriteOperations
         var staged = StagingColumn.ForUpdate(rows, conditionIndices, writeIndices);
 
         return WithStagingAsync(
-            rows, connection, staged, readIndices,
+            rows, connection, staged, readIndices, conditionIndices,
             staging =>
             {
                 var assignments = string.Join(
@@ -80,7 +83,7 @@ internal sealed class NpgsqlBulkWriteOperations
         var staged = StagingColumn.ForDelete(rows, conditionIndices);
 
         return WithStagingAsync(
-            rows, connection, staged, [],
+            rows, connection, staged, [], conditionIndices,
             staging =>
                 // RETURNING may likewise name the relation in USING.
                 $"DELETE FROM {target} AS t USING {staging} AS s "
@@ -94,6 +97,7 @@ internal sealed class NpgsqlBulkWriteOperations
         NpgsqlConnection connection,
         IReadOnlyList<StagingColumn> staged,
         IReadOnlyList<int> readIndices,
+        IReadOnlyList<int> conditionIndices,
         Func<string, string> buildSql,
         CancellationToken cancellationToken)
     {
@@ -124,13 +128,29 @@ internal sealed class NpgsqlBulkWriteOperations
 
             var tally = new BulkRowTally(rows.RowCount);
 
+            // ANALYZE and any index are prepended to the statement that needs them, so preparing
+            // the staging table costs no extra round trip. Autovacuum never touches a temp table,
+            // so without ANALYZE the planner joins it to the target on a hard-coded guess.
+            var prelude = Prelude(rows, staging, staged, conditionIndices);
+
             await using (var command = connection.CreateCommand())
             {
                 _settings.Apply(command);
-                command.CommandText = buildSql(staging);
+                command.CommandText = prelude + buildSql(staging);
 
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken)
                     .ConfigureAwait(false);
+
+                // Advance past the prelude to the statement that returns something. Counting the
+                // prelude's statements would be the obvious way and is not reliable — the driver
+                // does not promise a result set per statement — whereas only the set-based
+                // statement describes any columns, so field count identifies it exactly. A DML
+                // statement that matched nothing still describes its RETURNING columns, so this
+                // does not confuse "no rows" with "not there yet".
+                while (reader.FieldCount == 0
+                    && await reader.NextResultAsync(cancellationToken).ConfigureAwait(false))
+                {
+                }
 
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
@@ -164,6 +184,30 @@ internal sealed class NpgsqlBulkWriteOperations
                         connection, $"DROP TABLE IF EXISTS {staging}", CancellationToken.None))
                 .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Builds the statements that precede the set-based statement.</summary>
+    private string Prelude(
+        IBulkRowSet rows,
+        string staging,
+        IReadOnlyList<StagingColumn> staged,
+        IReadOnlyList<int> conditionIndices)
+    {
+        var statements = new List<string>();
+
+        if (StagingPrelude.ShouldIndex(rows.RowCount, conditionIndices.Count, _indexThreshold))
+        {
+            var columns = string.Join(
+                ", ",
+                conditionIndices.Select(
+                    i => _sqlHelper.DelimitIdentifier(StagedName(staged, i, true))));
+
+            statements.Add($"CREATE INDEX ON {staging} ({columns})");
+        }
+
+        statements.Add($"ANALYZE {staging}");
+
+        return string.Join("; ", statements) + "; ";
     }
 
     private string JoinPredicate(

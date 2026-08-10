@@ -275,6 +275,7 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
         var operations = new SqlServerBulkWriteOperations(
             _sqlHelper,
             settings,
+            _options.StagingIndexThreshold,
             () => CreateBulkCopy(
                 connection, transaction, settings, SqlBulkCopyOptions.KeepIdentity));
 

@@ -325,6 +325,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         var operations = new NpgsqlBulkWriteOperations(
             _sqlHelper,
             settings,
+            _options.StagingIndexThreshold,
             (c, t, staged, r, ordinal, ct) => CopyIntoAsync(settings, c, t, staged, r, ordinal, ct));
 
         var affected = rows.EntityState == EntityState.Deleted

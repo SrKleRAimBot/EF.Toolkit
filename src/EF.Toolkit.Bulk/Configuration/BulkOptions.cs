@@ -12,6 +12,9 @@ public sealed record BulkOptions
     /// <summary>The default value of <see cref="MaxBatchSize" />.</summary>
     public const int DefaultMaxBatchSize = 50_000;
 
+    /// <summary>The default value of <see cref="StagingIndexThreshold" />.</summary>
+    public const int DefaultStagingIndexThreshold = 5_000;
+
     /// <summary>Settings used when <c>UseBulkOperations()</c> is called with no configuration.</summary>
     public static BulkOptions Default { get; } = new();
 
@@ -41,6 +44,20 @@ public sealed record BulkOptions
     ///     actually have. Ignored on SQL Server, which has always used <c>MERGE</c>.
     /// </remarks>
     public bool? UseMerge { get; init; }
+
+    /// <summary>
+    ///     Row count from which a staging table gets an index on the columns the following
+    ///     statement joins it by. Zero disables it entirely. Defaults to
+    ///     <see cref="DefaultStagingIndexThreshold" />.
+    /// </summary>
+    /// <remarks>
+    ///     A freshly loaded staging table is an unindexed heap with no statistics, so the planner
+    ///     joins it to the target on a guess. For a large enough set that guess is what turns a
+    ///     staged update into a nested loop over the whole target. Building the index costs time on
+    ///     the load side, which is why it is not unconditional: below the threshold the scan is
+    ///     cheaper than the sort.
+    /// </remarks>
+    public int StagingIndexThreshold { get; init; } = DefaultStagingIndexThreshold;
 
     /// <summary>What to do with writes that cannot be accelerated. See <see cref="Unsupported" />.</summary>
     public Unsupported OnUnsupported { get; init; } = Unsupported.FallBack;

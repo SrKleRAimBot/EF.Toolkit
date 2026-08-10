@@ -56,6 +56,18 @@ public class BulkOptionsBuilder
         return this;
     }
 
+    /// <summary>
+    ///     Sets the row count from which a staging table is indexed on its join columns.
+    /// </summary>
+    /// <param name="rows">The threshold, or zero to never index.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOptionsBuilder StagingIndexThreshold(int rows)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rows);
+        Options = Options with { StagingIndexThreshold = rows };
+        return this;
+    }
+
     /// <summary>Sets how an upsert works out its insert-versus-update split.</summary>
     /// <param name="counts">Exact, or the cheaper approximation.</param>
     /// <returns>The same builder, for chaining.</returns>

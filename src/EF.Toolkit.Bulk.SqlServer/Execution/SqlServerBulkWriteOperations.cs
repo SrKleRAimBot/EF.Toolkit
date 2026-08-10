@@ -21,14 +21,17 @@ internal sealed class SqlServerBulkWriteOperations
     private readonly Func<SqlBulkCopy> _createBulkCopy;
 
     private readonly BulkExecutionSettings _settings;
+    private readonly int _indexThreshold;
 
     public SqlServerBulkWriteOperations(
         ISqlGenerationHelper sqlHelper,
         BulkExecutionSettings settings,
+        int indexThreshold,
         Func<SqlBulkCopy> createBulkCopy)
     {
         _sqlHelper = sqlHelper;
         _settings = settings;
+        _indexThreshold = indexThreshold;
         _createBulkCopy = createBulkCopy;
     }
 
@@ -45,7 +48,7 @@ internal sealed class SqlServerBulkWriteOperations
         var staged = StagingColumn.ForUpdate(rows, conditionIndices, writeIndices);
 
         return WithStagingAsync(
-            rows, connection, transaction, staged, readIndices,
+            rows, connection, transaction, staged, readIndices, conditionIndices,
             staging =>
             {
                 var assignments = string.Join(
@@ -78,7 +81,7 @@ internal sealed class SqlServerBulkWriteOperations
         var staged = StagingColumn.ForDelete(rows, conditionIndices);
 
         return WithStagingAsync(
-            rows, connection, transaction, staged, [],
+            rows, connection, transaction, staged, [], conditionIndices,
             staging =>
                 $"DELETE t OUTPUT {Output(rows, [], "deleted")} "
                 + $"FROM {target} AS t INNER JOIN {staging} AS s "
@@ -92,6 +95,7 @@ internal sealed class SqlServerBulkWriteOperations
         SqlTransaction? transaction,
         List<StagingColumn> staged,
         IReadOnlyList<int> readIndices,
+        IReadOnlyList<int> conditionIndices,
         Func<string, string> buildSql,
         CancellationToken cancellationToken)
     {
@@ -139,7 +143,13 @@ internal sealed class SqlServerBulkWriteOperations
             await using (var command = connection.CreateCommand())
             {
                 _settings.Apply(command);
-                command.CommandText = buildSql(staging);
+                // The index is built after the load, not before: SqlBulkCopy into an indexed
+                // table pays per-row maintenance, whereas building it over a freshly loaded heap
+                // is a single sort. It rides along with the statement that needs it so preparing
+                // the staging table costs no extra round trip.
+                command.CommandText = Prelude(rows, staging, staged, conditionIndices)
+                    + buildSql(staging);
+
                 command.Transaction = transaction;
 
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken)
@@ -179,6 +189,35 @@ internal sealed class SqlServerBulkWriteOperations
                         CancellationToken.None))
                 .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Builds the statements that precede the set-based statement.</summary>
+    /// <remarks>
+    ///     The index is clustered, which is the opposite of the usual advice and right here: the
+    ///     join reads every staged row and needs every column, so a nonclustered index would force
+    ///     a lookup back into the heap per row. A clustered index reorganises the heap in place and
+    ///     carries the payload, and its statistics come with it.
+    /// </remarks>
+    private string Prelude(
+        IBulkRowSet rows,
+        string staging,
+        IReadOnlyList<StagingColumn> staged,
+        IReadOnlyList<int> conditionIndices)
+    {
+        if (!StagingPrelude.ShouldIndex(rows.RowCount, conditionIndices.Count, _indexThreshold))
+        {
+            return "";
+        }
+
+        var columns = string.Join(
+            ", ",
+            conditionIndices.Select(
+                i => _sqlHelper.DelimitIdentifier(StagedName(staged, i, true))));
+
+        var name = _sqlHelper.DelimitIdentifier("IX_efbulk_staging");
+
+        // SET NOCOUNT ON so the DDL contributes no result set for the reader to step over.
+        return $"SET NOCOUNT ON; CREATE CLUSTERED INDEX {name} ON {staging} ({columns}); ";
     }
 
     private string JoinPredicate(
