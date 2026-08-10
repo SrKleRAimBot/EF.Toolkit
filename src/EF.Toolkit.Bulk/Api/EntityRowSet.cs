@@ -15,7 +15,7 @@ namespace EFToolkit.Bulk.Api;
 ///     roughly 70% of a transparent save's cost. Ordering is instead the caller's responsibility,
 ///     handled once per entity type rather than once per row.
 /// </remarks>
-internal sealed class EntityRowSet : IBulkRowSet
+internal sealed class EntityRowSet : IBulkEntityRowSet
 {
     private readonly IReadOnlyList<object> _entities;
     private readonly BulkEntityPlan _plan;
@@ -35,6 +35,12 @@ internal sealed class EntityRowSet : IBulkRowSet
         MergeCounts = mergeCounts;
         Timeout = timeout;
     }
+
+    /// <inheritdoc />
+    public Type EntityClrType => _plan.EntityClrType;
+
+    /// <inheritdoc />
+    public IReadOnlyList<object> Entities => _entities;
 
     public string? Schema => _plan.Schema;
     public string TableName => _plan.TableName;

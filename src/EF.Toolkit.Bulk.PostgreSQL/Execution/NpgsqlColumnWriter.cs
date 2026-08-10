@@ -52,8 +52,31 @@ internal sealed class NpgsqlColumnWriter
         // timestamp for any other Kind, so a column declared without a time zone must not take
         // this path.
         [typeof(DateTime)] = ["timestamp with time zone"],
-        [typeof(DateTimeOffset)] = ["timestamp with time zone"]
+        [typeof(DateTimeOffset)] = ["timestamp with time zone"],
+
+        // Unambiguous in both directions: DateOnly and TimeOnly each map to exactly one
+        // PostgreSQL type, with no Kind or offset to change the inference.
+        [typeof(DateOnly)] = ["date"],
+        [typeof(TimeOnly)] = ["time without time zone"]
     };
+
+    /// <summary>
+    ///     Whether Npgsql's inference from the CLR type is known to agree with the column's
+    ///     declared store type.
+    /// </summary>
+    /// <remarks>
+    ///     Shared with the fused writer, which needs the same guarantee for the same reason: a
+    ///     typed write commits to a wire format, and being wrong about it corrupts data rather
+    ///     than failing.
+    /// </remarks>
+    public static bool IsSafeToInferType(BulkColumnInfo column)
+    {
+        ArgumentNullException.ThrowIfNull(column);
+
+        return column.TypeMapping?.StoreTypeNameBase is { } storeType
+            && SafeStoreTypes.TryGetValue(column.ProviderClrType, out var safe)
+            && safe.Contains(storeType, StringComparer.OrdinalIgnoreCase);
+    }
 
     private readonly Func<NpgsqlBinaryImporter, object, CancellationToken, Task>? _typed;
     private readonly string? _storeType;
@@ -69,15 +92,14 @@ internal sealed class NpgsqlColumnWriter
     /// <summary>Builds the writer for <paramref name="column" />.</summary>
     public static NpgsqlColumnWriter For(BulkColumnInfo column)
     {
-        var storeType = column.TypeMapping?.StoreTypeNameBase;
-        var clrType = column.ProviderClrType;
+        ArgumentNullException.ThrowIfNull(column);
 
-        if (storeType is not null
-            && SafeStoreTypes.TryGetValue(clrType, out var safe)
-            && safe.Contains(storeType, StringComparer.OrdinalIgnoreCase))
+        var storeType = column.TypeMapping?.StoreTypeNameBase;
+
+        if (IsSafeToInferType(column))
         {
             var typed = TypedWriter
-                .MakeGenericMethod(clrType)
+                .MakeGenericMethod(column.ProviderClrType)
                 .CreateDelegate<Func<NpgsqlBinaryImporter, object, CancellationToken, Task>>();
 
             return new NpgsqlColumnWriter(typed, storeType);

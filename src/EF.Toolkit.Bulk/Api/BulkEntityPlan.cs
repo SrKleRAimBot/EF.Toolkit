@@ -22,18 +22,23 @@ internal sealed class BulkEntityPlan
     private static readonly ConcurrentDictionary<(IEntityType, EntityState), BulkEntityPlan> Cache = new();
 
     private BulkEntityPlan(
+        Type entityClrType,
         string tableName,
         string? schema,
         IReadOnlyList<BulkColumnInfo> columns,
         Func<object, object?>[] getters,
         Action<object, object?>?[] setters)
     {
+        EntityClrType = entityClrType;
         TableName = tableName;
         Schema = schema;
         Columns = columns;
         Getters = getters;
         Setters = setters;
     }
+
+    /// <summary>CLR type of the entities this plan reads.</summary>
+    public Type EntityClrType { get; }
 
     public string TableName { get; }
     public string? Schema { get; }
@@ -172,6 +177,7 @@ internal sealed class BulkEntityPlan
         }
 
         return new BulkEntityPlan(
+            entityType.ClrType,
             table.Name, table.Schema, columns, [.. getters], [.. setters]);
     }
 
