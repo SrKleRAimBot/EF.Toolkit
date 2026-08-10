@@ -21,6 +21,13 @@ internal sealed class BulkEntityPlan
 {
     private static readonly ConcurrentDictionary<(IEntityType, EntityState), BulkEntityPlan> Cache = new();
 
+    // Compiling an expression tree is expensive and a property's accessor never varies, so they are
+    // cached independently of the plans that use them. ForMerge cannot be cached -- its match
+    // columns vary per call -- and was compiling one or two trees per column on every single merge:
+    // roughly sixty compilations for a thirty-column entity, every time.
+    private static readonly ConcurrentDictionary<IProperty, Func<object, object?>> GetterCache = new();
+    private static readonly ConcurrentDictionary<IProperty, Action<object, object?>?> SetterCache = new();
+
     private BulkEntityPlan(
         Type entityClrType,
         string tableName,
@@ -123,8 +130,8 @@ internal sealed class BulkEntityPlan
                     column.Name, column.StoreTypeMapping, property,
                     isWrite, isRead, isKey, isCondition));
 
-                getters.Add(BuildGetter(entityType, property));
-                setters.Add(isRead ? BuildSetter(entityType, property) : null);
+                getters.Add(GetterCache.GetOrAdd(property, p => BuildGetter(entityType, p)));
+                setters.Add(isRead ? SetterCache.GetOrAdd(property, p => BuildSetter(entityType, p)) : null);
                 continue;
             }
 
@@ -135,6 +142,21 @@ internal sealed class BulkEntityPlan
                     isRead = isStoreGenerated;
                     isWrite = !isStoreGenerated;
                     break;
+
+                case EntityState.Modified when property.IsConcurrencyToken:
+                    // Stock EF locates the row with the token's *loaded* value while assigning the
+                    // new one, which needs a before-image. A detached entity has none: whatever the
+                    // token holds now is all there is, and for the usual pattern -- load, increment,
+                    // save -- that is already the new value, so a join on it would match nothing.
+                    //
+                    // Continuing without the token in the WHERE clause is the one option that must
+                    // not be taken. It silently turns an optimistic-concurrency check into
+                    // last-writer-wins, which is a data-loss bug that looks like a working call.
+                    throw new BulkNotSupportedException(
+                        $"'{entityType.DisplayName()}.{property.Name}' is a concurrency token, and "
+                        + "the explicit bulk API works from detached objects that carry no "
+                        + "before-image to check it against. Use SaveChanges() for this entity "
+                        + "type, which tracks the loaded value and can.");
 
                 case EntityState.Modified:
                     // The key locates the row; everything else the application owns is set. A
@@ -172,8 +194,8 @@ internal sealed class BulkEntityPlan
                 isKey,
                 isCondition));
 
-            getters.Add(BuildGetter(entityType, property));
-            setters.Add(isRead ? BuildSetter(entityType, property) : null);
+            getters.Add(GetterCache.GetOrAdd(property, p => BuildGetter(entityType, p)));
+            setters.Add(isRead ? SetterCache.GetOrAdd(property, p => BuildSetter(entityType, p)) : null);
         }
 
         return new BulkEntityPlan(

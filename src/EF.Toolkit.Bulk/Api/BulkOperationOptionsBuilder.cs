@@ -84,6 +84,22 @@ public class BulkOperationOptionsBuilder<TEntity>
     }
 
     /// <summary>
+    ///     Permits a synchronise to delete every row of the table its source does not contain.
+    /// </summary>
+    /// <remarks>
+    ///     <c>BulkSynchronizeAsync</c> refuses to run without this. Its delete arm covers the whole
+    ///     table — that is what separates it from a merge — so calling it with a partial list
+    ///     removes everything the list omitted. That is easy to do by accident, impossible to undo,
+    ///     and costs one method call to rule out.
+    /// </remarks>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOperationOptionsBuilder<TEntity> AllowFullTableDelete()
+    {
+        Options = Options with { AllowFullTableDelete = true };
+        return this;
+    }
+
+    /// <summary>
     ///     Runs the operation without a savepoint when it is inside a transaction the caller
     ///     opened.
     /// </summary>

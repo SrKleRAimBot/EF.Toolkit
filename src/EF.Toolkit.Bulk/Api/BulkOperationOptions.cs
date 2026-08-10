@@ -37,6 +37,18 @@ public sealed record BulkOperationOptions
     public bool Savepoint { get; init; } = true;
 
     /// <summary>
+    ///     Whether a synchronise may delete every row of the table that its source does not
+    ///     contain.
+    /// </summary>
+    /// <remarks>
+    ///     A synchronise's delete arm covers the whole table, which is what makes it a synchronise
+    ///     rather than a merge — and makes it trivial to empty a table by passing a partial list.
+    ///     Requiring the caller to say so turns the most destructive operation in the library into
+    ///     one they had to type.
+    /// </remarks>
+    public bool AllowFullTableDelete { get; init; }
+
+    /// <summary>
     ///     Maximum rows sent to the server in one operation. Larger inputs are split.
     ///     When <see langword="null" />, the context-wide setting applies.
     /// </summary>

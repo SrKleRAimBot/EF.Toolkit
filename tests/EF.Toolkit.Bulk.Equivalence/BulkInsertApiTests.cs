@@ -377,7 +377,9 @@ public abstract class BulkInsertApiTests(DatabaseFixture fixture)
         desired.AddRange(Customers(25, startAt: 900));
 
         var result = await context.BulkSynchronizeAsync(
-            desired, o => o.MatchOn(c => c.Email), TestContext.Current.CancellationToken);
+            desired,
+            o => o.MatchOn(c => c.Email).AllowFullTableDelete(),
+            TestContext.Current.CancellationToken);
 
         result.Inserted.ShouldBe(25);
         result.Updated.ShouldBe(60);
@@ -389,6 +391,30 @@ public abstract class BulkInsertApiTests(DatabaseFixture fixture)
 
         stored.Count.ShouldBe(85);
         stored.Count(c => c.Name.EndsWith(" (synced)", StringComparison.Ordinal)).ShouldBe(60);
+    }
+
+    /// <summary>
+    ///     A synchronise removes every row its source omits, across the whole table. Doing that by
+    ///     accident with a partial list is easy and irreversible, so it has to be asked for.
+    /// </summary>
+    [Fact]
+    public async Task Synchronize_refuses_to_delete_the_table_without_being_asked()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        await context.BulkInsertAsync(
+            Customers(20), cancellationToken: TestContext.Current.CancellationToken);
+
+        await Should.ThrowAsync<BulkNotSupportedException>(
+            () => context.BulkSynchronizeAsync(
+                Customers(5),
+                o => o.MatchOn(c => c.Email),
+                TestContext.Current.CancellationToken));
+
+        // Nothing ran, so nothing was removed.
+        (await context.Customers.AsNoTracking().CountAsync(TestContext.Current.CancellationToken))
+            .ShouldBe(20);
     }
 
     [Fact]
@@ -405,7 +431,8 @@ public abstract class BulkInsertApiTests(DatabaseFixture fixture)
         await Should.ThrowAsync<BulkNotSupportedException>(
             () => context.BulkSynchronizeAsync(
                 Array.Empty<Customer>(),
-                cancellationToken: TestContext.Current.CancellationToken));
+                o => o.AllowFullTableDelete(),
+                TestContext.Current.CancellationToken));
 
         (await context.Customers.AsNoTracking().CountAsync(TestContext.Current.CancellationToken))
             .ShouldBe(20);

@@ -27,7 +27,7 @@ public abstract class CorrectnessTests(DatabaseFixture fixture)
 
         var result = await context.BulkSynchronizeAsync(
             desired,
-            o => o.MatchOn(c => c.Email).BatchSize(50),
+            o => o.MatchOn(c => c.Email).BatchSize(50).AllowFullTableDelete(),
             TestContext.Current.CancellationToken);
 
         result.Inserted.ShouldBe(250);
@@ -59,7 +59,7 @@ public abstract class CorrectnessTests(DatabaseFixture fixture)
 
         var result = await context.BulkSynchronizeAsync(
             desired,
-            o => o.MatchOn(c => c.Email).BatchSize(64),
+            o => o.MatchOn(c => c.Email).BatchSize(64).AllowFullTableDelete(),
             TestContext.Current.CancellationToken);
 
         result.Inserted.ShouldBe(40);
@@ -395,6 +395,54 @@ public abstract class CorrectnessTests(DatabaseFixture fixture)
         {
             stored[i].ShouldBe(i % 2 == 0 ? "unlabelled" : "labelled");
         }
+    }
+
+    /// <summary>
+    ///     An explicit bulk update of an entity carrying a concurrency token is refused rather than
+    ///     performed without the check.
+    /// </summary>
+    /// <remarks>
+    ///     Stock EF locates the row by the token's loaded value while assigning the new one, which
+    ///     needs a before-image. Detached objects have none — for the usual load-increment-save
+    ///     pattern the token already holds the new value — so the check cannot be made. It was
+    ///     previously omitted silently, which turned optimistic concurrency into last-writer-wins:
+    ///     a call that looked like it worked and quietly discarded somebody else's write.
+    /// </remarks>
+    [Fact]
+    public async Task Bulk_update_refuses_an_entity_with_a_concurrency_token()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        context.Inventories.AddRange(
+            Enumerable.Range(0, 200).Select(i => new Inventory
+            {
+                Sku = $"SKU-{i:D5}", Quantity = i, Version = 1
+            }));
+
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var loaded = await context.Inventories.AsNoTracking()
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        foreach (var item in loaded)
+        {
+            item.Quantity += 1;
+            item.Version += 1;
+        }
+
+        var refusal = await Should.ThrowAsync<BulkNotSupportedException>(
+            () => context.BulkUpdateAsync(
+                loaded, cancellationToken: TestContext.Current.CancellationToken));
+
+        refusal.Message.ShouldContain("concurrency token");
+        refusal.Message.ShouldContain("SaveChanges");
+
+        // And nothing was written, so the refusal is not a partial application.
+        var unchanged = await context.Inventories.AsNoTracking()
+            .CountAsync(i => i.Version == 1, TestContext.Current.CancellationToken);
+
+        unchanged.ShouldBe(200);
     }
 
     private async Task ResetAsync()

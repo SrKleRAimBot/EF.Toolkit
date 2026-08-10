@@ -155,7 +155,8 @@ static async Task Synchronize(DbContextOptions<ShopContext> options)
 
     // Overlaps the existing rows by half, so this inserts, updates and deletes 5,000 each.
     var desired = Customers(5_000, 10_000);
-    var result = await context.BulkSynchronizeAsync(desired, o => o.MatchOn(c => c.Email));
+    var result = await context.BulkSynchronizeAsync(
+        desired, o => o.MatchOn(c => c.Email).AllowFullTableDelete());
 
     Console.WriteLine(
         $"  {result.Inserted:N0} inserted, {result.Updated:N0} updated, {result.Deleted:N0} deleted");
