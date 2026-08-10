@@ -4,9 +4,8 @@ namespace EFToolkit.Bulk.Configuration;
 ///     Fluent builder for context-wide EF.Toolkit.Bulk settings.
 /// </summary>
 /// <remarks>
-///     Provider packages extend this type with their own knobs — for example
-///     <c>UseTableLock()</c> in EF.Toolkit.Bulk.SqlServer — so provider-specific options only appear
-///     once that package is installed.
+///     Provider packages may extend this type with knobs of their own, so any provider-specific
+///     option appears only once that package is installed.
 /// </remarks>
 public class BulkOptionsBuilder
 {
