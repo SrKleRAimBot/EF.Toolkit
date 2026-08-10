@@ -75,11 +75,36 @@ public class BulkModificationCommandBatch : ModificationCommandBatch
     ///     Whether executing this batch needs a transaction.
     /// </summary>
     /// <remarks>
-    ///     A batch holding more than one command becomes more than one statement — several bulk
-    ///     operations, or a staging table plus a merge — none of which is individually atomic, so
-    ///     they must share a transaction to fail as a unit the way stock EF's single command would.
+    ///     <para>
+    ///         A batch holding more than one command becomes more than one statement — several bulk
+    ///         operations, or a staging table plus a merge — none of which is individually atomic,
+    ///         so they must share a transaction to fail as a unit the way stock EF's single command
+    ///         would.
+    ///     </para>
+    ///     <para>
+    ///         Counting commands is not enough on its own. A <em>single</em> accelerated command
+    ///         still becomes a create, a copy, a set-based statement and a drop, and a bulk copy
+    ///         split by batch size commits each batch separately when there is no transaction to
+    ///         hold them together. So any partition that will be accelerated needs one, whatever
+    ///         the command count. Below the threshold nothing accelerates, which is why the common
+    ///         single-row save still skips the transaction entirely.
+    ///     </para>
     /// </remarks>
-    public override bool RequiresTransaction => _commands.Count > 1;
+    public override bool RequiresTransaction
+        => _commands.Count > 1 || _partitions is null || AnyAccelerable(_partitions);
+
+    private static bool AnyAccelerable(IReadOnlyList<BulkPartition> partitions)
+    {
+        for (var i = 0; i < partitions.Count; i++)
+        {
+            if (partitions[i].CanAccelerate)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <inheritdoc />
     public override bool TryAddCommand(IReadOnlyModificationCommand modificationCommand)

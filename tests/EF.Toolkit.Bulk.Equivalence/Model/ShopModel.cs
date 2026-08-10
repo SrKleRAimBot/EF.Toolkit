@@ -111,6 +111,21 @@ public class Shipment
 /// <summary>Wraps a generated <see cref="int" /> key, converted to and from the store.</summary>
 public readonly record struct ShipmentId(int Value);
 
+/// <summary>
+///     Carries a non-key column the database fills in, so an insert has a value to read back that
+///     is not a key. PostgreSQL declines that shape — COPY returns nothing, and a staged insert
+///     cannot correlate a non-key generated value back to its row before version 17 — so this is
+///     the model that reliably exercises the fall-back-to-stock-EF path.
+/// </summary>
+public class AuditEntry
+{
+    public int Id { get; set; }
+    public string Action { get; set; } = "";
+
+    /// <summary>Left at the CLR default so the database's default applies and must be read back.</summary>
+    public int Severity { get; set; }
+}
+
 public enum OrderStatus
 {
     Draft,

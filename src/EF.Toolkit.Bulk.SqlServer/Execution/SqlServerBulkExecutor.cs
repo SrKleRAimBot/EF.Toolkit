@@ -94,7 +94,25 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
         // Enlisting in EF's ambient transaction is not optional: without it SqlBulkCopy opens its
         // own implicit transaction, so copied rows would commit even when the surrounding save
         // rolls back.
-        var transaction = connection.CurrentTransaction?.GetDbTransaction() as SqlTransaction;
+        SqlTransaction? transaction = null;
+
+        if (connection.CurrentTransaction is { } current)
+        {
+            transaction = current.GetDbTransaction() as SqlTransaction;
+
+            if (transaction is null)
+            {
+                // A transaction is open but is not one SqlBulkCopy can be handed — a profiler or
+                // tracing decorator has wrapped it. Declining sends the rows through stock EF
+                // Core, which stays inside that transaction. Guessing would either escape it or
+                // fail deep inside the driver, and a bulk write that commits when the caller rolls
+                // back is the worst outcome available here.
+                return BulkExecutionResult.Declined(
+                    $"the ambient transaction is a "
+                    + $"'{current.GetDbTransaction().GetType().Name}' rather than a SqlTransaction, "
+                    + "so a bulk copy cannot enlist in it.");
+            }
+        }
 
         var settings = BulkExecutionSettings.Resolve(rows, _options, connection);
 

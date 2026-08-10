@@ -64,8 +64,17 @@ public abstract class PostgreSqlFixture : DatabaseFixture
 
     protected override void ConfigureProvider(
         DbContextOptionsBuilder<ShopContext> builder,
-        string connectionString)
-        => builder.UseNpgsql(connectionString);
+        string connectionString,
+        bool retryOnFailure)
+        => builder.UseNpgsql(
+            connectionString,
+            o =>
+            {
+                if (retryOnFailure)
+                {
+                    o.EnableRetryOnFailure();
+                }
+            });
 
     protected override void ConfigureBulk(
         DbContextOptionsBuilder<ShopContext> builder,

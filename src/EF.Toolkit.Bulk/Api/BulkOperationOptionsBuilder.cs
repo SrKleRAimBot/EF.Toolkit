@@ -83,6 +83,21 @@ public class BulkOperationOptionsBuilder<TEntity>
         return this;
     }
 
+    /// <summary>
+    ///     Runs the operation without a savepoint when it is inside a transaction the caller
+    ///     opened.
+    /// </summary>
+    /// <remarks>
+    ///     Saves a round trip. In exchange, a failure aborts the caller's whole transaction on
+    ///     engines that work that way, rather than only this operation.
+    /// </remarks>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOperationOptionsBuilder<TEntity> WithoutSavepoint()
+    {
+        Options = Options with { Savepoint = false };
+        return this;
+    }
+
     /// <summary>Sets the maximum number of rows sent to the server in one operation.</summary>
     /// <param name="rows">Row count; must be at least 1.</param>
     /// <returns>The same builder, for chaining.</returns>

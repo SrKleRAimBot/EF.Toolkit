@@ -86,6 +86,21 @@ public sealed class SqlServerCorrectnessTests(SqlServerFixture fixture)
 
 [Trait("Engine", "postgres16")]
 [Collection("postgres16")]
+public sealed class PostgreSql16TransactionTests(PostgreSql16Fixture fixture)
+    : TransactionTests(fixture);
+
+[Trait("Engine", "postgres17")]
+[Collection("postgres17")]
+public sealed class PostgreSql17TransactionTests(PostgreSql17Fixture fixture)
+    : TransactionTests(fixture);
+
+[Trait("Engine", "sqlserver")]
+[Collection("sqlserver")]
+public sealed class SqlServerTransactionTests(SqlServerFixture fixture)
+    : TransactionTests(fixture);
+
+[Trait("Engine", "postgres16")]
+[Collection("postgres16")]
 public sealed class PostgreSql16ThroughputTests(PostgreSql16Fixture fixture, ITestOutputHelper output)
     : ThroughputSmokeTests(fixture, output);
 

@@ -11,6 +11,7 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
     public DbSet<OrderNote> OrderNotes => Set<OrderNote>();
     public DbSet<Inventory> Inventories => Set<Inventory>();
     public DbSet<Shipment> Shipments => Set<Shipment>();
+    public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -83,6 +84,15 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
                 .ValueGeneratedOnAdd();
 
             b.Property(x => x.Code).HasMaxLength(64).IsRequired();
+        });
+
+        modelBuilder.Entity<AuditEntry>(b =>
+        {
+            b.Property(x => x.Action).HasMaxLength(64).IsRequired();
+
+            // A database default on a non-key column. EF omits the column from the insert whenever
+            // the property holds the CLR default and reads the generated value back instead.
+            b.Property(x => x.Severity).HasDefaultValue(3);
         });
 
         modelBuilder.Entity<Category>(b =>

@@ -25,6 +25,18 @@ public sealed record BulkOperationOptions
     public bool Track { get; init; }
 
     /// <summary>
+    ///     Whether to wrap the operation in a savepoint when it runs inside a transaction the
+    ///     caller opened. Defaults to <see langword="true" />.
+    /// </summary>
+    /// <remarks>
+    ///     Matches what <c>SaveChanges</c> does, and matters most on PostgreSQL, where a failed
+    ///     statement aborts the whole transaction: without a savepoint a caller who catches a bulk
+    ///     failure is left holding a transaction that can no longer do anything. Turning it off
+    ///     saves a round trip and gives up that recovery.
+    /// </remarks>
+    public bool Savepoint { get; init; } = true;
+
+    /// <summary>
     ///     Maximum rows sent to the server in one operation. Larger inputs are split.
     ///     When <see langword="null" />, the context-wide setting applies.
     /// </summary>
