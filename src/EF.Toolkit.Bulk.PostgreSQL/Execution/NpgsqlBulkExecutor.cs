@@ -259,7 +259,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         var (inserted, updated, deleted) = await new NpgsqlBulkMerge(
                 _sqlHelper,
                 settings,
-                (c, t, staged, r, ct) => CopyIntoAsync(settings, c, t, staged, r, ct))
+                (c, t, staged, r, ordinal, ct) => CopyIntoAsync(settings, c, t, staged, r, ordinal, ct))
             .ExecuteAsync(
                 rows, connection, writeIndices, matchIndices, readIndices,
                 rows.Operation == BulkOperationKind.Synchronize, cancellationToken)
@@ -324,15 +324,15 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         var operations = new NpgsqlBulkWriteOperations(
             _sqlHelper,
             settings,
-            (c, t, staged, r, ct) => CopyIntoAsync(settings, c, t, staged, r, ct));
+            (c, t, staged, r, ordinal, ct) => CopyIntoAsync(settings, c, t, staged, r, ordinal, ct));
 
         var affected = rows.EntityState == EntityState.Deleted
             ? await operations
-                .DeleteAsync(rows, connection, conditionIndices, keyIndices, cancellationToken)
+                .DeleteAsync(rows, connection, conditionIndices, cancellationToken)
                 .ConfigureAwait(false)
             : await operations
                 .UpdateAsync(
-                    rows, connection, writeIndices, conditionIndices, keyIndices, readIndices,
+                    rows, connection, writeIndices, conditionIndices, readIndices,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -346,11 +346,17 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         string table,
         IReadOnlyList<StagingColumn> staged,
         IBulkRowSet rows,
+        bool includeOrdinal,
         CancellationToken cancellationToken)
     {
-        var columnList = string.Join(
-            ", ",
-            staged.Select(c => _sqlHelper.DelimitIdentifier(c.Name)));
+        var names = staged.Select(c => _sqlHelper.DelimitIdentifier(c.Name)).ToList();
+
+        if (includeOrdinal)
+        {
+            names.Add(_sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName));
+        }
+
+        var columnList = string.Join(", ", names);
 
         var importer = await connection
             .BeginBinaryImportAsync(
@@ -376,6 +382,13 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
                     await writers[i]
                         .WriteAsync(importer, cursor[i], cancellationToken)
                         .ConfigureAwait(false);
+                }
+
+                if (includeOrdinal)
+                {
+                    // Written typed rather than through a column writer: there is no model column
+                    // behind it, and int infers PostgreSQL's integer unambiguously.
+                    await importer.WriteAsync(cursor.Row, cancellationToken).ConfigureAwait(false);
                 }
             }
 

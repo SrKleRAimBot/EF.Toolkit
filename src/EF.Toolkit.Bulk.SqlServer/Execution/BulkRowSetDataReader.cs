@@ -51,7 +51,7 @@ internal sealed class BulkRowSetDataReader : IDataReader
 
     public string GetName(int i)
         => i == _ordinalColumn
-            ? SqlServerStagingInsert.OrdinalColumnName
+            ? StagingColumn.OrdinalColumnName
             : _columns[i].Name;
 
     public Type GetFieldType(int i)

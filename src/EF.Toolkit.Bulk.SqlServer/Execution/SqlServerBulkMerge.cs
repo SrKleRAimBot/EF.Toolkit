@@ -42,7 +42,7 @@ internal sealed class SqlServerBulkMerge
     {
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
         var staging = _sqlHelper.DelimitIdentifier($"#efbulk_{Guid.NewGuid():N}");
-        var ordinal = _sqlHelper.DelimitIdentifier(SqlServerStagingInsert.OrdinalColumnName);
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
 
         var columnList = string.Join(
             ", ",
@@ -65,7 +65,7 @@ internal sealed class SqlServerBulkMerge
                 }
 
                 bulkCopy.ColumnMappings.Add(
-                    writeIndices.Count, SqlServerStagingInsert.OrdinalColumnName);
+                    writeIndices.Count, StagingColumn.OrdinalColumnName);
 
                 await bulkCopy
                     .WriteToServerAsync(
@@ -138,7 +138,7 @@ internal sealed class SqlServerBulkMerge
         var output = new List<string> { "$action" };
         output.AddRange(
             readIndices.Select(i => $"inserted.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
-        output.Add($"s.{_sqlHelper.DelimitIdentifier(SqlServerStagingInsert.OrdinalColumnName)}");
+        output.Add($"s.{_sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName)}");
 
         // HOLDLOCK is not optional on a real merge. Without a serializable range lock over the
         // matched keys, MERGE's match test and its insert are separated by a window another

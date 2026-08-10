@@ -161,6 +161,48 @@ public abstract class CorrectnessTests(DatabaseFixture fixture)
         renamed.ShouldBe(400);
     }
 
+    /// <summary>
+    ///     Two source rows carrying the same key. Correlation used to be keyed on those values, so
+    ///     the pair collapsed into one entry and the operation reported one row updated out of two
+    ///     without saying anything was wrong.
+    /// </summary>
+    [Fact]
+    public async Task Duplicate_keys_in_an_update_list_are_reported_rather_than_silently_dropped()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        await context.BulkInsertAsync(
+            Customers(200), cancellationToken: TestContext.Current.CancellationToken);
+
+        var loaded = await context.Customers.AsNoTracking()
+            .OrderBy(c => c.Id)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        // The same row twice, with different values, plus the rest once.
+        var first = loaded[0];
+        var duplicate = new Customer
+        {
+            Id = first.Id,
+            Name = "Second write",
+            Email = first.Email,
+            CreatedAt = first.CreatedAt
+        };
+
+        first.Name = "First write";
+
+        var withDuplicate = new List<Customer>(loaded) { duplicate };
+
+        var conflict = await Should.ThrowAsync<DbUpdateConcurrencyException>(
+            () => context.BulkUpdateAsync(
+                withDuplicate, cancellationToken: TestContext.Current.CancellationToken));
+
+        // The set-based join applies one of the two, so the other genuinely did not take effect.
+        // Saying so is the point: the previous behaviour returned a count one short and left the
+        // caller to notice.
+        conflict.Message.ShouldContain("expected to affect");
+    }
+
     private async Task ResetAsync()
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");

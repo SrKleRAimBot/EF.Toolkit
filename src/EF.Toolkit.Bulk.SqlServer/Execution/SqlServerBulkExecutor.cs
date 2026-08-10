@@ -280,13 +280,12 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
 
         var affected = rows.EntityState == EntityState.Deleted
             ? await operations
-                .DeleteAsync(
-                    rows, connection, transaction, conditionIndices, keyIndices, cancellationToken)
+                .DeleteAsync(rows, connection, transaction, conditionIndices, cancellationToken)
                 .ConfigureAwait(false)
             : await operations
                 .UpdateAsync(
-                    rows, connection, transaction, writeIndices, conditionIndices, keyIndices,
-                    readIndices, cancellationToken)
+                    rows, connection, transaction, writeIndices, conditionIndices, readIndices,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
         return BulkExecutionResult.Executed(affected);

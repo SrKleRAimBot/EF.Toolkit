@@ -23,14 +23,14 @@ namespace EFToolkit.Bulk.PostgreSQL.Execution;
 internal sealed class NpgsqlBulkWriteOperations
 {
     private readonly ISqlGenerationHelper _sqlHelper;
-    private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> _copyInto;
+    private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, bool, CancellationToken, Task> _copyInto;
 
     private readonly BulkExecutionSettings _settings;
 
     public NpgsqlBulkWriteOperations(
         ISqlGenerationHelper sqlHelper,
         BulkExecutionSettings settings,
-        Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> copyInto)
+        Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, bool, CancellationToken, Task> copyInto)
     {
         _sqlHelper = sqlHelper;
         _settings = settings;
@@ -42,7 +42,6 @@ internal sealed class NpgsqlBulkWriteOperations
         NpgsqlConnection connection,
         IReadOnlyList<int> writeIndices,
         IReadOnlyList<int> conditionIndices,
-        IReadOnlyList<int> keyIndices,
         IReadOnlyList<int> readIndices,
         CancellationToken cancellationToken)
     {
@@ -50,7 +49,7 @@ internal sealed class NpgsqlBulkWriteOperations
         var staged = StagingColumn.ForUpdate(rows, conditionIndices, writeIndices);
 
         return WithStagingAsync(
-            rows, connection, staged, keyIndices, readIndices,
+            rows, connection, staged, readIndices,
             staging =>
             {
                 var assignments = string.Join(
@@ -62,9 +61,11 @@ internal sealed class NpgsqlBulkWriteOperations
                         return $"{column} = s.{source}";
                     }));
 
+                // RETURNING may name columns of the tables in FROM, which is what lets the source
+                // ordinal come back and makes correlation exact.
                 return $"UPDATE {target} AS t SET {assignments} FROM {staging} AS s "
                     + $"WHERE {JoinPredicate(rows, conditionIndices, staged)} "
-                    + $"RETURNING {Returning(rows, keyIndices, readIndices)}";
+                    + $"RETURNING {Returning(rows, readIndices)}";
             },
             cancellationToken);
     }
@@ -73,18 +74,18 @@ internal sealed class NpgsqlBulkWriteOperations
         IBulkRowSet rows,
         NpgsqlConnection connection,
         IReadOnlyList<int> conditionIndices,
-        IReadOnlyList<int> keyIndices,
         CancellationToken cancellationToken)
     {
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
         var staged = StagingColumn.ForDelete(rows, conditionIndices);
 
         return WithStagingAsync(
-            rows, connection, staged, keyIndices, [],
+            rows, connection, staged, [],
             staging =>
+                // RETURNING may likewise name the relation in USING.
                 $"DELETE FROM {target} AS t USING {staging} AS s "
                 + $"WHERE {JoinPredicate(rows, conditionIndices, staged)} "
-                + $"RETURNING {Returning(rows, keyIndices, [])}",
+                + $"RETURNING {Returning(rows, [])}",
             cancellationToken);
     }
 
@@ -92,7 +93,6 @@ internal sealed class NpgsqlBulkWriteOperations
         IBulkRowSet rows,
         NpgsqlConnection connection,
         IReadOnlyList<StagingColumn> staged,
-        IReadOnlyList<int> keyIndices,
         IReadOnlyList<int> readIndices,
         Func<string, string> buildSql,
         CancellationToken cancellationToken)
@@ -108,26 +108,21 @@ internal sealed class NpgsqlBulkWriteOperations
                 $"{_sqlHelper.DelimitIdentifier(rows.Columns[c.Index].Name)} AS "
                 + $"{_sqlHelper.DelimitIdentifier(c.Name)}"));
 
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
+
         await ExecuteNonQueryAsync(
                 connection,
-                $"CREATE TEMP TABLE {staging} AS SELECT {projection} FROM {target} WITH NO DATA",
+                $"CREATE TEMP TABLE {staging} AS "
+                + $"SELECT {projection}, 0 AS {ordinal} FROM {target} WITH NO DATA",
                 cancellationToken)
             .ConfigureAwait(false);
 
         try
         {
-            await _copyInto(connection, staging, staged, rows, cancellationToken)
+            await _copyInto(connection, staging, staged, rows, true, cancellationToken)
                 .ConfigureAwait(false);
 
-            var matched = new HashSet<string>(StringComparer.Ordinal);
-            var byKey = new Dictionary<string, int>(StringComparer.Ordinal);
-
-            for (var row = 0; row < rows.RowCount; row++)
-            {
-                byKey[BulkRowMatching.KeyOf(rows, row, keyIndices)] = row;
-            }
-
-            var keyValues = new object?[keyIndices.Count];
+            var tally = new BulkRowTally(rows.RowCount);
 
             await using (var command = connection.CreateCommand())
             {
@@ -139,35 +134,27 @@ internal sealed class NpgsqlBulkWriteOperations
 
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    for (var i = 0; i < keyIndices.Count; i++)
-                    {
-                        keyValues[i] = await reader.IsDBNullAsync(i, cancellationToken).ConfigureAwait(false)
-                            ? null
-                            : reader.GetValue(i);
-                    }
-
-                    var key = BulkRowMatching.KeyOf(keyValues);
-                    matched.Add(key);
+                    // The ordinal leads the RETURNING list, so read columns sit at a fixed offset.
+                    var row = reader.GetInt32(0);
+                    tally.Mark(row);
 
                     // Anything the database regenerated -- a concurrency token, a computed column
                     // -- comes back here so the entity ends up matching the row.
-                    if (readIndices.Count > 0 && byKey.TryGetValue(key, out var row))
+                    for (var i = 0; i < readIndices.Count; i++)
                     {
-                        for (var i = 0; i < readIndices.Count; i++)
-                        {
-                            var ordinal = keyIndices.Count + i;
-                            var value = await reader.IsDBNullAsync(ordinal, cancellationToken).ConfigureAwait(false)
-                                ? null
-                                : reader.GetValue(ordinal);
+                        var position = 1 + i;
+                        var value = await reader.IsDBNullAsync(position, cancellationToken)
+                            .ConfigureAwait(false)
+                            ? null
+                            : reader.GetValue(position);
 
-                            rows.SetGeneratedValue(row, readIndices[i], value);
-                        }
+                        rows.SetGeneratedValue(row, readIndices[i], value);
                     }
                 }
             }
 
-            BulkRowMatching.ThrowIfAnyMissing(rows, keyIndices, matched);
-            return matched.Count;
+            tally.ThrowIfAnyMissing(rows);
+            return tally.Count;
         }
         finally
         {
@@ -192,14 +179,26 @@ internal sealed class NpgsqlBulkWriteOperations
                 return $"t.{column} = s.{source}";
             }));
 
-    private string Returning(
-        IBulkRowSet rows,
-        IReadOnlyList<int> keyIndices,
-        IReadOnlyList<int> readIndices)
-        => string.Join(
-            ", ",
-            keyIndices.Concat(readIndices)
-                .Select(i => $"t.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
+    /// <summary>
+    ///     Builds the RETURNING list: the source ordinal, then anything to read back.
+    /// </summary>
+    /// <remarks>
+    ///     Key columns used to lead this list purely so returned rows could be matched to source
+    ///     rows by their key values. The ordinal does that directly, so the keys — which the caller
+    ///     already has — no longer cross the wire at all.
+    /// </remarks>
+    private string Returning(IBulkRowSet rows, IReadOnlyList<int> readIndices)
+    {
+        var parts = new List<string>(readIndices.Count + 1)
+        {
+            $"s.{_sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName)}"
+        };
+
+        parts.AddRange(
+            readIndices.Select(i => $"t.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
+
+        return string.Join(", ", parts);
+    }
 
     private static string StagedName(
         IReadOnlyList<StagingColumn> staged,

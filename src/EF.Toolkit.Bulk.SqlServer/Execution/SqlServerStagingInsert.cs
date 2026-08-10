@@ -24,9 +24,6 @@ namespace EFToolkit.Bulk.SqlServer.Execution;
 /// </remarks>
 internal sealed class SqlServerStagingInsert
 {
-    /// <summary>Name of the synthetic column carrying each row's position.</summary>
-    public const string OrdinalColumnName = "__efbulk_ord";
-
     private readonly ISqlGenerationHelper _sqlHelper;
 
     private readonly BulkExecutionSettings _settings;
@@ -65,7 +62,7 @@ internal sealed class SqlServerStagingInsert
                     bulkCopy.ColumnMappings.Add(i, rows.Columns[writeIndices[i]].Name);
                 }
 
-                bulkCopy.ColumnMappings.Add(writeIndices.Count, OrdinalColumnName);
+                bulkCopy.ColumnMappings.Add(writeIndices.Count, StagingColumn.OrdinalColumnName);
 
                 await bulkCopy
                     .WriteToServerAsync(
@@ -107,7 +104,7 @@ internal sealed class SqlServerStagingInsert
             ", ",
             writeIndices.Select(i => _sqlHelper.DelimitIdentifier(rows.Columns[i].Name)));
 
-        var ordinal = _sqlHelper.DelimitIdentifier(OrdinalColumnName);
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
 
         return $"SELECT TOP 0 {columnList}, CAST(0 AS int) AS {ordinal} "
             + $"INTO {stagingRef} FROM {target};";
@@ -135,7 +132,7 @@ internal sealed class SqlServerStagingInsert
             ", ",
             readIndices.Select(i => $"inserted.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
 
-        var ordinal = _sqlHelper.DelimitIdentifier(OrdinalColumnName);
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
 
         // ON 1 = 0 never matches, so every staged row takes the NOT MATCHED branch and is inserted.
         //

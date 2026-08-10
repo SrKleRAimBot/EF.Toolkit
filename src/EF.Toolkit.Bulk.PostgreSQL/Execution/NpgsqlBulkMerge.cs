@@ -23,14 +23,14 @@ namespace EFToolkit.Bulk.PostgreSQL.Execution;
 internal sealed class NpgsqlBulkMerge
 {
     private readonly ISqlGenerationHelper _sqlHelper;
-    private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> _copyInto;
+    private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, bool, CancellationToken, Task> _copyInto;
 
     private readonly BulkExecutionSettings _settings;
 
     public NpgsqlBulkMerge(
         ISqlGenerationHelper sqlHelper,
         BulkExecutionSettings settings,
-        Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> copyInto)
+        Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, bool, CancellationToken, Task> copyInto)
     {
         _sqlHelper = sqlHelper;
         _settings = settings;
@@ -61,9 +61,11 @@ internal sealed class NpgsqlBulkMerge
 
         try
         {
+            // No ordinal: INSERT ... ON CONFLICT ... RETURNING can only name columns of the target
+            // row, never the source, so a merge here correlates by match value instead.
             await _copyInto(
                     connection, staging, StagingColumn.ForWrite(rows, writeIndices), rows,
-                    cancellationToken)
+                    false, cancellationToken)
                 .ConfigureAwait(false);
 
             var conflictTarget = string.Join(
