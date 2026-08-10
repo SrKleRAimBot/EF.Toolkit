@@ -41,7 +41,14 @@ internal static class BulkOperations
         var plan = matchProperties is null
             ? BulkEntityPlan.For(entityType, state)
             : BulkEntityPlan.ForMerge(entityType, matchProperties);
-        var batchSize = options.BatchSize ?? bulkOptions.MaxBatchSize;
+        // A synchronise removes every row its source does not contain, so it is the one operation
+        // that cannot be split: the second batch's delete arm would remove exactly what the first
+        // batch had just written. It runs as a single unit, which does mean holding the whole
+        // source in one staging table.
+        var batchSize = kind == BulkOperationKind.Synchronize
+            ? int.MaxValue
+            : options.BatchSize ?? bulkOptions.MaxBatchSize;
+
         var mergeCounts = options.MergeCounts ?? bulkOptions.MergeCounts;
 
         // Take the whole operation as one unit, matching SaveChanges: a partially-applied bulk
@@ -63,7 +70,8 @@ internal static class BulkOperations
                 for (var offset = 0; offset < entities.Count; offset += batchSize)
                 {
                     var slice = Slice(entities, offset, Math.Min(batchSize, entities.Count - offset));
-                    var rows = new EntityRowSet(slice, plan, state, kind, mergeCounts);
+                    var rows = new EntityRowSet(
+                        slice, plan, state, kind, mergeCounts, options.Timeout);
 
                     if (!executor.CanExecute(rows, out var reason))
                     {
@@ -189,7 +197,8 @@ internal static class BulkOperations
                         }
 
                         written += await WriteAsync(
-                                executor, connection, plan, layer, batchSize, cancellationToken)
+                                executor, connection, plan, layer, batchSize, options.Timeout,
+                                cancellationToken)
                             .ConfigureAwait(false);
 
                         options.Progress?.Invoke(new BulkProgress(written, total));
@@ -228,6 +237,7 @@ internal static class BulkOperations
         BulkEntityPlan plan,
         List<object> entities,
         int batchSize,
+        TimeSpan? timeout,
         CancellationToken cancellationToken)
     {
         var written = 0;
@@ -236,7 +246,8 @@ internal static class BulkOperations
         {
             var slice = entities.GetRange(offset, Math.Min(batchSize, entities.Count - offset));
             var rows = new EntityRowSet(
-                slice, plan, EntityState.Added, BulkOperationKind.Insert, MergeCounts.Exact);
+                slice, plan, EntityState.Added, BulkOperationKind.Insert, MergeCounts.Exact,
+                timeout);
 
             if (!executor.CanExecute(rows, out var reason))
             {

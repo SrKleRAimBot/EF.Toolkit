@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -89,4 +90,43 @@ public sealed class BulkColumnInfo
     /// <returns>The value as the provider expects it.</returns>
     public object? ToProviderValue(object? value)
         => TypeMapping?.Converter is { } converter ? converter.ConvertToProvider(value) : value;
+
+    /// <summary>
+    ///     Reverses <see cref="ToProviderValue" />, so a store-generated value lands on the entity
+    ///     in the form the model declares.
+    /// </summary>
+    /// <remarks>
+    ///     Without the converter step a generated column that has one round-trips wrongly: the
+    ///     value written to the entity is whatever the provider handed back, not what the property
+    ///     is declared to hold.
+    /// </remarks>
+    /// <param name="value">The value the database generated.</param>
+    /// <returns>The value as the entity expects it.</returns>
+    public object? FromProviderValue(object? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (TypeMapping?.Converter is { } converter)
+        {
+            // A store can widen on the way out -- a bigint for an int column -- and a converter
+            // built for the declared provider type would reject that, so narrow before converting.
+            return converter.ConvertFromProvider(Coerce(value, converter.ProviderClrType));
+        }
+
+        return Property?.ClrType is { } clrType ? Coerce(value, clrType) : value;
+    }
+
+    private static object Coerce(object value, Type target)
+    {
+        var underlying = Nullable.GetUnderlyingType(target) ?? target;
+
+        // Providers widen freely -- a bigint from a sequence, a decimal from an identity -- so the
+        // value is narrowed back to what the target actually declares.
+        return value.GetType() == underlying
+            ? value
+            : Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
+    }
 }

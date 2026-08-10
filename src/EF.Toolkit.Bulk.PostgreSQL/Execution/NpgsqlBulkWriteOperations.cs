@@ -25,11 +25,15 @@ internal sealed class NpgsqlBulkWriteOperations
     private readonly ISqlGenerationHelper _sqlHelper;
     private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> _copyInto;
 
+    private readonly BulkExecutionSettings _settings;
+
     public NpgsqlBulkWriteOperations(
         ISqlGenerationHelper sqlHelper,
+        BulkExecutionSettings settings,
         Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> copyInto)
     {
         _sqlHelper = sqlHelper;
+        _settings = settings;
         _copyInto = copyInto;
     }
 
@@ -127,6 +131,7 @@ internal sealed class NpgsqlBulkWriteOperations
 
             await using (var command = connection.CreateCommand())
             {
+                _settings.Apply(command);
                 command.CommandText = buildSql(staging);
 
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken)
@@ -214,12 +219,13 @@ internal sealed class NpgsqlBulkWriteOperations
             + "layout.");
     }
 
-    private static async Task ExecuteNonQueryAsync(
+    private async Task ExecuteNonQueryAsync(
         NpgsqlConnection connection,
         string sql,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }

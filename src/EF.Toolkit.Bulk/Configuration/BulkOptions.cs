@@ -28,9 +28,6 @@ public sealed record BulkOptions
     /// </summary>
     public int MaxBatchSize { get; init; } = DefaultMaxBatchSize;
 
-    /// <summary>How store-generated key values are obtained. See <see cref="KeyAllocation" />.</summary>
-    public KeyAllocation KeyAllocation { get; init; } = KeyAllocation.ReserveBlocks;
-
     /// <summary>What to do with writes that cannot be accelerated. See <see cref="Unsupported" />.</summary>
     public Unsupported OnUnsupported { get; init; } = Unsupported.FallBack;
 

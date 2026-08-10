@@ -25,13 +25,15 @@ internal sealed class EntityRowSet : IBulkRowSet
         BulkEntityPlan plan,
         EntityState entityState,
         BulkOperationKind operation,
-        MergeCounts mergeCounts)
+        MergeCounts mergeCounts,
+        TimeSpan? timeout = null)
     {
         _entities = entities;
         _plan = plan;
         EntityState = entityState;
         Operation = operation;
         MergeCounts = mergeCounts;
+        Timeout = timeout;
     }
 
     public string? Schema => _plan.Schema;
@@ -39,6 +41,7 @@ internal sealed class EntityRowSet : IBulkRowSet
     public EntityState EntityState { get; }
     public BulkOperationKind Operation { get; }
     public MergeCounts MergeCounts { get; }
+    public TimeSpan? Timeout { get; }
     public int RowCount => _entities.Count;
     public IReadOnlyList<BulkColumnInfo> Columns => _plan.Columns;
 
@@ -68,20 +71,8 @@ internal sealed class EntityRowSet : IBulkRowSet
             return;
         }
 
-        var property = Columns[column].Property;
-        var clrType = property?.ClrType;
-
-        if (value is not null && clrType is not null)
-        {
-            var target = Nullable.GetUnderlyingType(clrType) ?? clrType;
-            if (value.GetType() != target)
-            {
-                // Providers widen freely — a bigint from a sequence, a decimal from an identity —
-                // so the value is narrowed back to what the property actually declares.
-                value = Convert.ChangeType(value, target, provider: null);
-            }
-        }
-
-        setter(_entities[row], value);
+        // Reversing the value converter matters as much here as applying it on the way out: a
+        // generated column that has one would otherwise land on the entity in provider form.
+        setter(_entities[row], Columns[column].FromProviderValue(value));
     }
 }

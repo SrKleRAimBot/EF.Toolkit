@@ -12,7 +12,7 @@ public class BulkOptionsExtensionTests
 
         o.Threshold.ShouldBe(BulkOptions.DefaultThreshold);
         o.MaxBatchSize.ShouldBe(BulkOptions.DefaultMaxBatchSize);
-        o.KeyAllocation.ShouldBe(KeyAllocation.ReserveBlocks);
+        o.MergeCounts.ShouldBe(MergeCounts.Exact);
         o.OnUnsupported.ShouldBe(Unsupported.FallBack);
         o.Timeout.ShouldBeNull();
     }
@@ -24,13 +24,13 @@ public class BulkOptionsExtensionTests
 
         builder.Threshold(7)
             .MaxBatchSize(1234)
-            .KeyAllocation(KeyAllocation.Staging)
+            .MergeCounts(MergeCounts.Approximate)
             .OnUnsupported(Unsupported.Throw)
             .Timeout(TimeSpan.FromMinutes(3));
 
         builder.Options.Threshold.ShouldBe(7);
         builder.Options.MaxBatchSize.ShouldBe(1234);
-        builder.Options.KeyAllocation.ShouldBe(KeyAllocation.Staging);
+        builder.Options.MergeCounts.ShouldBe(MergeCounts.Approximate);
         builder.Options.OnUnsupported.ShouldBe(Unsupported.Throw);
         builder.Options.Timeout.ShouldBe(TimeSpan.FromMinutes(3));
 
@@ -85,13 +85,13 @@ public class BulkOptionsExtensionTests
     {
         var extension = new BulkOptionsExtension(BulkOptions.Default with
         {
-            KeyAllocation = KeyAllocation.Staging
+            MergeCounts = MergeCounts.Approximate
         });
 
         var debugInfo = new Dictionary<string, string>();
         extension.Info.PopulateDebugInfo(debugInfo);
 
-        debugInfo["EF.Toolkit.Bulk:KeyAllocation"].ShouldBe(nameof(KeyAllocation.Staging));
+        debugInfo["EF.Toolkit.Bulk:MergeCounts"].ShouldBe(nameof(MergeCounts.Approximate));
         debugInfo.ShouldContainKey("EF.Toolkit.Bulk:Threshold");
         debugInfo.ShouldContainKey("EF.Toolkit.Bulk:MaxBatchSize");
         debugInfo.ShouldContainKey("EF.Toolkit.Bulk:OnUnsupported");

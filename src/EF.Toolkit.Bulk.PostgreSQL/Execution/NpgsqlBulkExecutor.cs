@@ -1,3 +1,4 @@
+using System.Globalization;
 using EFToolkit.Bulk.Configuration;
 using EFToolkit.Bulk.Execution;
 using Microsoft.EntityFrameworkCore;
@@ -108,16 +109,17 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         ArgumentNullException.ThrowIfNull(connection);
 
         var npgsqlConnection = Unwrap(connection);
+        var settings = BulkExecutionSettings.Resolve(rows, _options, connection);
 
         if (rows.Operation is BulkOperationKind.Merge or BulkOperationKind.Synchronize)
         {
-            return await MergeAsync(rows, npgsqlConnection, cancellationToken)
+            return await MergeAsync(rows, npgsqlConnection, settings, cancellationToken)
                 .ConfigureAwait(false);
         }
 
         if (rows.EntityState is EntityState.Modified or EntityState.Deleted)
         {
-            return await ApplySetBasedAsync(rows, npgsqlConnection, cancellationToken)
+            return await ApplySetBasedAsync(rows, npgsqlConnection, settings, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -166,6 +168,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             }
 
             reserved[index] = await ReserveAsync(
+                settings,
                     npgsqlConnection, sequence.SequenceName, column, rows.RowCount, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -184,7 +187,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         ulong written;
         await using (importer.ConfigureAwait(false))
         {
-            if (_options.Timeout is { } timeout)
+            if (settings.Timeout is { } timeout)
             {
                 importer.Timeout = timeout;
             }
@@ -227,6 +230,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
     private async Task<BulkExecutionResult> MergeAsync(
         IBulkRowSet rows,
         NpgsqlConnection connection,
+        BulkExecutionSettings settings,
         CancellationToken cancellationToken)
     {
         var writeIndices = new List<int>();
@@ -253,7 +257,10 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             }
         }
 
-        var (inserted, updated, deleted) = await new NpgsqlBulkMerge(_sqlHelper, CopyIntoAsync)
+        var (inserted, updated, deleted) = await new NpgsqlBulkMerge(
+                _sqlHelper,
+                settings,
+                (c, t, staged, r, ct) => CopyIntoAsync(settings, c, t, staged, r, ct))
             .ExecuteAsync(
                 rows, connection, writeIndices, matchIndices, readIndices,
                 rows.Operation == BulkOperationKind.Synchronize, cancellationToken)
@@ -269,6 +276,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
     private async Task<BulkExecutionResult> ApplySetBasedAsync(
         IBulkRowSet rows,
         NpgsqlConnection connection,
+        BulkExecutionSettings settings,
         CancellationToken cancellationToken)
     {
         var writeIndices = new List<int>();
@@ -314,7 +322,10 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             return BulkExecutionResult.Declined("the update has no columns to set.");
         }
 
-        var operations = new NpgsqlBulkWriteOperations(_sqlHelper, CopyIntoAsync);
+        var operations = new NpgsqlBulkWriteOperations(
+            _sqlHelper,
+            settings,
+            (c, t, staged, r, ct) => CopyIntoAsync(settings, c, t, staged, r, ct));
 
         var affected = rows.EntityState == EntityState.Deleted
             ? await operations
@@ -331,6 +342,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
 
     /// <summary>Streams the given columns of every row into <paramref name="table" />.</summary>
     private async Task CopyIntoAsync(
+        BulkExecutionSettings settings,
         NpgsqlConnection connection,
         string table,
         IReadOnlyList<StagingColumn> staged,
@@ -348,7 +360,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
 
         await using (importer.ConfigureAwait(false))
         {
-            if (_options.Timeout is { } timeout)
+            if (settings.Timeout is { } timeout)
             {
                 importer.Timeout = timeout;
             }
@@ -381,6 +393,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
     ///     row data itself.
     /// </remarks>
     private static async Task<object?[]> ReserveAsync(
+        BulkExecutionSettings settings,
         NpgsqlConnection connection,
         string sequenceName,
         BulkColumnInfo keyColumn,
@@ -388,6 +401,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        settings.Apply(command);
 
         // Aggregated into a single array rather than returned as one row per value. nextval is
         // still evaluated once per generated row -- same atomicity, same values -- but a hundred
@@ -409,17 +423,19 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
                 + $"needed {count}.");
         }
 
-        // nextval returns bigint regardless of the column's width, so values are narrowed to the
-        // key's actual CLR type before they reach either the copy stream or the caller's entities.
-        var clrType = keyColumn.Property?.ClrType ?? typeof(long);
-        var keyType = Nullable.GetUnderlyingType(clrType) ?? clrType;
+        // nextval returns bigint regardless of the column's width, so values are narrowed before
+        // they reach the copy stream. The target is the *provider* type, not the property's: a
+        // strongly-typed key converts int-to-struct, and Convert.ChangeType cannot produce a struct
+        // — it is the value converter's job, which runs later when the value is written back onto
+        // the entity.
+        var keyType = keyColumn.ProviderClrType;
 
         var values = new object?[count];
         for (var i = 0; i < count; i++)
         {
             values[i] = keyType == typeof(long)
                 ? reserved[i]
-                : Convert.ChangeType(reserved[i], keyType, provider: null);
+                : Convert.ChangeType(reserved[i], keyType, CultureInfo.InvariantCulture);
         }
 
         return values;

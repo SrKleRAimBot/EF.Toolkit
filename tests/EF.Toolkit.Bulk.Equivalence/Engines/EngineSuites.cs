@@ -71,6 +71,21 @@ public sealed class SqlServerBulkInsertApiTests(SqlServerFixture fixture)
 
 [Trait("Engine", "postgres16")]
 [Collection("postgres16")]
+public sealed class PostgreSql16CorrectnessTests(PostgreSql16Fixture fixture)
+    : CorrectnessTests(fixture);
+
+[Trait("Engine", "postgres17")]
+[Collection("postgres17")]
+public sealed class PostgreSql17CorrectnessTests(PostgreSql17Fixture fixture)
+    : CorrectnessTests(fixture);
+
+[Trait("Engine", "sqlserver")]
+[Collection("sqlserver")]
+public sealed class SqlServerCorrectnessTests(SqlServerFixture fixture)
+    : CorrectnessTests(fixture);
+
+[Trait("Engine", "postgres16")]
+[Collection("postgres16")]
 public sealed class PostgreSql16ThroughputTests(PostgreSql16Fixture fixture, ITestOutputHelper output)
     : ThroughputSmokeTests(fixture, output);
 

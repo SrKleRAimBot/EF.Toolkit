@@ -42,15 +42,6 @@ public class BulkOptionsBuilder
         return this;
     }
 
-    /// <summary>Sets how store-generated key values are obtained.</summary>
-    /// <param name="allocation">The allocation strategy.</param>
-    /// <returns>The same builder, for chaining.</returns>
-    public virtual BulkOptionsBuilder KeyAllocation(KeyAllocation allocation)
-    {
-        Options = Options with { KeyAllocation = allocation };
-        return this;
-    }
-
     /// <summary>Sets how an upsert works out its insert-versus-update split.</summary>
     /// <param name="counts">Exact, or the cheaper approximation.</param>
     /// <returns>The same builder, for chaining.</returns>

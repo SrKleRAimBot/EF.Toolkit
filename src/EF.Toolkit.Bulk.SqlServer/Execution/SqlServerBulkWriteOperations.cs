@@ -20,9 +20,15 @@ internal sealed class SqlServerBulkWriteOperations
     private readonly ISqlGenerationHelper _sqlHelper;
     private readonly Func<SqlBulkCopy> _createBulkCopy;
 
-    public SqlServerBulkWriteOperations(ISqlGenerationHelper sqlHelper, Func<SqlBulkCopy> createBulkCopy)
+    private readonly BulkExecutionSettings _settings;
+
+    public SqlServerBulkWriteOperations(
+        ISqlGenerationHelper sqlHelper,
+        BulkExecutionSettings settings,
+        Func<SqlBulkCopy> createBulkCopy)
     {
         _sqlHelper = sqlHelper;
+        _settings = settings;
         _createBulkCopy = createBulkCopy;
     }
 
@@ -137,6 +143,7 @@ internal sealed class SqlServerBulkWriteOperations
 
             await using (var command = connection.CreateCommand())
             {
+                _settings.Apply(command);
                 command.CommandText = buildSql(staging);
                 command.Transaction = transaction;
 
@@ -227,13 +234,14 @@ internal sealed class SqlServerBulkWriteOperations
             + "layout.");
     }
 
-    private static async Task ExecuteNonQueryAsync(
+    private async Task ExecuteNonQueryAsync(
         SqlConnection connection,
         SqlTransaction? transaction,
         string sql,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
         command.Transaction = transaction;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

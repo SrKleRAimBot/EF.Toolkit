@@ -40,6 +40,17 @@ public interface IBulkRowSet
     /// </summary>
     MergeCounts MergeCounts { get; }
 
+    /// <summary>
+    ///     How long this operation may run for, or <see langword="null" /> to inherit the
+    ///     context-wide setting and then EF's own command timeout.
+    /// </summary>
+    /// <remarks>
+    ///     Carried on the row set for the same reason <see cref="MergeCounts" /> is: it is a
+    ///     property of the individual call, and the executor is resolved from the container once
+    ///     for the lifetime of the context.
+    /// </remarks>
+    TimeSpan? Timeout { get; }
+
     /// <summary>Number of rows.</summary>
     int RowCount { get; }
 

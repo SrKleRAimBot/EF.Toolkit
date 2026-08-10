@@ -49,6 +49,13 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
     /// <remarks>Never consulted: SaveChanges resolves inserts and updates before it gets here.</remarks>
     public MergeCounts MergeCounts => MergeCounts.Exact;
 
+    /// <remarks>
+    ///     A transparent save has no per-call setting to carry — the caller wrote
+    ///     <c>SaveChanges()</c>, not a bulk call — so the context-wide setting and EF's own command
+    ///     timeout are the whole story.
+    /// </remarks>
+    public TimeSpan? Timeout => null;
+
     /// <summary>Builds a row set over <paramref name="partition" />.</summary>
     public static ModificationCommandRowSet Create(BulkPartition partition)
     {
@@ -96,12 +103,21 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
     public object? GetOriginalValue(int row, int column) => Resolve(row, column).OriginalValue;
 
     /// <remarks>
-    ///     Assigning <see cref="IColumnModification.Value" /> is what keeps change tracking intact:
-    ///     EF's own <c>PropagateResults</c> uses the same setter, which records the value as
-    ///     store-generated on the tracked entry.
+    ///     <para>
+    ///         Assigning <see cref="IColumnModification.Value" /> is what keeps change tracking
+    ///         intact: EF's own <c>PropagateResults</c> uses the same setter, which records the
+    ///         value as store-generated on the tracked entry.
+    ///     </para>
+    ///     <para>
+    ///         That setter expects the value in <em>model</em> form, because stock EF reads results
+    ///         through the column's type mapping and so has already converted them. A bulk executor
+    ///         reads straight off the wire and has not, so the converter is run here — without it a
+    ///         generated column with a converter throws an <see cref="InvalidCastException" /> from
+    ///         inside the change tracker rather than anywhere that names the column.
+    ///     </para>
     /// </remarks>
     public void SetGeneratedValue(int row, int column, object? value)
-        => Resolve(row, column).Value = value;
+        => Resolve(row, column).Value = Columns[column].FromProviderValue(value);
 
     private IColumnModification Resolve(int row, int column)
     {

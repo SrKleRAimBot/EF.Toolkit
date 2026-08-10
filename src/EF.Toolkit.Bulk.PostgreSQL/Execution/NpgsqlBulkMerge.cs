@@ -25,11 +25,15 @@ internal sealed class NpgsqlBulkMerge
     private readonly ISqlGenerationHelper _sqlHelper;
     private readonly Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> _copyInto;
 
+    private readonly BulkExecutionSettings _settings;
+
     public NpgsqlBulkMerge(
         ISqlGenerationHelper sqlHelper,
+        BulkExecutionSettings settings,
         Func<NpgsqlConnection, string, IReadOnlyList<StagingColumn>, IBulkRowSet, CancellationToken, Task> copyInto)
     {
         _sqlHelper = sqlHelper;
+        _settings = settings;
         _copyInto = copyInto;
     }
 
@@ -137,6 +141,7 @@ internal sealed class NpgsqlBulkMerge
                     }));
 
                 await using var delete = connection.CreateCommand();
+                _settings.Apply(delete);
                 delete.CommandText =
                     $"DELETE FROM {target} AS t WHERE NOT EXISTS "
                     + $"(SELECT 1 FROM {staging} AS s WHERE {missing})";
@@ -156,7 +161,7 @@ internal sealed class NpgsqlBulkMerge
         }
     }
 
-    private static async Task<(int Inserted, int Updated)> ApplyAsync(
+    private async Task<(int Inserted, int Updated)> ApplyAsync(
         IBulkRowSet rows,
         NpgsqlConnection connection,
         string sql,
@@ -178,6 +183,7 @@ internal sealed class NpgsqlBulkMerge
         var updated = 0;
 
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken)
@@ -249,6 +255,7 @@ internal sealed class NpgsqlBulkMerge
             }));
 
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText =
             $"SELECT count(*) FROM {target} AS t "
             + $"WHERE EXISTS (SELECT 1 FROM {staging} AS s WHERE {predicate})";
@@ -257,12 +264,13 @@ internal sealed class NpgsqlBulkMerge
         return Convert.ToInt32(count, provider: null);
     }
 
-    private static async Task ExecuteNonQueryAsync(
+    private async Task ExecuteNonQueryAsync(
         NpgsqlConnection connection,
         string sql,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }

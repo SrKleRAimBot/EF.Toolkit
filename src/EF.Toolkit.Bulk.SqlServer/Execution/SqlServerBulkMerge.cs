@@ -18,9 +18,15 @@ internal sealed class SqlServerBulkMerge
     private readonly ISqlGenerationHelper _sqlHelper;
     private readonly Func<SqlBulkCopy> _createBulkCopy;
 
-    public SqlServerBulkMerge(ISqlGenerationHelper sqlHelper, Func<SqlBulkCopy> createBulkCopy)
+    private readonly BulkExecutionSettings _settings;
+
+    public SqlServerBulkMerge(
+        ISqlGenerationHelper sqlHelper,
+        BulkExecutionSettings settings,
+        Func<SqlBulkCopy> createBulkCopy)
     {
         _sqlHelper = sqlHelper;
+        _settings = settings;
         _createBulkCopy = createBulkCopy;
     }
 
@@ -134,8 +140,12 @@ internal sealed class SqlServerBulkMerge
             readIndices.Select(i => $"inserted.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
         output.Add($"s.{_sqlHelper.DelimitIdentifier(SqlServerStagingInsert.OrdinalColumnName)}");
 
+        // HOLDLOCK is not optional on a real merge. Without a serializable range lock over the
+        // matched keys, MERGE's match test and its insert are separated by a window another
+        // session can insert into, and the upsert fails with a duplicate-key violation instead of
+        // updating. The lock is scoped to the keys the join touches, so this is not a table lock.
         var sql = $"""
-            MERGE INTO {target} AS t
+            MERGE INTO {target} WITH (HOLDLOCK) AS t
             USING {staging} AS s
             ON {on}
             {matchedClause}WHEN NOT MATCHED THEN INSERT ({columnList}) VALUES ({values}){notMatchedBySource}
@@ -147,6 +157,7 @@ internal sealed class SqlServerBulkMerge
         var deleted = 0;
 
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
         command.Transaction = transaction;
 
@@ -190,13 +201,14 @@ internal sealed class SqlServerBulkMerge
         return (inserted, updated, deleted);
     }
 
-    private static async Task ExecuteNonQueryAsync(
+    private async Task ExecuteNonQueryAsync(
         SqlConnection connection,
         SqlTransaction? transaction,
         string sql,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
         command.Transaction = transaction;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

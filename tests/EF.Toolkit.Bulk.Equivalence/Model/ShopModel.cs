@@ -96,6 +96,21 @@ public class Category
     public List<Category> Children { get; } = [];
 }
 
+/// <summary>
+///     A strongly-typed key over a store-generated column, so the value converter has to run on the
+///     way <em>back</em> as well as on the way out. Nothing else in this model covers that
+///     direction: <see cref="Order.Status" /> is converted but application-supplied, and every
+///     other generated key is a bare primitive that needs no conversion at all.
+/// </summary>
+public class Shipment
+{
+    public ShipmentId Id { get; set; }
+    public string Code { get; set; } = "";
+}
+
+/// <summary>Wraps a generated <see cref="int" /> key, converted to and from the store.</summary>
+public readonly record struct ShipmentId(int Value);
+
 public enum OrderStatus
 {
     Draft,

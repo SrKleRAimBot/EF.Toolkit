@@ -10,6 +10,7 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<OrderNote> OrderNotes => Set<OrderNote>();
     public DbSet<Inventory> Inventories => Set<Inventory>();
+    public DbSet<Shipment> Shipments => Set<Shipment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -70,6 +71,18 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
             // A client-managed token: EF puts it in the WHERE clause using the loaded value while
             // the SET clause assigns the new one, so the column is both a condition and written.
             b.Property(x => x.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<Shipment>(b =>
+        {
+            // Store-generated *and* converted. The database hands back a plain int, so whatever
+            // propagates it onto the entity has to run the converter in reverse — the direction
+            // that is easy to forget, because writes look correct without it.
+            b.Property(x => x.Id)
+                .HasConversion(id => id.Value, value => new ShipmentId(value))
+                .ValueGeneratedOnAdd();
+
+            b.Property(x => x.Code).HasMaxLength(64).IsRequired();
         });
 
         modelBuilder.Entity<Category>(b =>

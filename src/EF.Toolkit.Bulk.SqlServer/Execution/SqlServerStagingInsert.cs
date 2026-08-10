@@ -29,8 +29,13 @@ internal sealed class SqlServerStagingInsert
 
     private readonly ISqlGenerationHelper _sqlHelper;
 
-    public SqlServerStagingInsert(ISqlGenerationHelper sqlHelper)
-        => _sqlHelper = sqlHelper;
+    private readonly BulkExecutionSettings _settings;
+
+    public SqlServerStagingInsert(ISqlGenerationHelper sqlHelper, BulkExecutionSettings settings)
+    {
+        _sqlHelper = sqlHelper;
+        _settings = settings;
+    }
 
     public async Task<int> ExecuteAsync(
         IBulkRowSet rows,
@@ -133,6 +138,11 @@ internal sealed class SqlServerStagingInsert
         var ordinal = _sqlHelper.DelimitIdentifier(OrdinalColumnName);
 
         // ON 1 = 0 never matches, so every staged row takes the NOT MATCHED branch and is inserted.
+        //
+        // Deliberately no HOLDLOCK, unlike the upsert in SqlServerBulkMerge. That hint exists to
+        // close the window between MERGE's match test and its insert, and there is no such window
+        // here: the join never matches, so the statement only ever inserts. Taking a serializable
+        // range lock would cost concurrency for a race that cannot occur.
         var sql = $"""
             MERGE INTO {target} AS t
             USING {stagingRef} AS s
@@ -142,6 +152,7 @@ internal sealed class SqlServerStagingInsert
             """;
 
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
         command.Transaction = transaction;
 
@@ -168,13 +179,14 @@ internal sealed class SqlServerStagingInsert
         return affected;
     }
 
-    private static async Task ExecuteNonQueryAsync(
+    private async Task ExecuteNonQueryAsync(
         SqlConnection connection,
         SqlTransaction? transaction,
         string sql,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
         command.Transaction = transaction;
 
