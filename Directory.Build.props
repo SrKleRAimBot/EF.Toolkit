@@ -38,7 +38,10 @@
     <PackageProjectUrl>https://github.com/SrKleRAimBot/EF.Toolkit</PackageProjectUrl>
     <RepositoryUrl>https://github.com/SrKleRAimBot/EF.Toolkit</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;performance;sqlserver;postgresql</PackageTags>
+    <!--
+      Package projects set PackagePath="README.md" without a trailing separator. NuGet treats that
+      as the complete destination path, renaming docs/bulk.md or docs/audit.md inside the package.
+    -->
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
