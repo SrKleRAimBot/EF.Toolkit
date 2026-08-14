@@ -200,14 +200,6 @@ internal sealed class NpgsqlBulkMerge
     }
 
     /// <summary>
-    ///     Whether this server can run <c>MERGE ... RETURNING merge_action()</c>.
-    /// </summary>
-    /// <remarks>
-    ///     The version comes from the startup packet, so this costs nothing. It is only a
-    ///     capability probe by proxy, which is why the setting can override it: a pooler or a
-    ///     PostgreSQL-compatible engine can report 17 without implementing what 17 added.
-    /// </remarks>
-    /// <summary>
     ///     Reads the rows a merge or synchronise is about to change or remove, as they stand now.
     /// </summary>
     /// <remarks>
@@ -322,6 +314,14 @@ internal sealed class NpgsqlBulkMerge
         }
     }
 
+    /// <summary>
+    ///     Whether this server can run <c>MERGE ... RETURNING merge_action()</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The version comes from the startup packet, so this costs nothing. It is only a
+    ///     capability probe by proxy, which is why the setting can override it: a pooler or a
+    ///     PostgreSQL-compatible engine can report 17 without implementing what 17 added.
+    /// </remarks>
     private bool SupportsMerge(NpgsqlConnection connection)
         => _useMerge ?? connection.PostgreSqlVersion.Major >= 17;
 

@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+
 namespace EFToolkit.Audit.Api;
 
 /// <summary>
@@ -57,9 +59,10 @@ public sealed class AuditScope : IDisposable
 
     /// <summary>Free-form values merged into the <c>meta</c> object of every entry's payload.</summary>
     public IReadOnlyDictionary<string, object?> Metadata
-        => _metadata ?? (IReadOnlyDictionary<string, object?>)EmptyMetadata;
+        => _metadata ?? EmptyMetadata;
 
-    private static Dictionary<string, object?> EmptyMetadata { get; } = [];
+    private static IReadOnlyDictionary<string, object?> EmptyMetadata { get; }
+        = new ReadOnlyDictionary<string, object?>(new Dictionary<string, object?>());
 
     /// <summary>Begins a scope, inheriting anything not given from the scope it nests inside.</summary>
     /// <param name="actor">Who is acting.</param>

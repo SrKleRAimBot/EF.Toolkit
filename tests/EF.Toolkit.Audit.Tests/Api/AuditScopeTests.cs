@@ -109,4 +109,14 @@ public class AuditScopeTests
 
         Should.Throw<ArgumentException>(() => scope.With("  ", 1));
     }
+
+    [Fact]
+    public void Empty_metadata_cannot_be_mutated_through_its_public_interface()
+    {
+        using var scope = AuditScope.Begin("actor");
+        var metadata = (IDictionary<string, object?>)scope.Metadata;
+
+        Should.Throw<NotSupportedException>(() => metadata.Add("leaked", true));
+        scope.Metadata.ShouldBeEmpty();
+    }
 }

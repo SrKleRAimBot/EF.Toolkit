@@ -61,6 +61,8 @@ public class AuditTestContext(
     DbContextOptions<AuditTestContext> options,
     Action<ModelBuilder>? onModelCreating = null) : DbContext(options)
 {
+    internal object ModelCacheKey { get; } = new();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
         => onModelCreating?.Invoke(modelBuilder);
 }
@@ -68,7 +70,8 @@ public class AuditTestContext(
 /// <summary>Gives every context instance a model of its own.</summary>
 public sealed class PerInstanceModelCacheKeyFactory : IModelCacheKeyFactory
 {
-    public object Create(DbContext context, bool designTime) => new object();
+    public object Create(DbContext context, bool designTime)
+        => (((AuditTestContext)context).ModelCacheKey, designTime);
 }
 
 /// <summary>A clock that does not move, so a captured timestamp is assertable.</summary>
