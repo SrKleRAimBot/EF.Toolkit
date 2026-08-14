@@ -64,9 +64,9 @@ internal sealed class BulkProjection
         if (insertOnly is not null && kind is not (BulkOperationKind.Merge or BulkOperationKind.Synchronize))
         {
             throw new BulkNotSupportedException(
-                $"InsertOnly has no meaning for a {kind.ToString().ToLowerInvariant()}: it marks "
-                + "columns that a merge writes when it inserts a row but leaves alone when it "
-                + "updates one, and only a merge or a synchronise does both.");
+                $"InsertOnly has no meaning for {kind.Describe()}: it marks columns that a merge "
+                + "writes when it inserts a row but leaves alone when it updates one, and only a "
+                + "merge or a synchronise does both.");
         }
 
         return include is null && exclude is null && insertOnly is null

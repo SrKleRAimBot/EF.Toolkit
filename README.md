@@ -284,6 +284,10 @@ await context.BulkInsertAsync(orders, o => o
 | `WithinScope` | synchronise | confine the delete arm to the rows it selects |
 | `AllowFullTableDelete` | synchronise | confirm an unscoped, whole-table delete |
 
+An option used outside the operations it applies to is refused, not ignored — including on
+`IncludeGraph()`, which refuses `Include`/`Exclude` outright because a projection over the root says
+nothing about the other entity types a graph insert writes.
+
 Context-wide:
 
 ```csharp

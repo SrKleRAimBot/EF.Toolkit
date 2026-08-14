@@ -56,7 +56,11 @@ public interface IBulkRowSet
     ///     <see langword="null" /> when it covers the whole table.
     /// </summary>
     /// <remarks>
-    ///     Ignored by every other operation, which only ever touches rows the caller handed over.
+    ///     Always <see langword="null" /> for every other operation, which only ever touches rows
+    ///     the caller handed over and so has nothing to confine. The API refuses a scope on those
+    ///     rather than passing one down to be ignored — silently doing nothing is the one outcome a
+    ///     setting that exists to hold a delete back must never have — so an executor never has to
+    ///     decide whether to honour one.
     /// </remarks>
     BulkScope? Scope { get; }
 
