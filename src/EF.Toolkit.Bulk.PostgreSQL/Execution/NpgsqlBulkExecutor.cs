@@ -1,3 +1,4 @@
+using System.Globalization;
 using EFToolkit.Bulk.Configuration;
 using EFToolkit.Bulk.Execution;
 using Microsoft.EntityFrameworkCore;
@@ -108,16 +109,17 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         ArgumentNullException.ThrowIfNull(connection);
 
         var npgsqlConnection = Unwrap(connection);
+        var settings = BulkExecutionSettings.Resolve(rows, _options, connection);
 
         if (rows.Operation is BulkOperationKind.Merge or BulkOperationKind.Synchronize)
         {
-            return await MergeAsync(rows, npgsqlConnection, cancellationToken)
+            return await MergeAsync(rows, npgsqlConnection, settings, cancellationToken)
                 .ConfigureAwait(false);
         }
 
         if (rows.EntityState is EntityState.Modified or EntityState.Deleted)
         {
-            return await ApplySetBasedAsync(rows, npgsqlConnection, cancellationToken)
+            return await ApplySetBasedAsync(rows, npgsqlConnection, settings, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -166,6 +168,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             }
 
             reserved[index] = await ReserveAsync(
+                settings,
                     npgsqlConnection, sequence.SequenceName, column, rows.RowCount, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -181,26 +184,49 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             .Select(i => reserved.TryGetValue(i, out var keys) ? keys : null)
             .ToArray();
 
+        // A column whose value comes from a reserved key is not read from the entity, so it keeps
+        // the boxed writer whatever the row set is.
+        var fused = FusedWriters(rows, writeIndices, reservedKeys);
+
         ulong written;
         await using (importer.ConfigureAwait(false))
         {
-            if (_options.Timeout is { } timeout)
+            if (settings.Timeout is { } timeout)
             {
                 importer.Timeout = timeout;
             }
 
+            var entities = (rows as IBulkEntityRowSet)?.Entities;
+
+            // The cursor materialises a whole row into an object[], which is exactly the boxing a
+            // fused writer exists to avoid — so it is only built when there is nothing to fuse.
+            var cursor = fused is null
+                ? new BulkRowCursor(rows, StagingColumn.ForWrite(rows, writeIndices))
+                : null;
+
             for (var row = 0; row < rows.RowCount; row++)
             {
+                cursor?.MoveNext();
+
                 await importer.StartRowAsync(cancellationToken).ConfigureAwait(false);
 
                 for (var i = 0; i < writeIndices.Count; i++)
                 {
+                    if (fused?[i] is { } write)
+                    {
+                        await write(importer, entities![row], cancellationToken)
+                            .ConfigureAwait(false);
+                        continue;
+                    }
+
                     // Reserved keys stream from the local array rather than from the row set, so
                     // the entities stay untouched until the copy has actually succeeded.
                     var value = reservedKeys[i] is { } keys
                         ? keys[row]
-                        : rows.Columns[writeIndices[i]].ToProviderValue(
-                            rows.GetValue(row, writeIndices[i]));
+                        : cursor is not null
+                            ? cursor[i]
+                            : rows.Columns[writeIndices[i]]
+                                .ToProviderValue(rows.GetValue(row, writeIndices[i]));
 
                     await writers[i].WriteAsync(importer, value, cancellationToken)
                         .ConfigureAwait(false);
@@ -227,6 +253,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
     private async Task<BulkExecutionResult> MergeAsync(
         IBulkRowSet rows,
         NpgsqlConnection connection,
+        BulkExecutionSettings settings,
         CancellationToken cancellationToken)
     {
         var writeIndices = new List<int>();
@@ -253,7 +280,11 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             }
         }
 
-        var (inserted, updated, deleted) = await new NpgsqlBulkMerge(_sqlHelper, CopyIntoAsync)
+        var (inserted, updated, deleted) = await new NpgsqlBulkMerge(
+                _sqlHelper,
+                settings,
+                _options.UseMerge,
+                (c, t, staged, r, ordinal, ct) => CopyIntoAsync(settings, c, t, staged, r, ordinal, ct))
             .ExecuteAsync(
                 rows, connection, writeIndices, matchIndices, readIndices,
                 rows.Operation == BulkOperationKind.Synchronize, cancellationToken)
@@ -269,6 +300,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
     private async Task<BulkExecutionResult> ApplySetBasedAsync(
         IBulkRowSet rows,
         NpgsqlConnection connection,
+        BulkExecutionSettings settings,
         CancellationToken cancellationToken)
     {
         var writeIndices = new List<int>();
@@ -314,15 +346,19 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
             return BulkExecutionResult.Declined("the update has no columns to set.");
         }
 
-        var operations = new NpgsqlBulkWriteOperations(_sqlHelper, CopyIntoAsync);
+        var operations = new NpgsqlBulkWriteOperations(
+            _sqlHelper,
+            settings,
+            _options.StagingIndexThreshold,
+            (c, t, staged, r, ordinal, ct) => CopyIntoAsync(settings, c, t, staged, r, ordinal, ct));
 
         var affected = rows.EntityState == EntityState.Deleted
             ? await operations
-                .DeleteAsync(rows, connection, conditionIndices, keyIndices, cancellationToken)
+                .DeleteAsync(rows, connection, conditionIndices, cancellationToken)
                 .ConfigureAwait(false)
             : await operations
                 .UpdateAsync(
-                    rows, connection, writeIndices, conditionIndices, keyIndices, readIndices,
+                    rows, connection, writeIndices, conditionIndices, readIndices,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -331,15 +367,22 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
 
     /// <summary>Streams the given columns of every row into <paramref name="table" />.</summary>
     private async Task CopyIntoAsync(
+        BulkExecutionSettings settings,
         NpgsqlConnection connection,
         string table,
         IReadOnlyList<StagingColumn> staged,
         IBulkRowSet rows,
+        bool includeOrdinal,
         CancellationToken cancellationToken)
     {
-        var columnList = string.Join(
-            ", ",
-            staged.Select(c => _sqlHelper.DelimitIdentifier(c.Name)));
+        var names = staged.Select(c => _sqlHelper.DelimitIdentifier(c.Name)).ToList();
+
+        if (includeOrdinal)
+        {
+            names.Add(_sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName));
+        }
+
+        var columnList = string.Join(", ", names);
 
         var importer = await connection
             .BeginBinaryImportAsync(
@@ -348,22 +391,52 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
 
         await using (importer.ConfigureAwait(false))
         {
-            if (_options.Timeout is { } timeout)
+            if (settings.Timeout is { } timeout)
             {
                 importer.Timeout = timeout;
             }
 
             var writers = staged.Select(c => NpgsqlColumnWriter.For(rows.Columns[c.Index])).ToArray();
+            var entities = (rows as IBulkEntityRowSet)?.Entities;
+
+            // A staged column may carry the loaded value rather than the current one, and a fused
+            // writer always reads the current one — which is the same thing for the explicit API,
+            // whose entities are detached and keep no before-image, and not for anything else.
+            var fused = staged.All(c => !c.UseOriginal)
+                ? FusedWriters(rows, [.. staged.Select(c => c.Index)], null)
+                : null;
+
+            var cursor = fused is null ? new BulkRowCursor(rows, staged) : null;
 
             for (var row = 0; row < rows.RowCount; row++)
             {
+                cursor?.MoveNext();
+
                 await importer.StartRowAsync(cancellationToken).ConfigureAwait(false);
 
                 for (var i = 0; i < staged.Count; i++)
                 {
+                    if (fused?[i] is { } write)
+                    {
+                        await write(importer, entities![row], cancellationToken)
+                            .ConfigureAwait(false);
+                        continue;
+                    }
+
+                    var value = cursor is not null
+                        ? cursor[i]
+                        : staged[i].ValueFor(rows, row);
+
                     await writers[i]
-                        .WriteAsync(importer, staged[i].ValueFor(rows, row), cancellationToken)
+                        .WriteAsync(importer, value, cancellationToken)
                         .ConfigureAwait(false);
+                }
+
+                if (includeOrdinal)
+                {
+                    // Written typed rather than through a column writer: there is no model column
+                    // behind it, and int infers PostgreSQL's integer unambiguously.
+                    await importer.WriteAsync(row, cancellationToken).ConfigureAwait(false);
                 }
             }
 
@@ -381,6 +454,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
     ///     row data itself.
     /// </remarks>
     private static async Task<object?[]> ReserveAsync(
+        BulkExecutionSettings settings,
         NpgsqlConnection connection,
         string sequenceName,
         BulkColumnInfo keyColumn,
@@ -388,6 +462,7 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        settings.Apply(command);
 
         // Aggregated into a single array rather than returned as one row per value. nextval is
         // still evaluated once per generated row -- same atomicity, same values -- but a hundred
@@ -409,20 +484,59 @@ public sealed class NpgsqlBulkExecutor : IBulkOperationExecutor
                 + $"needed {count}.");
         }
 
-        // nextval returns bigint regardless of the column's width, so values are narrowed to the
-        // key's actual CLR type before they reach either the copy stream or the caller's entities.
-        var clrType = keyColumn.Property?.ClrType ?? typeof(long);
-        var keyType = Nullable.GetUnderlyingType(clrType) ?? clrType;
+        // nextval returns bigint regardless of the column's width, so values are narrowed before
+        // they reach the copy stream. The target is the *provider* type, not the property's: a
+        // strongly-typed key converts int-to-struct, and Convert.ChangeType cannot produce a struct
+        // — it is the value converter's job, which runs later when the value is written back onto
+        // the entity.
+        var keyType = keyColumn.ProviderClrType;
 
         var values = new object?[count];
         for (var i = 0; i < count; i++)
         {
             values[i] = keyType == typeof(long)
                 ? reserved[i]
-                : Convert.ChangeType(reserved[i], keyType, provider: null);
+                : Convert.ChangeType(reserved[i], keyType, CultureInfo.InvariantCulture);
         }
 
         return values;
+    }
+
+    /// <summary>
+    ///     Compiles a fused writer per column where one is available, or returns
+    ///     <see langword="null" /> when this row set cannot use them at all.
+    /// </summary>
+    /// <remarks>
+    ///     Built once per operation, not once per row. Declining is per column so a single exotic
+    ///     type leaves the rest of the table on the fast path.
+    /// </remarks>
+    private static Func<NpgsqlBinaryImporter, object, CancellationToken, Task>?[]? FusedWriters(
+        IBulkRowSet rows,
+        List<int> indices,
+        object?[]?[]? reservedKeys)
+    {
+        if (rows is not IBulkEntityRowSet entityRows)
+        {
+            return null;
+        }
+
+        var fused = new Func<NpgsqlBinaryImporter, object, CancellationToken, Task>?[indices.Count];
+        var any = false;
+
+        for (var i = 0; i < indices.Count; i++)
+        {
+            if (reservedKeys?[i] is not null)
+            {
+                continue;
+            }
+
+            fused[i] = NpgsqlFusedWriter.TryBuild(
+                rows.Columns[indices[i]], entityRows.EntityClrType);
+
+            any |= fused[i] is not null;
+        }
+
+        return any ? fused : null;
     }
 
     private static NpgsqlConnection Unwrap(IRelationalConnection connection)

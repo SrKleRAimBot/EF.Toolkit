@@ -42,6 +42,7 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
 
     private readonly List<IReadOnlyList<BulkPartition>> _batches = [];
     private readonly List<PartitionExecutedEvent> _executions = [];
+    private readonly List<ExplicitFallbackEvent> _fallbacks = [];
 
     public PartitionRecorder()
     {
@@ -60,6 +61,12 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
     public IReadOnlyList<PartitionExecutedEvent> Executions
     {
         get { lock (_gate) { return [.. _executions]; } }
+    }
+
+    /// <summary>Explicit bulk calls that ran through stock EF Core instead.</summary>
+    public IReadOnlyList<ExplicitFallbackEvent> ExplicitFallbacks
+    {
+        get { lock (_gate) { return [.. _fallbacks]; } }
     }
 
     /// <summary>Batches that were split into more than one partition.</summary>
@@ -95,6 +102,9 @@ public sealed class PartitionRecorder : IDisposable, IObserver<DiagnosticListene
                         break;
                     case PartitionExecutedEvent executed:
                         owner._executions.Add(executed);
+                        break;
+                    case ExplicitFallbackEvent fallback:
+                        owner._fallbacks.Add(fallback);
                         break;
                 }
             }

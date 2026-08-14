@@ -1,4 +1,5 @@
 using System.Data.Common;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -86,5 +87,40 @@ internal sealed class FakeColumn : IColumnModification
         => throw new NotSupportedException();
 
     public void ResetParameterNames()
+        => throw new NotSupportedException();
+}
+
+/// <summary>
+///     A stand-in for a rows-affected column. The partitioner reads only its name, so everything
+///     else throws rather than pretending to be meaningful.
+/// </summary>
+internal sealed class FakeRowsAffectedColumn : IColumnBase
+{
+    public string Name => "__rows_affected";
+
+    public ITableBase Table => throw new NotSupportedException();
+    public string StoreType => throw new NotSupportedException();
+    public bool IsNullable => throw new NotSupportedException();
+    public RelationalTypeMapping StoreTypeMapping => throw new NotSupportedException();
+    public Type ProviderClrType => throw new NotSupportedException();
+    public IReadOnlyList<IColumnMappingBase> PropertyMappings => throw new NotSupportedException();
+
+    public IColumnMappingBase? FindColumnMapping(ITypeBase type) => throw new NotSupportedException();
+
+    public object? this[string name] => throw new NotSupportedException();
+
+    public IAnnotation? FindAnnotation(string name) => throw new NotSupportedException();
+    public IEnumerable<IAnnotation> GetAnnotations() => throw new NotSupportedException();
+    public IAnnotation GetAnnotation(string annotationName) => throw new NotSupportedException();
+
+    public IEnumerable<IAnnotation> GetRuntimeAnnotations() => throw new NotSupportedException();
+    public IAnnotation? FindRuntimeAnnotation(string name) => throw new NotSupportedException();
+    public IAnnotation AddRuntimeAnnotation(string name, object? value)
+        => throw new NotSupportedException();
+    public IAnnotation SetRuntimeAnnotation(string name, object? value)
+        => throw new NotSupportedException();
+    public IAnnotation? RemoveRuntimeAnnotation(string name) => throw new NotSupportedException();
+    public TValue GetOrAddRuntimeAnnotationValue<TValue, TArg>(
+        string name, Func<TArg?, TValue> valueFactory, TArg? factoryArgument)
         => throw new NotSupportedException();
 }

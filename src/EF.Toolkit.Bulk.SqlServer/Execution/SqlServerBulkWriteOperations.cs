@@ -20,9 +20,18 @@ internal sealed class SqlServerBulkWriteOperations
     private readonly ISqlGenerationHelper _sqlHelper;
     private readonly Func<SqlBulkCopy> _createBulkCopy;
 
-    public SqlServerBulkWriteOperations(ISqlGenerationHelper sqlHelper, Func<SqlBulkCopy> createBulkCopy)
+    private readonly BulkExecutionSettings _settings;
+    private readonly int _indexThreshold;
+
+    public SqlServerBulkWriteOperations(
+        ISqlGenerationHelper sqlHelper,
+        BulkExecutionSettings settings,
+        int indexThreshold,
+        Func<SqlBulkCopy> createBulkCopy)
     {
         _sqlHelper = sqlHelper;
+        _settings = settings;
+        _indexThreshold = indexThreshold;
         _createBulkCopy = createBulkCopy;
     }
 
@@ -32,7 +41,6 @@ internal sealed class SqlServerBulkWriteOperations
         SqlTransaction? transaction,
         IReadOnlyList<int> writeIndices,
         IReadOnlyList<int> conditionIndices,
-        IReadOnlyList<int> keyIndices,
         IReadOnlyList<int> readIndices,
         CancellationToken cancellationToken)
     {
@@ -40,7 +48,7 @@ internal sealed class SqlServerBulkWriteOperations
         var staged = StagingColumn.ForUpdate(rows, conditionIndices, writeIndices);
 
         return WithStagingAsync(
-            rows, connection, transaction, staged, keyIndices, readIndices,
+            rows, connection, transaction, staged, readIndices, conditionIndices,
             staging =>
             {
                 var assignments = string.Join(
@@ -52,9 +60,10 @@ internal sealed class SqlServerBulkWriteOperations
                         return $"t.{column} = s.{source}";
                     }));
 
-                // OUTPUT precedes FROM in SQL Server's UPDATE ... FROM form.
+                // OUTPUT precedes FROM in SQL Server's UPDATE ... FROM form, and may name a table
+                // from that FROM clause -- which is what lets the source ordinal come back.
                 return $"UPDATE t SET {assignments} "
-                    + $"OUTPUT {Output(rows, keyIndices, readIndices, "inserted")} "
+                    + $"OUTPUT {Output(rows, readIndices, "inserted")} "
                     + $"FROM {target} AS t INNER JOIN {staging} AS s "
                     + $"ON {JoinPredicate(rows, conditionIndices, staged)};";
             },
@@ -66,16 +75,15 @@ internal sealed class SqlServerBulkWriteOperations
         SqlConnection connection,
         SqlTransaction? transaction,
         IReadOnlyList<int> conditionIndices,
-        IReadOnlyList<int> keyIndices,
         CancellationToken cancellationToken)
     {
         var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
         var staged = StagingColumn.ForDelete(rows, conditionIndices);
 
         return WithStagingAsync(
-            rows, connection, transaction, staged, keyIndices, [],
+            rows, connection, transaction, staged, [], conditionIndices,
             staging =>
-                $"DELETE t OUTPUT {Output(rows, keyIndices, [], "deleted")} "
+                $"DELETE t OUTPUT {Output(rows, [], "deleted")} "
                 + $"FROM {target} AS t INNER JOIN {staging} AS s "
                 + $"ON {JoinPredicate(rows, conditionIndices, staged)};",
             cancellationToken);
@@ -86,8 +94,8 @@ internal sealed class SqlServerBulkWriteOperations
         SqlConnection connection,
         SqlTransaction? transaction,
         List<StagingColumn> staged,
-        IReadOnlyList<int> keyIndices,
         IReadOnlyList<int> readIndices,
+        IReadOnlyList<int> conditionIndices,
         Func<string, string> buildSql,
         CancellationToken cancellationToken)
     {
@@ -102,9 +110,12 @@ internal sealed class SqlServerBulkWriteOperations
                 $"{_sqlHelper.DelimitIdentifier(rows.Columns[c.Index].Name)} AS "
                 + $"{_sqlHelper.DelimitIdentifier(c.Name)}"));
 
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
+
         await ExecuteNonQueryAsync(
                 connection, transaction,
-                $"SELECT TOP 0 {projection} INTO {staging} FROM {target};",
+                $"SELECT TOP 0 {projection}, CAST(0 AS int) AS {ordinal} "
+                + $"INTO {staging} FROM {target};",
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -118,26 +129,27 @@ internal sealed class SqlServerBulkWriteOperations
                     bulkCopy.ColumnMappings.Add(i, staged[i].Name);
                 }
 
+                bulkCopy.ColumnMappings.Add(staged.Count, StagingColumn.OrdinalColumnName);
+
                 await bulkCopy
                     .WriteToServerAsync(
-                        new BulkRowSetDataReader(rows, staged, includeOrdinal: false),
+                        new BulkRowSetDataReader(rows, staged, includeOrdinal: true),
                         cancellationToken)
                     .ConfigureAwait(false);
             }
 
-            var matched = new HashSet<string>(StringComparer.Ordinal);
-            var byKey = new Dictionary<string, int>(StringComparer.Ordinal);
-
-            for (var row = 0; row < rows.RowCount; row++)
-            {
-                byKey[BulkRowMatching.KeyOf(rows, row, keyIndices)] = row;
-            }
-
-            var keyValues = new object?[keyIndices.Count];
+            var tally = new BulkRowTally(rows.RowCount);
 
             await using (var command = connection.CreateCommand())
             {
-                command.CommandText = buildSql(staging);
+                _settings.Apply(command);
+                // The index is built after the load, not before: SqlBulkCopy into an indexed
+                // table pays per-row maintenance, whereas building it over a freshly loaded heap
+                // is a single sort. It rides along with the statement that needs it so preparing
+                // the staging table costs no extra round trip.
+                command.CommandText = Prelude(rows, staging, staged, conditionIndices)
+                    + buildSql(staging);
+
                 command.Transaction = transaction;
 
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken)
@@ -145,35 +157,28 @@ internal sealed class SqlServerBulkWriteOperations
 
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    for (var i = 0; i < keyIndices.Count; i++)
-                    {
-                        keyValues[i] = await reader.IsDBNullAsync(i, cancellationToken).ConfigureAwait(false)
-                            ? null
-                            : reader.GetValue(i);
-                    }
-
-                    var key = BulkRowMatching.KeyOf(keyValues);
-                    matched.Add(key);
+                    // The ordinal leads the OUTPUT list, so the read columns sit at a fixed offset
+                    // no matter how many of them there are.
+                    var row = reader.GetInt32(0);
+                    tally.Mark(row);
 
                     // Anything the database regenerated -- a concurrency token, a computed column
                     // -- comes back here so the entity ends up matching the row.
-                    if (readIndices.Count > 0 && byKey.TryGetValue(key, out var row))
+                    for (var i = 0; i < readIndices.Count; i++)
                     {
-                        for (var i = 0; i < readIndices.Count; i++)
-                        {
-                            var ordinal = keyIndices.Count + i;
-                            var value = await reader.IsDBNullAsync(ordinal, cancellationToken).ConfigureAwait(false)
-                                ? null
-                                : reader.GetValue(ordinal);
+                        var position = 1 + i;
+                        var value = await reader.IsDBNullAsync(position, cancellationToken)
+                            .ConfigureAwait(false)
+                            ? null
+                            : reader.GetValue(position);
 
-                            rows.SetGeneratedValue(row, readIndices[i], value);
-                        }
+                        rows.SetGeneratedValue(row, readIndices[i], value);
                     }
                 }
             }
 
-            BulkRowMatching.ThrowIfAnyMissing(rows, keyIndices, matched);
-            return matched.Count;
+            tally.ThrowIfAnyMissing(rows);
+            return tally.Count;
         }
         finally
         {
@@ -184,6 +189,35 @@ internal sealed class SqlServerBulkWriteOperations
                         CancellationToken.None))
                 .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Builds the statements that precede the set-based statement.</summary>
+    /// <remarks>
+    ///     The index is clustered, which is the opposite of the usual advice and right here: the
+    ///     join reads every staged row and needs every column, so a nonclustered index would force
+    ///     a lookup back into the heap per row. A clustered index reorganises the heap in place and
+    ///     carries the payload, and its statistics come with it.
+    /// </remarks>
+    private string Prelude(
+        IBulkRowSet rows,
+        string staging,
+        IReadOnlyList<StagingColumn> staged,
+        IReadOnlyList<int> conditionIndices)
+    {
+        if (!StagingPrelude.ShouldIndex(rows.RowCount, conditionIndices.Count, _indexThreshold))
+        {
+            return "";
+        }
+
+        var columns = string.Join(
+            ", ",
+            conditionIndices.Select(
+                i => _sqlHelper.DelimitIdentifier(StagedName(staged, i, true))));
+
+        var name = _sqlHelper.DelimitIdentifier("IX_efbulk_staging");
+
+        // SET NOCOUNT ON so the DDL contributes no result set for the reader to step over.
+        return $"SET NOCOUNT ON; CREATE CLUSTERED INDEX {name} ON {staging} ({columns}); ";
     }
 
     private string JoinPredicate(
@@ -199,15 +233,27 @@ internal sealed class SqlServerBulkWriteOperations
                 return $"t.{column} = s.{source}";
             }));
 
-    private string Output(
-        IBulkRowSet rows,
-        IReadOnlyList<int> keyIndices,
-        IReadOnlyList<int> readIndices,
-        string source)
-        => string.Join(
-            ", ",
-            keyIndices.Concat(readIndices)
-                .Select(i => $"{source}.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
+    /// <summary>
+    ///     Builds the OUTPUT list: the source ordinal, then anything to read back.
+    /// </summary>
+    /// <remarks>
+    ///     Key columns used to lead this list purely so returned rows could be matched to source
+    ///     rows by their key values. The ordinal does that directly, so the keys — which the caller
+    ///     already has — no longer cross the wire at all.
+    /// </remarks>
+    private string Output(IBulkRowSet rows, IReadOnlyList<int> readIndices, string source)
+    {
+        var parts = new List<string>(readIndices.Count + 1)
+        {
+            $"s.{_sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName)}"
+        };
+
+        parts.AddRange(
+            readIndices.Select(
+                i => $"{source}.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
+
+        return string.Join(", ", parts);
+    }
 
     private static string StagedName(
         IReadOnlyList<StagingColumn> staged,
@@ -227,13 +273,14 @@ internal sealed class SqlServerBulkWriteOperations
             + "layout.");
     }
 
-    private static async Task ExecuteNonQueryAsync(
+    private async Task ExecuteNonQueryAsync(
         SqlConnection connection,
         SqlTransaction? transaction,
         string sql,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        _settings.Apply(command);
         command.CommandText = sql;
         command.Transaction = transaction;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

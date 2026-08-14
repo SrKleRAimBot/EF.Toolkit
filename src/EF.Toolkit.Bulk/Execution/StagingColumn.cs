@@ -17,6 +17,16 @@ internal readonly record struct StagingColumn(int Index, bool UseOriginal, strin
     /// <summary>Suffix distinguishing the new value of a column that is also a condition.</summary>
     public const string NewValueSuffix = "__efbulk_new";
 
+    /// <summary>
+    ///     Name of the synthetic staging column carrying each row's position in the source.
+    /// </summary>
+    /// <remarks>
+    ///     Correlating returned rows by position rather than by key value is both cheaper and more
+    ///     correct: it costs no string building, and it survives two source rows sharing a key,
+    ///     which key-based correlation silently collapsed into one.
+    /// </remarks>
+    public const string OrdinalColumnName = "__efbulk_ord";
+
     /// <summary>Reads this column's value for <paramref name="row" />, converted for the provider.</summary>
     public object? ValueFor(IBulkRowSet rows, int row)
     {

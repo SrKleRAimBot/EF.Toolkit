@@ -4,9 +4,8 @@ namespace EFToolkit.Bulk.Configuration;
 ///     Fluent builder for context-wide EF.Toolkit.Bulk settings.
 /// </summary>
 /// <remarks>
-///     Provider packages extend this type with their own knobs — for example
-///     <c>UseTableLock()</c> in EF.Toolkit.Bulk.SqlServer — so provider-specific options only appear
-///     once that package is installed.
+///     Provider packages may extend this type with knobs of their own, so any provider-specific
+///     option appears only once that package is installed.
 /// </remarks>
 public class BulkOptionsBuilder
 {
@@ -42,12 +41,52 @@ public class BulkOptionsBuilder
         return this;
     }
 
-    /// <summary>Sets how store-generated key values are obtained.</summary>
-    /// <param name="allocation">The allocation strategy.</param>
+    /// <summary>
+    ///     Forces upserts to use <c>MERGE</c>, or to avoid it, instead of deciding from the server
+    ///     version.
+    /// </summary>
+    /// <param name="useMerge">
+    ///     <see langword="true" /> to require it, <see langword="false" /> to avoid it.
+    /// </param>
     /// <returns>The same builder, for chaining.</returns>
-    public virtual BulkOptionsBuilder KeyAllocation(KeyAllocation allocation)
+    public virtual BulkOptionsBuilder UseMerge(bool useMerge)
     {
-        Options = Options with { KeyAllocation = allocation };
+        Options = Options with { UseMerge = useMerge };
+        return this;
+    }
+
+    /// <summary>
+    ///     Sets the row count from which a staging table is indexed on its join columns.
+    /// </summary>
+    /// <param name="rows">The threshold, or zero to never index.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOptionsBuilder StagingIndexThreshold(int rows)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rows);
+        Options = Options with { StagingIndexThreshold = rows };
+        return this;
+    }
+
+    /// <summary>
+    ///     Sets whether CHECK and foreign-key constraints are enforced on bulk-copied rows.
+    /// </summary>
+    /// <param name="validate">
+    ///     <see langword="false" /> to skip validation. Faster, and it leaves the table's
+    ///     constraints untrusted, which the query optimiser then ignores when building plans.
+    /// </param>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOptionsBuilder ValidateConstraints(bool validate)
+    {
+        Options = Options with { ValidateConstraints = validate };
+        return this;
+    }
+
+    /// <summary>Sets whether triggers fire for bulk-copied rows.</summary>
+    /// <param name="fire"><see langword="false" /> to suppress them.</param>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOptionsBuilder FireTriggers(bool fire)
+    {
+        Options = Options with { FireTriggers = fire };
         return this;
     }
 

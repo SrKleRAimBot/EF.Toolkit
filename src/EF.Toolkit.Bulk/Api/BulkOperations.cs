@@ -41,78 +41,107 @@ internal static class BulkOperations
         var plan = matchProperties is null
             ? BulkEntityPlan.For(entityType, state)
             : BulkEntityPlan.ForMerge(entityType, matchProperties);
-        var batchSize = options.BatchSize ?? bulkOptions.MaxBatchSize;
+        // A synchronise removes every row its source does not contain, so it is the one operation
+        // that cannot be split: the second batch's delete arm would remove exactly what the first
+        // batch had just written. It runs as a single unit, which does mean holding the whole
+        // source in one staging table.
+        var batchSize = kind == BulkOperationKind.Synchronize
+            ? int.MaxValue
+            : options.BatchSize ?? bulkOptions.MaxBatchSize;
+
         var mergeCounts = options.MergeCounts ?? bulkOptions.MergeCounts;
 
         // Take the whole operation as one unit, matching SaveChanges: a partially-applied bulk
         // insert is far harder to reason about than a slow one.
-        var ownsTransaction = context.Database.CurrentTransaction is null;
-        var transaction = ownsTransaction
-            ? await context.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
-            : null;
+        var outcome = await BulkTransaction
+            .RunAsync(
+                context,
+                options.Savepoint,
+                async ct => await WriteBatchesAsync(
+                        context, entities, state, kind, plan, executor, connection, batchSize,
+                        mergeCounts, options, ct)
+                    .ConfigureAwait(false),
+                cancellationToken)
+            .ConfigureAwait(false);
 
+        // Only once the write has succeeded. When this owns the transaction that means committed,
+        // so a failure leaves the tracker untouched. When the caller owns it -- their own
+        // transaction, or an ambient scope -- the write is durable only when they commit, and
+        // reconciling here matches what SaveChanges does in the same position: the tracker follows
+        // the write, and a caller who rolls back is expected to discard the context with it.
+        Reconcile(context, entities, state, options.Track);
+
+        return outcome;
+    }
+
+    /// <summary>
+    ///     Writes the entities in batches, falling back to stock EF Core if the provider declines.
+    /// </summary>
+    /// <remarks>
+    ///     A fallback returns its result rather than returning out of the caller. Returning early
+    ///     used to skip the commit and let the surrounding <c>finally</c> dispose the transaction,
+    ///     so the fallback's own <c>SaveChanges</c> was rolled back while the call still reported
+    ///     success — the writes were silently discarded.
+    /// </remarks>
+    private static async Task<BulkResult> WriteBatchesAsync<TEntity>(
+        DbContext context,
+        IReadOnlyList<TEntity> entities,
+        EntityState state,
+        BulkOperationKind kind,
+        BulkEntityPlan plan,
+        IBulkOperationExecutor executor,
+        IRelationalConnection connection,
+        int batchSize,
+        MergeCounts mergeCounts,
+        BulkOperationOptions options,
+        CancellationToken cancellationToken)
+        where TEntity : class
+    {
         var written = 0;
         var merged = new BulkResult();
 
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            for (var offset = 0; offset < entities.Count; offset += batchSize)
             {
-                for (var offset = 0; offset < entities.Count; offset += batchSize)
+                var slice = Slice(entities, offset, Math.Min(batchSize, entities.Count - offset));
+                var rows = new EntityRowSet(slice, plan, state, kind, mergeCounts, options.Timeout);
+
+                if (!executor.CanExecute(rows, out var reason))
                 {
-                    var slice = Slice(entities, offset, Math.Min(batchSize, entities.Count - offset));
-                    var rows = new EntityRowSet(slice, plan, state, kind, mergeCounts);
-
-                    if (!executor.CanExecute(rows, out var reason))
-                    {
-                        return await FallBackAsync(
-                                context, entities, state, kind, options, reason, cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-
-                    var result = await executor
-                        .ExecuteAsync(rows, connection, cancellationToken)
+                    return await FallBackAsync(
+                            context, entities, state, kind, reason, cancellationToken)
                         .ConfigureAwait(false);
-
-                    if (!result.Handled)
-                    {
-                        return await FallBackAsync(
-                                context, entities, state, kind, options, result.DeclinedReason,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-
-                    written += result.RowsAffected;
-                    merged = merged with
-                    {
-                        Inserted = merged.Inserted + result.Inserted,
-                        Updated = merged.Updated + result.Updated,
-                        Deleted = merged.Deleted + result.Deleted
-                    };
-                    options.Progress?.Invoke(new BulkProgress(written, entities.Count));
                 }
-            }
-            finally
-            {
-                await connection.CloseAsync().ConfigureAwait(false);
-            }
 
-            if (transaction is not null)
-            {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                var result = await executor
+                    .ExecuteAsync(rows, connection, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!result.Handled)
+                {
+                    return await FallBackAsync(
+                            context, entities, state, kind, result.DeclinedReason,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                written += result.RowsAffected;
+                merged = merged with
+                {
+                    Inserted = merged.Inserted + result.Inserted,
+                    Updated = merged.Updated + result.Updated,
+                    Deleted = merged.Deleted + result.Deleted
+                };
+                options.Progress?.Invoke(new BulkProgress(written, entities.Count));
             }
         }
         finally
         {
-            if (transaction is not null)
-            {
-                await transaction.DisposeAsync().ConfigureAwait(false);
-            }
+            await connection.CloseAsync().ConfigureAwait(false);
         }
-
-        Reconcile(context, entities, state, options.Track);
 
         return kind is BulkOperationKind.Merge or BulkOperationKind.Synchronize
             ? merged
@@ -151,68 +180,17 @@ internal static class BulkOperations
         var order = EntityTypeGraph.TopologicalOrder(context.Model);
         var batchSize = options.BatchSize ?? bulkOptions.MaxBatchSize;
 
-        var ownsTransaction = context.Database.CurrentTransaction is null;
-        var transaction = ownsTransaction
-            ? await context.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
-            : null;
-
-        var written = 0;
         var total = byType.Sum(kv => kv.Value.Count);
 
-        try
-        {
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-
-            try
-            {
-                foreach (var entityType in order)
-                {
-                    if (!byType.TryGetValue(entityType, out var entities) || entities.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    var plan = BulkEntityPlan.For(entityType, EntityState.Added);
-                    var graph = EntityGraphPlan.For(entityType);
-
-                    foreach (var layer in EntityGraphCollector.LayerBySelfReference(entityType, entities))
-                    {
-                        // Principals in earlier types and layers now have their keys, so the
-                        // foreign keys pointing at them can be filled in. This is the step change
-                        // tracking would normally perform.
-                        foreach (var entity in layer)
-                        {
-                            foreach (var fixup in graph.Fixups)
-                            {
-                                fixup.Apply(entity);
-                            }
-                        }
-
-                        written += await WriteAsync(
-                                executor, connection, plan, layer, batchSize, cancellationToken)
-                            .ConfigureAwait(false);
-
-                        options.Progress?.Invoke(new BulkProgress(written, total));
-                    }
-                }
-            }
-            finally
-            {
-                await connection.CloseAsync().ConfigureAwait(false);
-            }
-
-            if (transaction is not null)
-            {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            if (transaction is not null)
-            {
-                await transaction.DisposeAsync().ConfigureAwait(false);
-            }
-        }
+        var written = await BulkTransaction
+            .RunAsync(
+                context,
+                options.Savepoint,
+                async ct => await WriteGraphAsync(
+                        executor, connection, byType, order, options, batchSize, total, ct)
+                    .ConfigureAwait(false),
+                cancellationToken)
+            .ConfigureAwait(false);
 
         foreach (var (_, entities) in byType)
         {
@@ -222,12 +200,69 @@ internal static class BulkOperations
         return BulkResult.ForInsert(written);
     }
 
+    private static async Task<int> WriteGraphAsync(
+        IBulkOperationExecutor executor,
+        IRelationalConnection connection,
+        Dictionary<IEntityType, List<object>> byType,
+        IReadOnlyList<IEntityType> order,
+        BulkOperationOptions options,
+        int batchSize,
+        int total,
+        CancellationToken cancellationToken)
+    {
+        var written = 0;
+
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            foreach (var entityType in order)
+            {
+                if (!byType.TryGetValue(entityType, out var entities) || entities.Count == 0)
+                {
+                    continue;
+                }
+
+                var plan = BulkEntityPlan.For(entityType, EntityState.Added);
+                var graph = EntityGraphPlan.For(entityType);
+
+                foreach (var layer in EntityGraphCollector.LayerBySelfReference(entityType, entities))
+                {
+                    // Principals in earlier types and layers now have their keys, so the foreign
+                    // keys pointing at them can be filled in. This is the step change tracking
+                    // would normally perform.
+                    foreach (var entity in layer)
+                    {
+                        foreach (var fixup in graph.Fixups)
+                        {
+                            fixup.Apply(entity);
+                        }
+                    }
+
+                    written += await WriteAsync(
+                            executor, connection, plan, layer, batchSize, options.Timeout,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    options.Progress?.Invoke(new BulkProgress(written, total));
+                }
+            }
+        }
+        finally
+        {
+            await connection.CloseAsync().ConfigureAwait(false);
+        }
+
+        return written;
+    }
+
     private static async Task<int> WriteAsync(
         IBulkOperationExecutor executor,
         IRelationalConnection connection,
         BulkEntityPlan plan,
         List<object> entities,
         int batchSize,
+        TimeSpan? timeout,
         CancellationToken cancellationToken)
     {
         var written = 0;
@@ -236,7 +271,8 @@ internal static class BulkOperations
         {
             var slice = entities.GetRange(offset, Math.Min(batchSize, entities.Count - offset));
             var rows = new EntityRowSet(
-                slice, plan, EntityState.Added, BulkOperationKind.Insert, MergeCounts.Exact);
+                slice, plan, EntityState.Added, BulkOperationKind.Insert, MergeCounts.Exact,
+                timeout);
 
             if (!executor.CanExecute(rows, out var reason))
             {
@@ -286,7 +322,6 @@ internal static class BulkOperations
         IReadOnlyList<TEntity> entities,
         EntityState state,
         BulkOperationKind kind,
-        BulkOperationOptions options,
         string? reason,
         CancellationToken cancellationToken)
         where TEntity : class
@@ -319,7 +354,7 @@ internal static class BulkOperations
 
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        Reconcile(context, entities, state, options.Track);
+        // Reconciling is the caller's last step, once the surrounding transaction has committed.
         return Result(kind, entities.Count);
     }
 

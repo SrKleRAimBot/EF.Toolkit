@@ -97,7 +97,7 @@ public sealed class BulkOptionsExtension : IDbContextOptionsExtension
             {
                 var o = Extension.Options;
                 return $"using EF.Toolkit.Bulk (threshold={o.Threshold}, maxBatchSize={o.MaxBatchSize}, "
-                    + $"keyAllocation={o.KeyAllocation}, onUnsupported={o.OnUnsupported}) ";
+                    + $"mergeCounts={o.MergeCounts}, onUnsupported={o.OnUnsupported}) ";
             }
         }
 
@@ -117,7 +117,7 @@ public sealed class BulkOptionsExtension : IDbContextOptionsExtension
             var o = Extension.Options;
             debugInfo["EF.Toolkit.Bulk:Threshold"] = o.Threshold.ToString(CultureInfo.InvariantCulture);
             debugInfo["EF.Toolkit.Bulk:MaxBatchSize"] = o.MaxBatchSize.ToString(CultureInfo.InvariantCulture);
-            debugInfo["EF.Toolkit.Bulk:KeyAllocation"] = o.KeyAllocation.ToString();
+            debugInfo["EF.Toolkit.Bulk:MergeCounts"] = o.MergeCounts.ToString();
             debugInfo["EF.Toolkit.Bulk:OnUnsupported"] = o.OnUnsupported.ToString();
             debugInfo["EF.Toolkit.Bulk:Timeout"] = o.Timeout?.ToString() ?? "(context default)";
         }

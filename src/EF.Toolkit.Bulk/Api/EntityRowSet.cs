@@ -15,7 +15,7 @@ namespace EFToolkit.Bulk.Api;
 ///     roughly 70% of a transparent save's cost. Ordering is instead the caller's responsibility,
 ///     handled once per entity type rather than once per row.
 /// </remarks>
-internal sealed class EntityRowSet : IBulkRowSet
+internal sealed class EntityRowSet : IBulkEntityRowSet
 {
     private readonly IReadOnlyList<object> _entities;
     private readonly BulkEntityPlan _plan;
@@ -25,20 +25,29 @@ internal sealed class EntityRowSet : IBulkRowSet
         BulkEntityPlan plan,
         EntityState entityState,
         BulkOperationKind operation,
-        MergeCounts mergeCounts)
+        MergeCounts mergeCounts,
+        TimeSpan? timeout = null)
     {
         _entities = entities;
         _plan = plan;
         EntityState = entityState;
         Operation = operation;
         MergeCounts = mergeCounts;
+        Timeout = timeout;
     }
+
+    /// <inheritdoc />
+    public Type EntityClrType => _plan.EntityClrType;
+
+    /// <inheritdoc />
+    public IReadOnlyList<object> Entities => _entities;
 
     public string? Schema => _plan.Schema;
     public string TableName => _plan.TableName;
     public EntityState EntityState { get; }
     public BulkOperationKind Operation { get; }
     public MergeCounts MergeCounts { get; }
+    public TimeSpan? Timeout { get; }
     public int RowCount => _entities.Count;
     public IReadOnlyList<BulkColumnInfo> Columns => _plan.Columns;
 
@@ -68,20 +77,8 @@ internal sealed class EntityRowSet : IBulkRowSet
             return;
         }
 
-        var property = Columns[column].Property;
-        var clrType = property?.ClrType;
-
-        if (value is not null && clrType is not null)
-        {
-            var target = Nullable.GetUnderlyingType(clrType) ?? clrType;
-            if (value.GetType() != target)
-            {
-                // Providers widen freely — a bigint from a sequence, a decimal from an identity —
-                // so the value is narrowed back to what the property actually declares.
-                value = Convert.ChangeType(value, target, provider: null);
-            }
-        }
-
-        setter(_entities[row], value);
+        // Reversing the value converter matters as much here as applying it on the way out: a
+        // generated column that has one would otherwise land on the entity in provider form.
+        setter(_entities[row], Columns[column].FromProviderValue(value));
     }
 }

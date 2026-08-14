@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using EFToolkit.Bulk.Execution;
+using EFToolkit.Bulk.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 
@@ -16,24 +16,32 @@ namespace EFToolkit.Bulk.Api;
 ///         give the saving straight back, so accessors are compiled to delegates once per entity
 ///         type and cached against the model — which EF treats as immutable and long-lived.
 ///     </para>
+///     <para>
+///         "Against the model" is literal: the plan and its accessors are runtime annotations on
+///         the metadata they were derived from, so they live and die with it. See
+///         <see cref="BulkAnnotations" /> for why that matters.
+///     </para>
 /// </remarks>
 internal sealed class BulkEntityPlan
 {
-    private static readonly ConcurrentDictionary<(IEntityType, EntityState), BulkEntityPlan> Cache = new();
-
     private BulkEntityPlan(
+        Type entityClrType,
         string tableName,
         string? schema,
         IReadOnlyList<BulkColumnInfo> columns,
         Func<object, object?>[] getters,
         Action<object, object?>?[] setters)
     {
+        EntityClrType = entityClrType;
         TableName = tableName;
         Schema = schema;
         Columns = columns;
         Getters = getters;
         Setters = setters;
     }
+
+    /// <summary>CLR type of the entities this plan reads.</summary>
+    public Type EntityClrType { get; }
 
     public string TableName { get; }
     public string? Schema { get; }
@@ -51,7 +59,10 @@ internal sealed class BulkEntityPlan
     ///     row; and a computed column that must be read after an insert cannot be written at all.
     /// </remarks>
     public static BulkEntityPlan For(IEntityType entityType, EntityState state)
-        => Cache.GetOrAdd((entityType, state), static key => Build(key.Item1, key.Item2, null));
+        => entityType.GetOrAddRuntimeAnnotationValue(
+            BulkAnnotations.Plan(state),
+            static key => Build(key.EntityType, key.State, null),
+            (EntityType: entityType, State: state));
 
     /// <summary>
     ///     Builds a plan for an upsert matched on <paramref name="matchProperties" />.
@@ -118,8 +129,8 @@ internal sealed class BulkEntityPlan
                     column.Name, column.StoreTypeMapping, property,
                     isWrite, isRead, isKey, isCondition));
 
-                getters.Add(BuildGetter(entityType, property));
-                setters.Add(isRead ? BuildSetter(entityType, property) : null);
+                getters.Add(Getter(property));
+                setters.Add(isRead ? Setter(property) : null);
                 continue;
             }
 
@@ -130,6 +141,21 @@ internal sealed class BulkEntityPlan
                     isRead = isStoreGenerated;
                     isWrite = !isStoreGenerated;
                     break;
+
+                case EntityState.Modified when property.IsConcurrencyToken:
+                    // Stock EF locates the row with the token's *loaded* value while assigning the
+                    // new one, which needs a before-image. A detached entity has none: whatever the
+                    // token holds now is all there is, and for the usual pattern -- load, increment,
+                    // save -- that is already the new value, so a join on it would match nothing.
+                    //
+                    // Continuing without the token in the WHERE clause is the one option that must
+                    // not be taken. It silently turns an optimistic-concurrency check into
+                    // last-writer-wins, which is a data-loss bug that looks like a working call.
+                    throw new BulkNotSupportedException(
+                        $"'{entityType.DisplayName()}.{property.Name}' is a concurrency token, and "
+                        + "the explicit bulk API works from detached objects that carry no "
+                        + "before-image to check it against. Use SaveChanges() for this entity "
+                        + "type, which tracks the loaded value and can.");
 
                 case EntityState.Modified:
                     // The key locates the row; everything else the application owns is set. A
@@ -167,11 +193,12 @@ internal sealed class BulkEntityPlan
                 isKey,
                 isCondition));
 
-            getters.Add(BuildGetter(entityType, property));
-            setters.Add(isRead ? BuildSetter(entityType, property) : null);
+            getters.Add(Getter(property));
+            setters.Add(isRead ? Setter(property) : null);
         }
 
         return new BulkEntityPlan(
+            entityType.ClrType,
             table.Name, table.Schema, columns, [.. getters], [.. setters]);
     }
 
@@ -200,10 +227,39 @@ internal sealed class BulkEntityPlan
         return property.GetValueGeneratorFactory() is null;
     }
 
-    private static Func<object, object?> BuildGetter(IEntityType entityType, IProperty property)
+    /// <summary>Gets, or compiles and caches, the getter for <paramref name="property" />.</summary>
+    /// <remarks>
+    ///     Cached on the property rather than on the plan that asked for it. Compiling an
+    ///     expression tree is expensive and a property's accessor never varies, while
+    ///     <see cref="ForMerge" /> cannot cache its plan at all — its match columns vary per call —
+    ///     and so was compiling one or two trees per column on every single merge: roughly sixty
+    ///     compilations for a thirty-column entity, every time.
+    /// </remarks>
+    private static Func<object, object?> Getter(IProperty property)
+        => property.GetOrAddRuntimeAnnotationValue(
+            BulkAnnotations.Getter, static p => BuildGetter(p!), property);
+
+    /// <summary>
+    ///     Gets, or compiles and caches, the setter for <paramref name="property" />, or
+    ///     <see langword="null" /> when it has no writable member.
+    /// </summary>
+    private static Action<object, object?>? Setter(IProperty property)
+        => property.GetOrAddRuntimeAnnotationValue(
+            BulkAnnotations.Setter, static p => BuildSetter(p!), property);
+
+    /// <summary>Compiles a delegate that reads <paramref name="property" /> off an entity.</summary>
+    /// <remarks>
+    ///     The cast target is the property's declaring type, not the entity type whose plan asked
+    ///     for the accessor. An inherited property is one <c>IProperty</c> shared by every type in
+    ///     the hierarchy, so an accessor cached against it has to be valid for all of them; casting
+    ///     to whichever type happened to be planned first would hand a sibling an accessor that
+    ///     casts to the wrong CLR type. The declaring type is valid for every instance carrying the
+    ///     member, which is exactly the set the cache entry covers.
+    /// </remarks>
+    private static Func<object, object?> BuildGetter(IProperty property)
     {
         var parameter = Expression.Parameter(typeof(object), "entity");
-        var typed = Expression.Convert(parameter, entityType.ClrType);
+        var typed = Expression.Convert(parameter, property.DeclaringType.ClrType);
         var access = Access(typed, property);
 
         return Expression
@@ -211,7 +267,7 @@ internal sealed class BulkEntityPlan
             .Compile();
     }
 
-    private static Action<object, object?>? BuildSetter(IEntityType entityType, IProperty property)
+    private static Action<object, object?>? BuildSetter(IProperty property)
     {
         // Prefer the backing field: a store-generated key is commonly exposed through a property
         // with no public setter, and EF writes such values through the field too.
@@ -224,7 +280,7 @@ internal sealed class BulkEntityPlan
 
         var entity = Expression.Parameter(typeof(object), "entity");
         var value = Expression.Parameter(typeof(object), "value");
-        var typed = Expression.Convert(entity, entityType.ClrType);
+        var typed = Expression.Convert(entity, property.DeclaringType.ClrType);
 
         var target = writableField
             ? Expression.Field(typed, property.FieldInfo!)

@@ -14,8 +14,7 @@ namespace EFToolkit.Bulk.Benchmarks;
 ///     pattern races: another writer can insert between the read and the write. The merge cannot,
 ///     because the database makes the decision.
 /// </remarks>
-[MemoryDiagnoser]
-[SimpleJob(warmupCount: 1, iterationCount: 5)]
+[Config(typeof(BenchmarkConfig))]
 public class MergeBenchmarks
 {
     private BenchmarkDatabase _database = null!;

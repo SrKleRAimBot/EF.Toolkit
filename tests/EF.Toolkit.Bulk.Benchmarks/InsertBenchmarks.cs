@@ -11,8 +11,7 @@ namespace EFToolkit.Bulk.Benchmarks;
 ///     Transparent mode replaces only how a batch is executed, so it still pays EF's change
 ///     detection and command materialisation; the explicit API skips that pipeline entirely.
 /// </remarks>
-[MemoryDiagnoser]
-[SimpleJob(warmupCount: 1, iterationCount: 5)]
+[Config(typeof(BenchmarkConfig))]
 public class InsertBenchmarks
 {
     private BenchmarkDatabase _database = null!;

@@ -10,13 +10,19 @@ namespace EFToolkit.Bulk.SqlServer.Execution;
 ///     <c>SqlBulkCopy</c> streams from an <see cref="IDataReader" />, so rows are never materialised
 ///     into an intermediate table or array. Only the members <c>SqlBulkCopy</c> actually calls are
 ///     implemented; the rest of <see cref="IDataReader" /> would only ever be dead code.
+///     <para>
+///         Values come from a <see cref="BulkRowCursor" />, which fills the whole row once. That
+///         matters because <c>SqlBulkCopy</c> asks <c>IsDBNull</c> and then <c>GetValue</c> for
+///         every cell: answering the first by fetching the value, as this used to, read each cell
+///         and ran each value converter twice.
+///     </para>
 /// </remarks>
 internal sealed class BulkRowSetDataReader : IDataReader
 {
     private readonly IBulkRowSet _rows;
     private readonly IReadOnlyList<StagingColumn> _columns;
+    private readonly BulkRowCursor _cursor;
     private readonly int _ordinalColumn;
-    private int _row = -1;
 
     /// <param name="rows">The rows to stream.</param>
     /// <param name="columns">The staging layout, in write order.</param>
@@ -31,31 +37,21 @@ internal sealed class BulkRowSetDataReader : IDataReader
     {
         _rows = rows;
         _columns = columns;
+        _cursor = new BulkRowCursor(rows, columns, includeOrdinal);
         _ordinalColumn = includeOrdinal ? columns.Count : -1;
     }
 
-    public int FieldCount => _columns.Count + (_ordinalColumn >= 0 ? 1 : 0);
+    public int FieldCount => _cursor.FieldCount;
 
-    public bool Read() => ++_row < _rows.RowCount;
+    public bool Read() => _cursor.MoveNext();
 
-    public object GetValue(int i)
-    {
-        if (i == _ordinalColumn)
-        {
-            return _row;
-        }
+    public object GetValue(int i) => _cursor[i] ?? DBNull.Value;
 
-        // ValueFor picks the loaded or the new value as the staging layout requires, and applies
-        // the value converter -- a bulk copy bypasses EF's parameter construction, where that would
-        // normally happen.
-        return _columns[i].ValueFor(_rows, _row) ?? DBNull.Value;
-    }
-
-    public bool IsDBNull(int i) => GetValue(i) == DBNull.Value;
+    public bool IsDBNull(int i) => _cursor.IsNull(i);
 
     public string GetName(int i)
         => i == _ordinalColumn
-            ? SqlServerStagingInsert.OrdinalColumnName
+            ? StagingColumn.OrdinalColumnName
             : _columns[i].Name;
 
     public Type GetFieldType(int i)
@@ -76,7 +72,7 @@ internal sealed class BulkRowSetDataReader : IDataReader
     }
 
     public int Depth => 0;
-    public bool IsClosed => _row >= _rows.RowCount;
+    public bool IsClosed => _cursor.IsExhausted;
     public int RecordsAffected => -1;
 
     public void Close() { }

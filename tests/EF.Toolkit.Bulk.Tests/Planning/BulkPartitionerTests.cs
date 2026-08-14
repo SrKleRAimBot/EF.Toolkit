@@ -243,4 +243,107 @@ public class BulkPartitionerTests
 
     private static List<IReadOnlyModificationCommand> Many(int count, Func<FakeCommand> create)
         => [.. Enumerable.Range(0, count).Select(_ => (IReadOnlyModificationCommand)create())];
+
+    // The grouping key is now the first command of each group rather than a string, so the hash
+    // has to be stable across calls or a partition could go missing from its own dictionary.
+    [Fact]
+    public void Shape_hash_is_stable_across_calls()
+    {
+        var command = FakeCommand.Insert("Orders", "A", "B");
+        var comparer = ModificationCommandShapeComparer.Instance;
+
+        var first = comparer.GetHashCode(command);
+
+        comparer.GetHashCode(command).ShouldBe(first);
+        comparer.GetHashCode(command).ShouldBe(first);
+    }
+
+    [Fact]
+    public void Commands_of_the_same_shape_hash_equal()
+    {
+        var comparer = ModificationCommandShapeComparer.Instance;
+
+        comparer.GetHashCode(FakeCommand.Insert("Orders", "A", "B"))
+            .ShouldBe(comparer.GetHashCode(FakeCommand.Insert("Orders", "A", "B")));
+    }
+
+    // A column in no role at all was invisible to the old string key, and must stay invisible:
+    // making it significant would split partitions that can share a statement.
+    [Fact]
+    public void Columns_with_no_role_do_not_affect_grouping()
+    {
+        var withRoleless = new FakeCommand
+        {
+            TableName = "Orders",
+            EntityState = EntityState.Added,
+            ColumnModifications =
+            [
+                new FakeColumn { ColumnName = "A", IsWrite = true },
+                new FakeColumn { ColumnName = "Ignored" },
+                new FakeColumn { ColumnName = "B", IsWrite = true }
+            ]
+        };
+
+        var partitions = BulkPartitioner.Partition(
+            [FakeCommand.Insert("Orders", "A", "B"), withRoleless],
+            BulkOptions.Default);
+
+        partitions.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Splits_by_schema()
+    {
+        var a = new FakeCommand
+        {
+            TableName = "Orders",
+            Schema = "sales",
+            ColumnModifications = [new FakeColumn { ColumnName = "A", IsWrite = true }]
+        };
+
+        var b = new FakeCommand
+        {
+            TableName = "Orders",
+            Schema = "archive",
+            ColumnModifications = [new FakeColumn { ColumnName = "A", IsWrite = true }]
+        };
+
+        BulkPartitioner.Partition([a, b], BulkOptions.Default).Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public void Splits_by_rows_affected_column()
+    {
+        var a = FakeCommand.Update("Inventory", "Quantity");
+        var b = new FakeCommand
+        {
+            TableName = "Inventory",
+            EntityState = EntityState.Modified,
+            ColumnModifications = [new FakeColumn { ColumnName = "Quantity", IsWrite = true }],
+            RowsAffectedColumn = new FakeRowsAffectedColumn()
+        };
+
+        BulkPartitioner.Partition([a, b], BulkOptions.Default).Count.ShouldBe(2);
+    }
+
+    // Read and condition columns are separate roles. A column read by one command and used as a
+    // condition by another must not look the same to the comparer.
+    [Fact]
+    public void Distinguishes_a_read_column_from_a_condition_column()
+    {
+        var read = new FakeCommand
+        {
+            TableName = "Orders",
+            ColumnModifications = [new FakeColumn { ColumnName = "Id", IsRead = true }]
+        };
+
+        var condition = new FakeCommand
+        {
+            TableName = "Orders",
+            ColumnModifications = [new FakeColumn { ColumnName = "Id", IsCondition = true }]
+        };
+
+        BulkPartitioner.Partition([read, condition], BulkOptions.Default).Count.ShouldBe(2);
+    }
+
 }

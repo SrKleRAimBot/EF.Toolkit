@@ -92,16 +92,23 @@ public abstract class DatabaseFixture : IAsyncLifetime
     public ShopContext CreateStockContext()
     {
         var builder = new DbContextOptionsBuilder<ShopContext>();
-        ConfigureProvider(builder, StockConnectionString);
+        ConfigureProvider(builder, StockConnectionString, retryOnFailure: false);
         return new ShopContext(builder.Options);
     }
 
     /// <summary>A context that writes through EF.Toolkit.Bulk.</summary>
     /// <param name="configure">Optional context-wide EF.Toolkit.Bulk settings.</param>
-    public ShopContext CreateBulkContext(Action<BulkOptionsBuilder>? configure = null)
+    /// <param name="retryOnFailure">
+    ///     Configures a retrying execution strategy. Such a strategy refuses a user-initiated
+    ///     transaction unless the whole operation runs inside its retry loop, so it is the
+    ///     configuration most likely to break the explicit API.
+    /// </param>
+    public ShopContext CreateBulkContext(
+        Action<BulkOptionsBuilder>? configure = null,
+        bool retryOnFailure = false)
     {
         var builder = new DbContextOptionsBuilder<ShopContext>();
-        ConfigureProvider(builder, BulkConnectionString);
+        ConfigureProvider(builder, BulkConnectionString, retryOnFailure);
         ConfigureBulk(builder, configure);
         return new ShopContext(builder.Options);
     }
@@ -117,9 +124,13 @@ public abstract class DatabaseFixture : IAsyncLifetime
     protected abstract Task<string> CreateDatabaseAsync(string databaseName);
 
     /// <summary>Applies the EF Core provider to <paramref name="builder" />.</summary>
+    /// <param name="builder">The builder being configured.</param>
+    /// <param name="connectionString">The database to point at.</param>
+    /// <param name="retryOnFailure">Whether to configure a retrying execution strategy.</param>
     protected abstract void ConfigureProvider(
         DbContextOptionsBuilder<ShopContext> builder,
-        string connectionString);
+        string connectionString,
+        bool retryOnFailure);
 
     /// <summary>Applies <c>UseBulkOperations()</c> to <paramref name="builder" />.</summary>
     /// <param name="builder">The builder being configured.</param>

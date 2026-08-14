@@ -295,6 +295,18 @@ public static class DbContextBulkExtensions
         var options = Build(configure);
         var materialized = entities as IReadOnlyList<TEntity> ?? [.. entities];
 
+        if (!options.AllowFullTableDelete)
+        {
+            // The delete arm covers the whole table -- that is what separates a synchronise from a
+            // merge -- so a partial list silently removes everything it omitted. It is easy to do
+            // by accident, impossible to undo, and costs one method call to rule out.
+            throw new BulkNotSupportedException(
+                $"BulkSynchronizeAsync deletes every {typeof(TEntity).Name} row its source does "
+                + "not contain, across the whole table. Call AllowFullTableDelete() to confirm "
+                + "that is the intent, or use BulkMergeAsync to insert and update without "
+                + "deleting anything.");
+        }
+
         if (materialized.Count == 0)
         {
             // Synchronising to nothing would empty the table. That is a defensible reading, but it

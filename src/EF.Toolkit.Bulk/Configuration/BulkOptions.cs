@@ -12,6 +12,9 @@ public sealed record BulkOptions
     /// <summary>The default value of <see cref="MaxBatchSize" />.</summary>
     public const int DefaultMaxBatchSize = 50_000;
 
+    /// <summary>The default value of <see cref="StagingIndexThreshold" />.</summary>
+    public const int DefaultStagingIndexThreshold = 5_000;
+
     /// <summary>Settings used when <c>UseBulkOperations()</c> is called with no configuration.</summary>
     public static BulkOptions Default { get; } = new();
 
@@ -28,8 +31,64 @@ public sealed record BulkOptions
     /// </summary>
     public int MaxBatchSize { get; init; } = DefaultMaxBatchSize;
 
-    /// <summary>How store-generated key values are obtained. See <see cref="KeyAllocation" />.</summary>
-    public KeyAllocation KeyAllocation { get; init; } = KeyAllocation.ReserveBlocks;
+    /// <summary>
+    ///     Whether upserts may use <c>MERGE</c> where the server supports it, or
+    ///     <see langword="null" /> to decide from the server version.
+    /// </summary>
+    /// <remarks>
+    ///     PostgreSQL 17 gained <c>MERGE ... RETURNING</c> with <c>merge_action()</c>, which reports
+    ///     the insert-versus-update split exactly and for free, carries a source ordinal so
+    ///     generated values correlate precisely, and folds a synchronise's delete into the same
+    ///     statement. Detection is automatic; this exists because a pooler or a
+    ///     PostgreSQL-compatible engine can report a version whose capabilities it does not
+    ///     actually have. Ignored on SQL Server, which has always used <c>MERGE</c>.
+    /// </remarks>
+    public bool? UseMerge { get; init; }
+
+    /// <summary>
+    ///     Row count from which a staging table gets an index on the columns the following
+    ///     statement joins it by. Zero disables it entirely. Defaults to
+    ///     <see cref="DefaultStagingIndexThreshold" />.
+    /// </summary>
+    /// <remarks>
+    ///     A freshly loaded staging table is an unindexed heap with no statistics, so the planner
+    ///     joins it to the target on a guess. For a large enough set that guess is what turns a
+    ///     staged update into a nested loop over the whole target. Building the index costs time on
+    ///     the load side, which is why it is not unconditional: below the threshold the scan is
+    ///     cheaper than the sort.
+    /// </remarks>
+    public int StagingIndexThreshold { get; init; } = DefaultStagingIndexThreshold;
+
+    /// <summary>
+    ///     Whether CHECK and foreign-key constraints are enforced on rows written by a bulk copy.
+    ///     Defaults to <see langword="true" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Only SQL Server can skip them: <c>SqlBulkCopy</c> disables constraint validation by
+    ///         default, while PostgreSQL's <c>COPY</c> always enforces it. Skipping is faster, and
+    ///         it is the wrong default for a library whose contract is that accelerating a write
+    ///         does not change its result — stock <c>SaveChanges</c> enforces both.
+    ///     </para>
+    ///     <para>
+    ///         There is a second cost that outlives the operation. Rows loaded without validation
+    ///         leave the table's CHECK and foreign-key constraints marked untrusted, and the query
+    ///         optimiser ignores untrusted constraints when simplifying plans — permanently, until
+    ///         someone revalidates them by hand.
+    ///     </para>
+    /// </remarks>
+    public bool ValidateConstraints { get; init; } = true;
+
+    /// <summary>
+    ///     Whether triggers fire for rows written by a bulk copy. Defaults to
+    ///     <see langword="true" />.
+    /// </summary>
+    /// <remarks>
+    ///     As with <see cref="ValidateConstraints" />, only SQL Server can skip them, and stock
+    ///     <c>SaveChanges</c> does not. Turning this off is faster and makes an accelerated write
+    ///     observably different from an unaccelerated one.
+    /// </remarks>
+    public bool FireTriggers { get; init; } = true;
 
     /// <summary>What to do with writes that cannot be accelerated. See <see cref="Unsupported" />.</summary>
     public Unsupported OnUnsupported { get; init; } = Unsupported.FallBack;

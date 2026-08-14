@@ -94,17 +94,38 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
         // Enlisting in EF's ambient transaction is not optional: without it SqlBulkCopy opens its
         // own implicit transaction, so copied rows would commit even when the surrounding save
         // rolls back.
-        var transaction = connection.CurrentTransaction?.GetDbTransaction() as SqlTransaction;
+        SqlTransaction? transaction = null;
+
+        if (connection.CurrentTransaction is { } current)
+        {
+            transaction = current.GetDbTransaction() as SqlTransaction;
+
+            if (transaction is null)
+            {
+                // A transaction is open but is not one SqlBulkCopy can be handed — a profiler or
+                // tracing decorator has wrapped it. Declining sends the rows through stock EF
+                // Core, which stays inside that transaction. Guessing would either escape it or
+                // fail deep inside the driver, and a bulk write that commits when the caller rolls
+                // back is the worst outcome available here.
+                return BulkExecutionResult.Declined(
+                    $"the ambient transaction is a "
+                    + $"'{current.GetDbTransaction().GetType().Name}' rather than a SqlTransaction, "
+                    + "so a bulk copy cannot enlist in it.");
+            }
+        }
+
+        var settings = BulkExecutionSettings.Resolve(rows, _options, connection);
 
         if (rows.Operation is BulkOperationKind.Merge or BulkOperationKind.Synchronize)
         {
-            return await MergeAsync(rows, sqlConnection, transaction, cancellationToken)
+            return await MergeAsync(rows, sqlConnection, transaction, settings, cancellationToken)
                 .ConfigureAwait(false);
         }
 
         if (rows.EntityState is EntityState.Modified or EntityState.Deleted)
         {
-            return await ApplySetBasedAsync(rows, sqlConnection, transaction, cancellationToken)
+            return await ApplySetBasedAsync(
+                    rows, sqlConnection, transaction, settings, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -125,7 +146,7 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
 
         if (readIndices.Count == 0)
         {
-            using var bulkCopy = CreateBulkCopy(sqlConnection, transaction);
+            using var bulkCopy = CreateBulkCopy(sqlConnection, transaction, settings);
             bulkCopy.DestinationTableName =
                 _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
 
@@ -144,10 +165,10 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
             return BulkExecutionResult.Executed(rows.RowCount);
         }
 
-        var affected = await new SqlServerStagingInsert(_sqlHelper)
+        var affected = await new SqlServerStagingInsert(_sqlHelper, settings)
             .ExecuteAsync(
                 rows, sqlConnection, transaction, writeIndices, readIndices,
-                () => CreateBulkCopy(sqlConnection, transaction), cancellationToken)
+                () => CreateBulkCopy(sqlConnection, transaction, settings), cancellationToken)
             .ConfigureAwait(false);
 
         return BulkExecutionResult.Executed(affected);
@@ -157,6 +178,7 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
         IBulkRowSet rows,
         SqlConnection connection,
         SqlTransaction? transaction,
+        BulkExecutionSettings settings,
         CancellationToken cancellationToken)
     {
         var writeIndices = new List<int>();
@@ -185,7 +207,9 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
 
         var (inserted, updated, deleted) = await new SqlServerBulkMerge(
                 _sqlHelper,
-                () => CreateBulkCopy(connection, transaction, SqlBulkCopyOptions.KeepIdentity))
+                settings,
+                () => CreateBulkCopy(
+                    connection, transaction, settings, SqlBulkCopyOptions.KeepIdentity))
             .ExecuteAsync(
                 rows, connection, transaction, writeIndices, matchIndices, readIndices,
                 rows.Operation == BulkOperationKind.Synchronize, cancellationToken)
@@ -202,6 +226,7 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
         IBulkRowSet rows,
         SqlConnection connection,
         SqlTransaction? transaction,
+        BulkExecutionSettings settings,
         CancellationToken cancellationToken)
     {
         var writeIndices = new List<int>();
@@ -249,25 +274,73 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
 
         var operations = new SqlServerBulkWriteOperations(
             _sqlHelper,
-            () => CreateBulkCopy(connection, transaction, SqlBulkCopyOptions.KeepIdentity));
+            settings,
+            _options.StagingIndexThreshold,
+            () => CreateBulkCopy(
+                connection, transaction, settings, SqlBulkCopyOptions.KeepIdentity));
 
         var affected = rows.EntityState == EntityState.Deleted
             ? await operations
-                .DeleteAsync(
-                    rows, connection, transaction, conditionIndices, keyIndices, cancellationToken)
+                .DeleteAsync(rows, connection, transaction, conditionIndices, cancellationToken)
                 .ConfigureAwait(false)
             : await operations
                 .UpdateAsync(
-                    rows, connection, transaction, writeIndices, conditionIndices, keyIndices,
-                    readIndices, cancellationToken)
+                    rows, connection, transaction, writeIndices, conditionIndices, readIndices,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
         return BulkExecutionResult.Executed(affected);
     }
 
+    /// <summary>
+    ///     The flags that keep a bulk copy behaving the way stock <c>SaveChanges</c> does.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <c>SqlBulkCopy</c> defaults to skipping constraint validation and suppressing
+    ///         triggers, neither of which stock EF does. Left alone, enabling this library could
+    ///         change what a write does — and loading rows without validation additionally marks
+    ///         the table's CHECK and foreign-key constraints untrusted, which the optimiser then
+    ///         ignores when building plans for every later query.
+    ///     </para>
+    ///     <para>
+    ///         Applied only when writing to the user's own table. A staging table has no
+    ///         constraints and no triggers, so paying for either there would buy nothing —
+    ///         the merge that follows enforces them against the real table anyway.
+    ///     </para>
+    ///     <para>
+    ///         <c>KeepNulls</c> is not configurable: without it the server substitutes a column's
+    ///         default wherever a null is written, so a property EF decided to write as null would
+    ///         silently become something else.
+    ///     </para>
+    /// </remarks>
+    private SqlBulkCopyOptions Semantics(SqlBulkCopyOptions options)
+    {
+        // KeepIdentity marks the staging paths, which write to a private table.
+        if (options.HasFlag(SqlBulkCopyOptions.KeepIdentity))
+        {
+            return SqlBulkCopyOptions.Default;
+        }
+
+        var semantics = SqlBulkCopyOptions.KeepNulls;
+
+        if (_options.ValidateConstraints)
+        {
+            semantics |= SqlBulkCopyOptions.CheckConstraints;
+        }
+
+        if (_options.FireTriggers)
+        {
+            semantics |= SqlBulkCopyOptions.FireTriggers;
+        }
+
+        return semantics;
+    }
+
     /// <summary>Creates a bulk copy enlisted in the current transaction.</summary>
     /// <param name="connection">The connection to write through.</param>
     /// <param name="transaction">EF's ambient transaction, if any.</param>
+    /// <param name="settings">The resolved per-operation settings.</param>
     /// <param name="options">
     ///     Pass <see cref="SqlBulkCopyOptions.KeepIdentity" /> when copying into a staging table
     ///     whose columns were derived with <c>SELECT ... INTO</c>. That syntax carries the IDENTITY
@@ -277,18 +350,18 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
     private SqlBulkCopy CreateBulkCopy(
         SqlConnection connection,
         SqlTransaction? transaction,
+        BulkExecutionSettings settings,
         SqlBulkCopyOptions options = SqlBulkCopyOptions.Default)
     {
-        var bulkCopy = new SqlBulkCopy(connection, options, transaction)
+        var bulkCopy = new SqlBulkCopy(connection, options | Semantics(options), transaction)
         {
             BatchSize = _options.MaxBatchSize,
             EnableStreaming = true
         };
 
-        if (_options.Timeout is { } timeout)
-        {
-            bulkCopy.BulkCopyTimeout = (int)timeout.TotalSeconds;
-        }
+        // Reading the property back as the fallback keeps SqlBulkCopy's own default when nothing
+        // was configured, rather than this deciding what that default should be.
+        bulkCopy.BulkCopyTimeout = settings.Seconds(bulkCopy.BulkCopyTimeout);
 
         return bulkCopy;
     }

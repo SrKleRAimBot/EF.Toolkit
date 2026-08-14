@@ -1,11 +1,15 @@
+using System.Globalization;
+using DotNet.Testcontainers.Containers;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
 
 namespace EFToolkit.Bulk.Benchmarks;
 
 /// <summary>
-///     A PostgreSQL container with two databases — one reached through stock EF Core, one through
+///     A database container with two databases — one reached through stock EF Core, one through
 ///     EF.Toolkit.Bulk — shared by every benchmark class.
 /// </summary>
 /// <remarks>
@@ -14,56 +18,26 @@ namespace EFToolkit.Bulk.Benchmarks;
 /// </remarks>
 internal sealed class BenchmarkDatabase : IAsyncDisposable
 {
-    private readonly PostgreSqlContainer _container;
+    private readonly IContainer _container;
 
-    private BenchmarkDatabase(PostgreSqlContainer container, string stock, string bulk)
+    private BenchmarkDatabase(IContainer container, string stock, string bulk)
     {
         _container = container;
         StockConnectionString = stock;
         BulkConnectionString = bulk;
     }
 
+    public static BenchmarkEngine Engine => BenchmarkEngineSelection.Current;
+
     public string StockConnectionString { get; }
     public string BulkConnectionString { get; }
 
     public static BenchmarkDatabase Start()
-    {
-        var container = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
-            .WithDatabase("postgres")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        => Engine == BenchmarkEngine.SqlServer ? StartSqlServer() : StartPostgreSql();
 
-        container.StartAsync().GetAwaiter().GetResult();
+    public BenchmarkContext StockContext() => new(Options(StockConnectionString, bulk: false));
 
-        var admin = container.GetConnectionString();
-        var database = new BenchmarkDatabase(
-            container,
-            CreateDatabase(admin, "bench_stock"),
-            CreateDatabase(admin, "bench_bulk"));
-
-        using (var stock = database.StockContext())
-        {
-            stock.Database.EnsureCreated();
-        }
-
-        using var bulk = database.BulkContext();
-        bulk.Database.EnsureCreated();
-
-        return database;
-    }
-
-    public BenchmarkContext StockContext()
-        => new(new DbContextOptionsBuilder<BenchmarkContext>()
-            .UseNpgsql(StockConnectionString)
-            .Options);
-
-    public BenchmarkContext BulkContext()
-        => new(new DbContextOptionsBuilder<BenchmarkContext>()
-            .UseNpgsql(BulkConnectionString)
-            .UseNpgsqlBulk()
-            .Options);
+    public BenchmarkContext BulkContext() => new(Options(BulkConnectionString, bulk: true));
 
     /// <summary>Empties both databases and resets their identity sequences.</summary>
     public void Reset()
@@ -84,7 +58,7 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
     {
         Reset();
 
-        using (var stock = BulkStockContext())
+        using (var stock = new BenchmarkContext(Options(StockConnectionString, bulk: true)))
         {
             stock.BulkInsert(Data.Customers(rows));
         }
@@ -93,16 +67,91 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
         bulk.BulkInsert(Data.Customers(rows));
     }
 
-    /// <summary>The stock database, reached through EF.Toolkit.Bulk purely so seeding is fast.</summary>
-    private BenchmarkContext BulkStockContext()
-        => new(new DbContextOptionsBuilder<BenchmarkContext>()
-            .UseNpgsql(StockConnectionString)
-            .UseNpgsqlBulk()
-            .Options);
+    /// <summary>Fills the bulk database with <paramref name="rows" /> wide customers.</summary>
+    public void SeedWide(int rows)
+    {
+        Reset();
+
+        using var bulk = BulkContext();
+        bulk.BulkInsert(Data.WideCustomers(rows));
+    }
 
     public async ValueTask DisposeAsync() => await _container.DisposeAsync();
 
-    private static string CreateDatabase(string admin, string name)
+    private static DbContextOptions<BenchmarkContext> Options(string connectionString, bool bulk)
+    {
+        var builder = new DbContextOptionsBuilder<BenchmarkContext>();
+
+        if (Engine == BenchmarkEngine.SqlServer)
+        {
+            builder.UseSqlServer(connectionString);
+            if (bulk)
+            {
+                builder.UseSqlServerBulk();
+            }
+        }
+        else
+        {
+            builder.UseNpgsql(connectionString);
+            if (bulk)
+            {
+                builder.UseNpgsqlBulk();
+            }
+        }
+
+        return builder.Options;
+    }
+
+    private static BenchmarkDatabase StartPostgreSql()
+    {
+        var container = new PostgreSqlBuilder("postgres:16-alpine")
+            .WithDatabase("postgres")
+            .WithUsername("postgres")
+            .WithPassword("postgres")
+            .Build();
+
+        container.StartAsync().GetAwaiter().GetResult();
+
+        var admin = container.GetConnectionString();
+
+        return Create(
+            container,
+            name => CreateNpgsqlDatabase(admin, name));
+    }
+
+    private static BenchmarkDatabase StartSqlServer()
+    {
+        var container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest")
+            .Build();
+
+        container.StartAsync().GetAwaiter().GetResult();
+
+        var admin = container.GetConnectionString();
+
+        return Create(
+            container,
+            name => CreateSqlServerDatabase(admin, name));
+    }
+
+    private static BenchmarkDatabase Create(IContainer container, Func<string, string> createDatabase)
+    {
+        var database = new BenchmarkDatabase(
+            container,
+            createDatabase("bench_stock"),
+            createDatabase("bench_bulk"));
+
+        using (var stock = database.StockContext())
+        {
+            stock.Database.EnsureCreated();
+        }
+
+        using var bulk = database.BulkContext();
+        bulk.Database.EnsureCreated();
+
+        return database;
+    }
+
+    private static string CreateNpgsqlDatabase(string admin, string name)
     {
         using (var connection = new NpgsqlConnection(admin))
         {
@@ -115,12 +164,49 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
         return new NpgsqlConnectionStringBuilder(admin) { Database = name }.ConnectionString;
     }
 
+    private static string CreateSqlServerDatabase(string admin, string name)
+    {
+        using (var connection = new SqlConnection(admin))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"CREATE DATABASE [{name}]";
+            command.ExecuteNonQuery();
+        }
+
+        return new SqlConnectionStringBuilder(admin) { InitialCatalog = name }.ConnectionString;
+    }
+
     private static void Truncate(string connectionString)
     {
+        if (Engine == BenchmarkEngine.SqlServer)
+        {
+            TruncateSqlServer(connectionString);
+            return;
+        }
+
         using var connection = new NpgsqlConnection(connectionString);
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "TRUNCATE \"Customers\" RESTART IDENTITY CASCADE";
+        command.CommandText =
+            "TRUNCATE \"Customers\", \"WideCustomers\" RESTART IDENTITY CASCADE";
         command.ExecuteNonQuery();
+    }
+
+    private static void TruncateSqlServer(string connectionString)
+    {
+        using var connection = new SqlConnection(connectionString);
+        connection.Open();
+
+        foreach (var table in new[] { "Customers", "WideCustomers" })
+        {
+            using var command = connection.CreateCommand();
+
+            // TRUNCATE resets the identity seed on its own, which is what keeps generated keys
+            // identical between the two databases from one iteration to the next.
+            command.CommandText = string.Create(
+                CultureInfo.InvariantCulture, $"TRUNCATE TABLE [{table}]");
+            command.ExecuteNonQuery();
+        }
     }
 }

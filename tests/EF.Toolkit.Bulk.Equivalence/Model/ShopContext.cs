@@ -10,6 +10,10 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<OrderNote> OrderNotes => Set<OrderNote>();
     public DbSet<Inventory> Inventories => Set<Inventory>();
+    public DbSet<Shipment> Shipments => Set<Shipment>();
+    public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
+    public DbSet<Reading> Readings => Set<Reading>();
+    public DbSet<Sensor> Sensors => Set<Sensor>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -70,6 +74,44 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
             // A client-managed token: EF puts it in the WHERE clause using the loaded value while
             // the SET clause assigns the new one, so the column is both a condition and written.
             b.Property(x => x.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<Shipment>(b =>
+        {
+            // Store-generated *and* converted. The database hands back a plain int, so whatever
+            // propagates it onto the entity has to run the converter in reverse — the direction
+            // that is easy to forget, because writes look correct without it.
+            b.Property(x => x.Id)
+                .HasConversion(id => id.Value, value => new ShipmentId(value))
+                .ValueGeneratedOnAdd();
+
+            b.Property(x => x.Code).HasMaxLength(64).IsRequired();
+        });
+
+        modelBuilder.Entity<AuditEntry>(b =>
+        {
+            b.Property(x => x.Action).HasMaxLength(64).IsRequired();
+
+            // A database default on a non-key column. EF omits the column from the insert whenever
+            // the property holds the CLR default and reads the generated value back instead.
+            b.Property(x => x.Severity).HasDefaultValue(3);
+        });
+
+        modelBuilder.Entity<Sensor>(b => b.Property(x => x.Name).HasMaxLength(64).IsRequired());
+
+        modelBuilder.Entity<Reading>(b =>
+        {
+            // A CHECK constraint and a foreign key, both of which SqlBulkCopy skips unless asked.
+            b.ToTable(t => t.HasCheckConstraint("CK_Reading_Value", "\"Value\" >= 0"));
+
+            b.HasOne(x => x.Sensor)
+                .WithMany()
+                .HasForeignKey(x => x.SensorId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // A default on a nullable column: without KeepNulls the server substitutes this
+            // wherever a null is written, so an explicit null would silently become 'unlabelled'.
+            b.Property(x => x.Label).HasMaxLength(64).HasDefaultValue("unlabelled");
         });
 
         modelBuilder.Entity<Category>(b =>

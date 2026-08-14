@@ -16,8 +16,7 @@ public abstract class PostgreSqlFixture : DatabaseFixture
 
     protected override async Task StartContainerAsync()
     {
-        _container = new PostgreSqlBuilder()
-            .WithImage(Image)
+        _container = new PostgreSqlBuilder(Image)
             .WithDatabase("postgres")
             .WithUsername("postgres")
             .WithPassword("postgres")
@@ -64,8 +63,17 @@ public abstract class PostgreSqlFixture : DatabaseFixture
 
     protected override void ConfigureProvider(
         DbContextOptionsBuilder<ShopContext> builder,
-        string connectionString)
-        => builder.UseNpgsql(connectionString);
+        string connectionString,
+        bool retryOnFailure)
+        => builder.UseNpgsql(
+            connectionString,
+            o =>
+            {
+                if (retryOnFailure)
+                {
+                    o.EnableRetryOnFailure();
+                }
+            });
 
     protected override void ConfigureBulk(
         DbContextOptionsBuilder<ShopContext> builder,

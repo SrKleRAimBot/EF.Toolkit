@@ -25,8 +25,7 @@ public sealed class SqlServerFixture : DatabaseFixture
     /// </remarks>
     protected override async Task StartContainerAsync()
     {
-        _container = new MsSqlBuilder()
-            .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
+        _container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest")
             .Build();
 
         // Emulated startup takes well over a minute on Apple Silicon, against a few seconds on a
@@ -113,8 +112,17 @@ public sealed class SqlServerFixture : DatabaseFixture
 
     protected override void ConfigureProvider(
         DbContextOptionsBuilder<ShopContext> builder,
-        string connectionString)
-        => builder.UseSqlServer(connectionString);
+        string connectionString,
+        bool retryOnFailure)
+        => builder.UseSqlServer(
+            connectionString,
+            o =>
+            {
+                if (retryOnFailure)
+                {
+                    o.EnableRetryOnFailure();
+                }
+            });
 
     protected override void ConfigureBulk(
         DbContextOptionsBuilder<ShopContext> builder,

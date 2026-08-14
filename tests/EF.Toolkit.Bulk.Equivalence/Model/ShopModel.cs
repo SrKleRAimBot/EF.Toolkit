@@ -96,6 +96,62 @@ public class Category
     public List<Category> Children { get; } = [];
 }
 
+/// <summary>
+///     A strongly-typed key over a store-generated column, so the value converter has to run on the
+///     way <em>back</em> as well as on the way out. Nothing else in this model covers that
+///     direction: <see cref="Order.Status" /> is converted but application-supplied, and every
+///     other generated key is a bare primitive that needs no conversion at all.
+/// </summary>
+public class Shipment
+{
+    public ShipmentId Id { get; set; }
+    public string Code { get; set; } = "";
+}
+
+/// <summary>Wraps a generated <see cref="int" /> key, converted to and from the store.</summary>
+public readonly record struct ShipmentId(int Value);
+
+/// <summary>
+///     Carries a non-key column the database fills in, so an insert has a value to read back that
+///     is not a key. PostgreSQL declines that shape — COPY returns nothing, and a staged insert
+///     cannot correlate a non-key generated value back to its row before version 17 — so this is
+///     the model that reliably exercises the fall-back-to-stock-EF path.
+/// </summary>
+public class AuditEntry
+{
+    public int Id { get; set; }
+    public string Action { get; set; } = "";
+
+    /// <summary>Left at the CLR default so the database's default applies and must be read back.</summary>
+    public int Severity { get; set; }
+}
+
+/// <summary>
+///     Carries the things a bulk copy can silently skip: a CHECK constraint, a foreign key, and a
+///     nullable column with a database default. SqlBulkCopy validates none of them by default and
+///     substitutes the default wherever a null is written, so an accelerated insert could accept
+///     rows stock EF rejects and store values it was never given.
+/// </summary>
+public class Reading
+{
+    public int Id { get; set; }
+
+    public int SensorId { get; set; }
+    public Sensor? Sensor { get; set; }
+
+    /// <summary>Constrained to be non-negative.</summary>
+    public int Value { get; set; }
+
+    /// <summary>Nullable with a database default, so KeepNulls decides what a null means.</summary>
+    public string? Label { get; set; }
+}
+
+public class Sensor
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+}
+
 public enum OrderStatus
 {
     Draft,

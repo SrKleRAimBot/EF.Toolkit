@@ -70,7 +70,7 @@ aliases `UseNpgsqlBulk()` or `UseSqlServerBulk()` instead.
 | Ordering (foreign keys) | handled by EF | yours, or `IncludeGraph()` |
 | Change tracking | full, as always | opt in with `Track()` |
 | Interceptors | `ISaveChangesInterceptor` fires | not a `SaveChanges` |
-| Typical speedup | 1.5–4.7x | 4–13x |
+| Typical speedup | 1.9–7.5x | 3.4–18x |
 | Best for | existing code, mixed graphs | loading data |
 
 Use transparent mode always — it is free and never changes results. Reach for the explicit API when
@@ -234,8 +234,10 @@ Context-wide:
 .UseBulkOperations(b => b
     .Threshold(100)                                // rows before bulk engages in transparent mode
     .MaxBatchSize(50_000)
-    .KeyAllocation(KeyAllocation.ReserveBlocks)    // or .Staging
     .MergeCounts(MergeCounts.Exact)                // or .Approximate
+    .StagingIndexThreshold(5_000)                  // rows before a staging table is indexed
+    .ValidateConstraints(true)                     // CHECK/FK enforcement on bulk-copied rows
+    .FireTriggers(true)                            // triggers fire for bulk-copied rows
     .OnUnsupported(Unsupported.FallBack))          // or .Throw, to assert the fast path in CI
 ```
 
@@ -262,6 +264,11 @@ o.MatchOn(c => c.Email).MergeCounts(MergeCounts.Approximate)
 inserted tuple. That is a widely-used convention rather than a documented guarantee and can
 misreport under concurrent access — but it is free. **Both settings write identical data**, and the
 setting is ignored on SQL Server, which is exact either way.
+
+On **PostgreSQL 17 and later the setting does nothing either**: `MERGE … RETURNING merge_action()`
+reports the split exactly, per row, at no cost, so neither the pre-merge count nor the `xmax`
+convention is needed. Detection is automatic; `UseMerge(false)` forces the older path if a pooler or
+a PostgreSQL-compatible engine reports a version whose capabilities it does not have.
 </details>
 
 ---
@@ -290,61 +297,81 @@ without this it looks identical to success.
 
 ## Performance
 
-BenchmarkDotNet, five iterations after warmup, PostgreSQL 16 in Docker on an M-series Mac. Read the
-ratios rather than the absolute times, and reproduce with:
+BenchmarkDotNet, three warmup iterations and fifteen measured, PostgreSQL 16 in Docker on an
+M-series Mac. Read the ratios rather than the absolute times — a laptop running database containers
+is not a quiet machine, and stock EF itself measured 25% slower between two runs of the same
+baseline. Reproduce with:
 
 ```bash
 dotnet run --project tests/EF.Toolkit.Bulk.Benchmarks -c Release -- --filter "*"
+EFBULK_BENCH_ENGINE=sqlserver dotnet run --project tests/EF.Toolkit.Bulk.Benchmarks -c Release -- --filter "*"
 ```
 
-**Insert**, one table, server-generated keys:
+**Insert**, five columns, server-generated keys:
 
-| Rows | | Time | vs stock | Allocated |
-| ---: | --- | ---: | ---: | ---: |
-| 1,000 | `SaveChanges()`, stock EF | 53 ms | — | 8.3 MB |
-| | `SaveChanges()`, EF.Toolkit.Bulk | 32 ms | **1.7x** | 4.9 MB |
-| | `BulkInsertAsync` | 7.9 ms | **6.8x** | 0.24 MB |
-| 10,000 | `SaveChanges()`, stock EF | 385 ms | — | 75.8 MB |
-| | `SaveChanges()`, EF.Toolkit.Bulk | 262 ms | **1.5x** | 46.3 MB |
-| | `BulkInsertAsync` | 41 ms | **9.3x** | 1.8 MB |
-| 100,000 | `SaveChanges()`, stock EF | 2,620 ms | — | 748 MB |
-| | `SaveChanges()`, EF.Toolkit.Bulk | 627 ms | **4.2x** | 456 MB |
-| | `BulkInsertAsync` | 266 ms | **9.9x** | 16.9 MB |
+| Rows | | Time | vs stock | Rows/sec | Allocated |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 1,000 | `SaveChanges()`, stock EF | 62 ms | — | 16,145 | 8.3 MB |
+| | `SaveChanges()`, EF.Toolkit.Bulk | 33 ms | **1.9x** | 30,569 | 4.3 MB |
+| | `BulkInsertAsync` | 18 ms | **3.4x** | 54,980 | 0.21 MB |
+| 10,000 | `SaveChanges()`, stock EF | 369 ms | — | 27,115 | 75.8 MB |
+| | `SaveChanges()`, EF.Toolkit.Bulk | 132 ms | **2.8x** | 75,593 | 41.9 MB |
+| | `BulkInsertAsync` | 51 ms | **7.3x** | 196,906 | 1.2 MB |
+| 100,000 | `SaveChanges()`, stock EF | 3,735 ms | — | 26,770 | 748 MB |
+| | `SaveChanges()`, EF.Toolkit.Bulk | 651 ms | **5.7x** | 153,648 | 412 MB |
+| | `BulkInsertAsync` | 310 ms | **12.0x** | 322,360 | 11.6 MB |
+
+**Insert**, thirty columns — decimals with scale, GUIDs, dates and times, long nullable text, a byte
+array, and an enum through a value converter. This is the shape where per-column costs show:
+
+| Rows | | Time | vs stock | Rows/sec | Allocated |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 10,000 | `SaveChanges()`, stock EF | 838 ms | — | 11,927 | 296 MB |
+| | `SaveChanges()`, EF.Toolkit.Bulk | 122 ms | **6.9x** | 81,782 | 98.9 MB |
+| | `BulkInsertAsync` | 56 ms | **14.9x** | 178,079 | 3.0 MB |
+| 100,000 | `SaveChanges()`, stock EF | 9,019 ms | — | 11,087 | 2,943 MB |
+| | `SaveChanges()`, EF.Toolkit.Bulk | 1,207 ms | **7.5x** | 82,882 | 982 MB |
+| | `BulkInsertAsync` | 507 ms | **17.8x** | 197,138 | 28.1 MB |
 
 **Update, delete and upsert** at 10,000 rows. Seeding and loading happen outside the measurement, so
 only the write is timed:
 
-| | Time | vs baseline | Allocated |
-| --- | ---: | ---: | ---: |
-| Update — `SaveChanges()`, stock EF | 319 ms | — | 45.0 MB |
-| Update — `SaveChanges()`, EF.Toolkit.Bulk | 143 ms | **2.2x** | 33.0 MB |
-| Update — `BulkUpdateAsync` | 73 ms | **4.4x** | 7.5 MB |
-| Delete — `SaveChanges()`, stock EF | 277 ms | — | 33.2 MB |
-| Delete — `SaveChanges()`, EF.Toolkit.Bulk | 135 ms | **2.1x** | 31.2 MB |
-| Delete — `BulkDeleteAsync` | 22 ms | **12.6x** | 6.5 MB |
-| Upsert — read-then-decide, then `SaveChanges()` | 435 ms | — | 65.9 MB |
-| Upsert — `BulkMergeAsync` | 120 ms | **3.6x** | 9.6 MB |
+| | Time | vs baseline | Rows/sec | Allocated |
+| --- | ---: | ---: | ---: | ---: |
+| Update — `SaveChanges()`, stock EF | 350 ms | — | 28,578 | 46.2 MB |
+| Update — `SaveChanges()`, EF.Toolkit.Bulk | 104 ms | **3.3x** | 95,701 | 24.4 MB |
+| Update — `BulkUpdateAsync` | 86 ms | **4.1x** | 116,510 | 1.4 MB |
+| Delete — `SaveChanges()`, stock EF | 255 ms | — | 39,258 | 36.4 MB |
+| Delete — `SaveChanges()`, EF.Toolkit.Bulk | 40 ms | **6.4x** | 251,665 | 24.2 MB |
+| Delete — `BulkDeleteAsync` | 26 ms | **9.9x** | 388,112 | 0.39 MB |
+| Upsert — read-then-decide, then `SaveChanges()` | 397 ms | — | 25,200 | 65.7 MB |
+| Upsert — `BulkMergeAsync` | 139 ms | **2.8x** | 71,779 | 8.2 MB |
 
 EF Core has no upsert, so the merge baseline is what an application actually writes by hand: load
 the existing rows, decide per item whether to add or update, save.
 
 ### Reading these numbers
 
-**Memory is the bigger story.** At 100,000 rows stock EF allocates **748 MB** and triggers gen-2
-collections; `BulkInsertAsync` allocates **17 MB** — 44x less — and triggers none. On a memory-constrained host
-that is the difference between working and not.
+**Memory is the bigger story, and it grows with the row.** At 100,000 five-column rows stock EF
+allocates 748 MB against `BulkInsertAsync`'s 11.6 MB. Widen the row to thirty columns and stock EF
+allocates **2.9 GB** — triggering eleven gen-2 collections — where `BulkInsertAsync` allocates
+**28 MB** and triggers none. On a memory-constrained host that is the difference between working and
+not.
 
-**Transparent mode improves with scale** — 1.5x at small sizes, 4.2x at 100,000 rows. It replaces
-how a batch is executed, but everything before that still happens: change detection, a modification
-command per row, and the dependency ordering that keeps foreign keys safe. That cost is largely
-fixed, so its share shrinks as the row count grows.
+**The wide table is where per-cell work shows.** The explicit API compiles a delegate per column
+that carries a value from the property to the wire in its own type, so nothing is boxed on the way;
+that is worth 3x the allocations at thirty columns and almost nothing at five, which is exactly why
+the narrow table alone was a misleading benchmark.
 
-**The explicit API is bounded by your database, not by EF.Toolkit.Bulk.** At 100,000 rows, dropping the
-unique index from the benchmark table takes the same insert from ~253 ms to a 160 ms median — about
-a third of the time is index maintenance no client-side change can touch. That is the healthy
-outcome: at scale the remaining cost is the work the database genuinely has to do.
+**Transparent mode improves with scale** — it replaces how a batch is executed, but everything
+before that still happens: change detection, a modification command per row, and the dependency
+ordering that keeps foreign keys safe. That cost is largely fixed, so its share shrinks as the row
+count grows. It cannot reach the explicit API's allocation figures at any size, because EF has
+already boxed every value into a modification command before this library sees the row.
 
----
+**The explicit API is bounded by your database, not by EF.Toolkit.Bulk.** At 100,000 rows a third of
+the insert time is index maintenance no client-side change can touch. That is the healthy outcome:
+at scale the remaining cost is work the database genuinely has to do.
 
 ## How it works
 
@@ -361,14 +388,24 @@ Each batch is grouped by `(table, state, column shape)` and dispatched to a prov
 | Insert | binary `COPY` | `SqlBulkCopy` |
 | Generated keys | sequence values reserved up front | staging table + `MERGE … OUTPUT` |
 | Update / delete | staging + `UPDATE … FROM` / `DELETE … USING`, `RETURNING` | staging + `UPDATE/DELETE … FROM`, `OUTPUT` |
-| Upsert | `INSERT … ON CONFLICT … DO UPDATE` | `MERGE` with `$action` |
-| Synchronize | plus `DELETE … WHERE NOT EXISTS` | `WHEN NOT MATCHED BY SOURCE THEN DELETE` |
+| Upsert | `MERGE … RETURNING merge_action()` on 17+, else `INSERT … ON CONFLICT … DO UPDATE` | `MERGE` with `$action` |
+| Synchronize | `WHEN NOT MATCHED BY SOURCE` on 17+, else a second `DELETE … WHERE NOT EXISTS` | `WHEN NOT MATCHED BY SOURCE THEN DELETE` |
 
-The key-generation split is not arbitrary. PostgreSQL's `RETURNING` cannot reference the staging
-table, so before PostgreSQL 17 a staged insert has no documented way to map generated keys back to
-the rows that produced them — reserving sequence values up front makes correlation exact on every
-version. SQL Server has no sequence behind an `IDENTITY` column, but `MERGE`'s `OUTPUT` *can*
-reference the source, so staging with an ordinal is exact there.
+Update, delete and merge all carry a **source ordinal** through the staging table, so a returned row
+maps back to the row that produced it by position rather than by matching key values. SQL Server's
+`OUTPUT` may name a table from the statement's `FROM` clause, and PostgreSQL's `RETURNING` may name
+one from `FROM` or `USING`, so both engines can hand it back directly.
+
+`INSERT … ON CONFLICT … RETURNING` is the exception: it can only name columns of the target row,
+never the source. That is also why PostgreSQL reserves sequence values for generated keys before
+version 17 — a staged insert has no documented way to map them back otherwise. PostgreSQL 17's
+`MERGE … RETURNING` *can* see the source, so on 17 and later neither the reservation nor the
+insert-versus-update counting workarounds are needed. SQL Server has no sequence behind an
+`IDENTITY` column, so it stages with an ordinal on every version.
+
+A staging table is analysed before it is joined, and indexed on its join columns above
+`StagingIndexThreshold` rows. A freshly loaded temporary table has no statistics — autovacuum never
+touches one on PostgreSQL — so without that the planner joins it to the target on a guess.
 
 **The explicit API** skips that pipeline entirely, reading values through accessors compiled once
 per entity type and cached against the model. It takes on ordering itself: a topological sort of
@@ -387,7 +424,7 @@ ADO, not through EF, so a self-consistently wrong conversion cannot hide), full 
 including original values, and failure behaviour. Four negative controls prove the harness detects
 divergence rather than silently comparing nothing.
 
-151 tests run against PostgreSQL 16, PostgreSQL 17 and SQL Server 2022.
+256 tests run against PostgreSQL 16, PostgreSQL 17 and SQL Server 2022.
 
 ---
 
@@ -402,7 +439,19 @@ divergence rather than silently comparing nothing.
 - `IncludeGraph()` rejects two entity types that reference each other; breaking such a cycle needs a
   second pass that `SaveChanges()` performs and this does not.
 - Sequence block reservation consumes values on rollback — the same behaviour as stock EF, since
-  sequence allocation is non-transactional.
+  sequence allocation is non-transactional. PostgreSQL 17 and later do not reserve at all.
+- `BulkUpdateAsync` refuses an entity type with a concurrency token. Checking one needs the value as
+  it was loaded, and the explicit API works from detached objects that do not carry it — for the
+  usual load-increment-save pattern the token already holds the *new* value. `SaveChanges()` tracks
+  the before-image and handles these correctly.
+- `BulkSynchronizeAsync` requires `AllowFullTableDelete()`. Its delete arm covers the whole table,
+  so a partial list removes everything the list omitted.
+- Rows of one table but differing column shape — a column with a database default, set on some rows
+  and left null on others — are written shape by shape, so store-generated keys are handed out in a
+  different order than `SaveChanges()` assigns them. Every row keeps its own key and its own values;
+  only the numbering differs.
+- A bulk copy cannot enlist in a `DbTransaction` wrapped by a profiler or tracing decorator. Those
+  writes fall back to stock EF rather than escaping the transaction.
 
 ## Sample
 

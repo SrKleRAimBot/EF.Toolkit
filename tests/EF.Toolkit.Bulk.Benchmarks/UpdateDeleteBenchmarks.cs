@@ -11,8 +11,7 @@ namespace EFToolkit.Bulk.Benchmarks;
 ///     the same cost to get the rows into memory; what differs is turning N pending changes into
 ///     statements, which is the thing being compared.
 /// </remarks>
-[MemoryDiagnoser]
-[SimpleJob(warmupCount: 1, iterationCount: 5)]
+[Config(typeof(BenchmarkConfig))]
 public class UpdateDeleteBenchmarks
 {
     private BenchmarkDatabase _database = null!;

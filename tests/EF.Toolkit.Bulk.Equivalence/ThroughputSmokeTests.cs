@@ -123,12 +123,22 @@ public abstract class ThroughputSmokeTests(DatabaseFixture fixture, ITestOutputH
             $"BulkInsertAsync ({explicitApi.TotalMilliseconds:F0} ms) was not faster than stock EF "
             + $"({stock.TotalMilliseconds:F0} ms).");
 
-        // Against transparent mode the margin is engine-dependent and can be small enough to sit
-        // inside the noise. PostgreSQL reserves sequence values and copies straight into the table,
-        // so the explicit path saves both EF's pipeline and a staging round trip; SQL Server has no
-        // sequence behind an IDENTITY column, so both paths stage and merge and only the pipeline
-        // saving remains. Asserting a strict inequality there produced a test that failed on a
-        // 0.3 ms difference, so the check is that it is not materially slower.
+        // Comparing the explicit path against transparent mode is only meaningful on PostgreSQL.
+        // There the explicit path saves EF's pipeline *and* a staging round trip, because sequence
+        // values are reserved up front and rows go straight into the table.
+        //
+        // SQL Server has no sequence behind an IDENTITY column, so both paths stage and merge and
+        // do identical server-side work — only EF's pipeline separates them, which at these row
+        // counts is smaller than the noise on an emulated container. Asserting it there was
+        // measuring the machine, not the library: it failed at 130 ms against 103 ms and passed on
+        // a rerun of the same build, twice, at two different bounds. The claim this test exists to
+        // defend — that the fast path is engaging at all — is the one above, against stock EF, and
+        // it holds strictly on every engine.
+        if (fixture.Engine == "sqlserver")
+        {
+            return;
+        }
+
         (explicitApi.TotalMilliseconds <= transparent.TotalMilliseconds * 1.25).ShouldBeTrue(
             $"BulkInsertAsync ({explicitApi.TotalMilliseconds:F0} ms) was materially slower than "
             + $"transparent SaveChanges ({transparent.TotalMilliseconds:F0} ms).");

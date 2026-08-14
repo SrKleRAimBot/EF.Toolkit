@@ -64,10 +64,47 @@ public sealed class SqlServerPartitioningTests(SqlServerFixture fixture)
 public sealed class PostgreSql16BulkInsertApiTests(PostgreSql16Fixture fixture)
     : BulkInsertApiTests(fixture);
 
+// PostgreSQL 17 takes a different upsert path from 16 -- MERGE rather than ON CONFLICT -- so the
+// API suite has to run there too, or the whole of that path ships unexercised.
+[Trait("Engine", "postgres17")]
+[Collection("postgres17")]
+public sealed class PostgreSql17BulkInsertApiTests(PostgreSql17Fixture fixture)
+    : BulkInsertApiTests(fixture);
+
 [Trait("Engine", "sqlserver")]
 [Collection("sqlserver")]
 public sealed class SqlServerBulkInsertApiTests(SqlServerFixture fixture)
     : BulkInsertApiTests(fixture);
+
+[Trait("Engine", "postgres16")]
+[Collection("postgres16")]
+public sealed class PostgreSql16CorrectnessTests(PostgreSql16Fixture fixture)
+    : CorrectnessTests(fixture);
+
+[Trait("Engine", "postgres17")]
+[Collection("postgres17")]
+public sealed class PostgreSql17CorrectnessTests(PostgreSql17Fixture fixture)
+    : CorrectnessTests(fixture);
+
+[Trait("Engine", "sqlserver")]
+[Collection("sqlserver")]
+public sealed class SqlServerCorrectnessTests(SqlServerFixture fixture)
+    : CorrectnessTests(fixture);
+
+[Trait("Engine", "postgres16")]
+[Collection("postgres16")]
+public sealed class PostgreSql16TransactionTests(PostgreSql16Fixture fixture)
+    : TransactionTests(fixture);
+
+[Trait("Engine", "postgres17")]
+[Collection("postgres17")]
+public sealed class PostgreSql17TransactionTests(PostgreSql17Fixture fixture)
+    : TransactionTests(fixture);
+
+[Trait("Engine", "sqlserver")]
+[Collection("sqlserver")]
+public sealed class SqlServerTransactionTests(SqlServerFixture fixture)
+    : TransactionTests(fixture);
 
 [Trait("Engine", "postgres16")]
 [Collection("postgres16")]
