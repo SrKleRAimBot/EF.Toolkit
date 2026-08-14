@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <PackageId>EF.Toolkit.Bulk.PostgreSQL</PackageId>
+    <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;bulkupdate;bulkdelete;bulkmerge;performance;postgresql;npgsql</PackageTags>
     <Description>
       PostgreSQL provider for EF.Toolkit.Bulk. Uses Npgsql binary COPY, sequence block reservation and
       staging-table readback to make EF Core writes dramatically faster.
@@ -15,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)../../docs/bulk.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
   <ItemGroup>

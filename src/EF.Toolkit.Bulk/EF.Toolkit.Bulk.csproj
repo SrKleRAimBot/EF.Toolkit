@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <PackageId>EF.Toolkit.Bulk</PackageId>
+    <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;bulkupdate;bulkdelete;bulkmerge;performance</PackageTags>
     <Description>
       High-performance bulk operations for EF Core. Accelerates SaveChanges() transparently and
       adds an explicit BulkInsert/Update/Merge/Delete API, while preserving change tracking and
@@ -15,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)../../docs/bulk.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <PackageId>EF.Toolkit.Bulk.SqlServer</PackageId>
+    <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;bulkupdate;bulkdelete;bulkmerge;performance;sqlserver</PackageTags>
     <Description>
       SQL Server provider for EF.Toolkit.Bulk. Uses SqlBulkCopy, sequence block reservation and
       staging-table MERGE ... OUTPUT readback to make EF Core writes dramatically faster.
@@ -15,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)../../docs/bulk.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <PackageId>EF.Toolkit.Audit</PackageId>
+    <PackageTags>entity-framework-core;efcore;audit;auditing;audit-trail;change-tracking;history;compliance</PackageTags>
     <Description>
       Entity auditing for EF Core. Records who changed what and when, with old and new values for
       every changed column, into a single audit table whose payload is queryable JSON. Fluent or
@@ -16,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)../../docs/audit.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
   <ItemGroup>

@@ -505,8 +505,8 @@ the statement itself only reports in total — which rows a merge inserted rathe
 which rows a synchronise's delete arm removed that no source row named.
 
 When nothing is registered the cost is a single null check, and the extra read is only ever issued
-when something is going to use it. `EF.Toolkit.Audit.Bulk` is one implementation; see
-[docs/audit.md](audit.md).
+when something is going to use it. `EF.Toolkit.Audit.Bulk` is one implementation; see the
+[audit documentation](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit.md).
 
 ### Correctness
 

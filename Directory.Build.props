@@ -38,7 +38,6 @@
     <PackageProjectUrl>https://github.com/SrKleRAimBot/EF.Toolkit</PackageProjectUrl>
     <RepositoryUrl>https://github.com/SrKleRAimBot/EF.Toolkit</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;performance;sqlserver;postgresql</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>

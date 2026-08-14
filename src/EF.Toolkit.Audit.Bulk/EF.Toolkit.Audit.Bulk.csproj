@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <PackageId>EF.Toolkit.Audit.Bulk</PackageId>
+    <PackageTags>entity-framework-core;efcore;audit;auditing;audit-trail;change-tracking;bulk;bulkinsert;performance</PackageTags>
     <Description>
       Joins EF.Toolkit.Audit to EF.Toolkit.Bulk. Captures audit entries for the explicit bulk API —
       which bypasses the change tracker and so is invisible to a SaveChanges interceptor — and
@@ -16,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)../../docs/audit.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
   <ItemGroup>

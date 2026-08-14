@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <PackageId>EF.Toolkit.Audit.PostgreSQL</PackageId>
+    <PackageTags>entity-framework-core;efcore;audit;auditing;audit-trail;change-tracking;history;compliance;postgresql;npgsql</PackageTags>
     <Description>
       PostgreSQL provider for EF.Toolkit.Audit. Stores the audit payload as jsonb behind a GIN
       index, so an audit trail can be searched by what actually changed rather than only read.
@@ -15,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+    <None Include="$(MSBuildThisFileDirectory)../../docs/audit.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
   <ItemGroup>
