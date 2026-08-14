@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Audit.PostgreSQL/EF.Toolkit.Audit.PostgreSQL.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Audit.SqlServer/EF.Toolkit.Audit.SqlServer.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Audit.Bulk/EF.Toolkit.Audit.Bulk.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+</Project>

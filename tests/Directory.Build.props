@@ -16,7 +16,9 @@
     missed it and broke every benchmark run with an unresolved global using.
   -->
   <ItemGroup Condition="'$(MSBuildProjectName)' == 'EF.Toolkit.Bulk.Tests'
-                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Bulk.Equivalence'">
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Bulk.Equivalence'
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Audit.Tests'
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Audit.Equivalence'">
     <Using Include="Xunit" />
     <Using Include="Shouldly" />
   </ItemGroup>

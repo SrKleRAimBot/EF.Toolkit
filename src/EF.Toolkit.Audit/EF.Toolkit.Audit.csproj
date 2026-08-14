@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Audit</PackageId>
+    <Description>
+      Entity auditing for EF Core. Records who changed what and when, with old and new values for
+      every changed column, into a single audit table whose payload is queryable JSON. Fluent or
+      attribute registration, pluggable actor, tenant and identifier providers. Provider-neutral
+      core; install EF.Toolkit.Audit.SqlServer or EF.Toolkit.Audit.PostgreSQL.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.SqlServer" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.PostgreSQL" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Bulk" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Equivalence" />
+  </ItemGroup>
+
+</Project>
