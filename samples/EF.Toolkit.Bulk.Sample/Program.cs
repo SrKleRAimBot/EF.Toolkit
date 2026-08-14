@@ -18,7 +18,7 @@ if (args.Length > 0)
 else
 {
     Console.WriteLine("Starting PostgreSQL in Docker (pass a connection string to skip this)...");
-    container = new PostgreSqlBuilder().WithImage("postgres:16-alpine").Build();
+    container = new PostgreSqlBuilder("postgres:16-alpine").Build();
     await container.StartAsync();
     connectionString = container.GetConnectionString();
 }

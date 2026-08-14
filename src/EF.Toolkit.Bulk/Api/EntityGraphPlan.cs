@@ -1,6 +1,6 @@
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Linq.Expressions;
+using EFToolkit.Bulk.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace EFToolkit.Bulk.Api;
@@ -19,13 +19,12 @@ namespace EFToolkit.Bulk.Api;
 ///     <para>
 ///         Accessors are compiled once per entity type and cached against the model, for the same
 ///         reason as <see cref="BulkEntityPlan" />: per-row reflection would cost more than the
-///         pipeline this API exists to avoid.
+///         pipeline this API exists to avoid. The cache is a runtime annotation on the entity type
+///         itself — see <see cref="BulkAnnotations" />.
 ///     </para>
 /// </remarks>
 internal sealed class EntityGraphPlan
 {
-    private static readonly ConcurrentDictionary<IEntityType, EntityGraphPlan> Cache = new();
-
     private EntityGraphPlan(
         IReadOnlyList<NavigationAccessor> navigations,
         IReadOnlyList<ForeignKeyFixup> fixups)
@@ -41,7 +40,8 @@ internal sealed class EntityGraphPlan
     public IReadOnlyList<ForeignKeyFixup> Fixups { get; }
 
     public static EntityGraphPlan For(IEntityType entityType)
-        => Cache.GetOrAdd(entityType, static type => Build(type));
+        => entityType.GetOrAddRuntimeAnnotationValue(
+            BulkAnnotations.GraphPlan, static type => Build(type!), entityType);
 
     private static EntityGraphPlan Build(IEntityType entityType)
     {

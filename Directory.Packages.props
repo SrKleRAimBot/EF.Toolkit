@@ -20,8 +20,17 @@
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="Shouldly" Version="4.3.0" />
-    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.0.0" />
-    <PackageVersion Include="Testcontainers.MsSql" Version="4.0.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.13.0" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.13.0" />
+
+    <!--
+      Testcontainers pulls SSH.NET for its port-forwarding support, which nothing here uses, and
+      pins a version carrying GHSA-q939-rpr3-3284 (arbitrary file write via server-controlled SCP
+      filenames, first patched in 2026.0.0). NuGet audit is an error in this repo, so the whole
+      solution fails to restore on the transitive reference. Transitive pinning is on, so naming
+      the fixed version here lifts it without waiting for Testcontainers to move.
+    -->
+    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="[10.0.0,11.0.0)" />
   </ItemGroup>
 

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using EFToolkit.Bulk.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace EFToolkit.Bulk.Planning;
@@ -22,8 +22,6 @@ namespace EFToolkit.Bulk.Planning;
 /// </remarks>
 internal static class EntityTypeGraph
 {
-    private static readonly ConcurrentDictionary<IModel, IReadOnlyList<IEntityType>> Cache = new();
-
     /// <summary>
     ///     Returns <paramref name="model" />'s entity types with every principal ahead of its
     ///     dependents.
@@ -33,7 +31,8 @@ internal static class EntityTypeGraph
     ///     foreign key.
     /// </exception>
     public static IReadOnlyList<IEntityType> TopologicalOrder(IModel model)
-        => Cache.GetOrAdd(model, static m => Sort(m));
+        => model.GetOrAddRuntimeAnnotationValue<IReadOnlyList<IEntityType>, IModel>(
+            BulkAnnotations.TopologicalOrder, static m => Sort(m!), model);
 
     /// <summary>
     ///     Whether <paramref name="entityType" /> has a foreign key pointing at itself, so its rows

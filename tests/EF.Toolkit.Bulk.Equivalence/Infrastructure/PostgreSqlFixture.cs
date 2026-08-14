@@ -16,8 +16,7 @@ public abstract class PostgreSqlFixture : DatabaseFixture
 
     protected override async Task StartContainerAsync()
     {
-        _container = new PostgreSqlBuilder()
-            .WithImage(Image)
+        _container = new PostgreSqlBuilder(Image)
             .WithDatabase("postgres")
             .WithUsername("postgres")
             .WithPassword("postgres")

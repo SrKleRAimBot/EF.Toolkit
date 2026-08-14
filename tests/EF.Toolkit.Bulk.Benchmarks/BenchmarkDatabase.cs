@@ -104,8 +104,7 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
 
     private static BenchmarkDatabase StartPostgreSql()
     {
-        var container = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
+        var container = new PostgreSqlBuilder("postgres:16-alpine")
             .WithDatabase("postgres")
             .WithUsername("postgres")
             .WithPassword("postgres")
@@ -122,8 +121,7 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
 
     private static BenchmarkDatabase StartSqlServer()
     {
-        var container = new MsSqlBuilder()
-            .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
+        var container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest")
             .Build();
 
         container.StartAsync().GetAwaiter().GetResult();
