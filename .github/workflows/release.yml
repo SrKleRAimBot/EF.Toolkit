@@ -41,13 +41,19 @@ jobs:
       - run: dotnet restore
       - run: dotnet build -c Release --no-restore
 
-      - name: Unit tests
+      - name: Unit tests (bulk)
         run: dotnet test tests/EF.Toolkit.Bulk.Tests -c Release --no-build --verbosity normal
 
-      # The differential harness is the primary correctness gate, so a release runs it
+      - name: Unit tests (audit)
+        run: dotnet test tests/EF.Toolkit.Audit.Tests -c Release --no-build --verbosity normal
+
+      # The differential harnesses are the primary correctness gate, so a release runs them
       # rather than trusting that the tagged commit was already validated on a branch.
-      - name: Equivalence tests
+      - name: Equivalence tests (bulk)
         run: dotnet test tests/EF.Toolkit.Bulk.Equivalence -c Release --no-build --verbosity normal
+
+      - name: Equivalence tests (audit)
+        run: dotnet test tests/EF.Toolkit.Audit.Equivalence -c Release --no-build --verbosity normal
 
       - name: Pack
         run: dotnet pack -c Release --no-build -o artifacts
@@ -86,8 +92,9 @@ jobs:
         with:
           user: ${{ secrets.NUGET_USER }}
 
-      # The core package goes first so its dependents resolve against something already
-      # accepted. --skip-duplicate keeps a re-run after a partial failure safe.
+      # Each core package goes before its dependents, so they resolve against something already
+      # accepted, and the bridge goes last because it depends on both cores. --skip-duplicate keeps
+      # a re-run after a partial failure safe.
       - name: Push
         if: github.event_name == 'push' || inputs.dry_run == false
         run: |
@@ -96,7 +103,11 @@ jobs:
           for pkg in \
             artifacts/EF.Toolkit.Bulk.[0-9]*.nupkg \
             artifacts/EF.Toolkit.Bulk.SqlServer.*.nupkg \
-            artifacts/EF.Toolkit.Bulk.PostgreSQL.*.nupkg
+            artifacts/EF.Toolkit.Bulk.PostgreSQL.*.nupkg \
+            artifacts/EF.Toolkit.Audit.[0-9]*.nupkg \
+            artifacts/EF.Toolkit.Audit.SqlServer.*.nupkg \
+            artifacts/EF.Toolkit.Audit.PostgreSQL.*.nupkg \
+            artifacts/EF.Toolkit.Audit.Bulk.*.nupkg
           do
             echo "::group::push $pkg"
             dotnet nuget push "$pkg" \

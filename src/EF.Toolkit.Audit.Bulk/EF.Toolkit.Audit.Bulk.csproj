@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Audit.Bulk</PackageId>
+    <Description>
+      Joins EF.Toolkit.Audit to EF.Toolkit.Bulk. Captures audit entries for the explicit bulk API —
+      which bypasses the change tracker and so is invisible to a SaveChanges interceptor — and
+      writes those entries in bulk. Neither package depends on the other; install this to use both.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
+    <ProjectReference Include="../EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Equivalence" />
+  </ItemGroup>
+
+</Project>

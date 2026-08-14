@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Audit.SqlServer</PackageId>
+    <Description>
+      SQL Server provider for EF.Toolkit.Audit. Stores the audit payload as validated JSON, with
+      optional persisted computed columns so a hot JSON path can be indexed.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Equivalence" />
+  </ItemGroup>
+
+</Project>

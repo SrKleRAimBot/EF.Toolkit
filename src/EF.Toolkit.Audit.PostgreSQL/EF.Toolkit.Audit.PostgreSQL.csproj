@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Audit.PostgreSQL</PackageId>
+    <Description>
+      PostgreSQL provider for EF.Toolkit.Audit. Stores the audit payload as jsonb behind a GIN
+      index, so an audit trail can be searched by what actually changed rather than only read.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Equivalence" />
+  </ItemGroup>
+
+</Project>

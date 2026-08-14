@@ -1,13 +1,20 @@
 <Solution>
   <Folder Name="/samples/">
+    <Project Path="samples/EF.Toolkit.Audit.Sample/EF.Toolkit.Audit.Sample.csproj" />
     <Project Path="samples/EF.Toolkit.Bulk.Sample/EF.Toolkit.Bulk.Sample.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/EF.Toolkit.Audit.Bulk/EF.Toolkit.Audit.Bulk.csproj" />
+    <Project Path="src/EF.Toolkit.Audit.PostgreSQL/EF.Toolkit.Audit.PostgreSQL.csproj" />
+    <Project Path="src/EF.Toolkit.Audit.SqlServer/EF.Toolkit.Audit.SqlServer.csproj" />
+    <Project Path="src/EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
     <Project Path="src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
     <Project Path="src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
     <Project Path="src/EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/EF.Toolkit.Audit.Equivalence/EF.Toolkit.Audit.Equivalence.csproj" />
+    <Project Path="tests/EF.Toolkit.Audit.Tests/EF.Toolkit.Audit.Tests.csproj" />
     <Project Path="tests/EF.Toolkit.Bulk.Benchmarks/EF.Toolkit.Bulk.Benchmarks.csproj" />
     <Project Path="tests/EF.Toolkit.Bulk.Equivalence/EF.Toolkit.Bulk.Equivalence.csproj" />
     <Project Path="tests/EF.Toolkit.Bulk.Tests/EF.Toolkit.Bulk.Tests.csproj" />

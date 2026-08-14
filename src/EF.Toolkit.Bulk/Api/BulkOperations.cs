@@ -58,6 +58,7 @@ internal static class BulkOperations
             : options.BatchSize ?? bulkOptions.MaxBatchSize;
 
         var mergeCounts = options.MergeCounts ?? bulkOptions.MergeCounts;
+        var observers = BulkObservers.For(context, entityType, kind, options);
 
         // Take the whole operation as one unit, matching SaveChanges: a partially-applied bulk
         // insert is far harder to reason about than a slow one.
@@ -66,8 +67,8 @@ internal static class BulkOperations
                 context,
                 options.Savepoint,
                 async ct => await WriteBatchesAsync(
-                        context, entities, state, kind, plan, scope, executor, connection,
-                        batchSize, mergeCounts, options, ct)
+                        context, entities, entityType, state, kind, plan, scope, executor,
+                        connection, batchSize, mergeCounts, options, observers, ct)
                     .ConfigureAwait(false),
                 cancellationToken)
             .ConfigureAwait(false);
@@ -94,6 +95,7 @@ internal static class BulkOperations
     private static async Task<BulkResult> WriteBatchesAsync<TEntity>(
         DbContext context,
         IReadOnlyList<TEntity> entities,
+        IEntityType entityType,
         EntityState state,
         BulkOperationKind kind,
         BulkEntityPlan plan,
@@ -103,6 +105,7 @@ internal static class BulkOperations
         int batchSize,
         MergeCounts mergeCounts,
         BulkOperationOptions options,
+        BulkObservers? observers,
         CancellationToken cancellationToken)
         where TEntity : class
     {
@@ -116,8 +119,9 @@ internal static class BulkOperations
             for (var offset = 0; offset < entities.Count; offset += batchSize)
             {
                 var slice = Slice(entities, offset, Math.Min(batchSize, entities.Count - offset));
+                var beforeImages = observers?.Capture(entityType, slice.Count);
                 var rows = new EntityRowSet(
-                    slice, plan, state, kind, mergeCounts, options.Timeout, scope);
+                    slice, plan, state, kind, mergeCounts, options.Timeout, scope, beforeImages);
 
                 if (!executor.CanExecute(rows, out var reason))
                 {
@@ -135,6 +139,16 @@ internal static class BulkOperations
                     return await FallBackAsync(
                             context, entities, state, kind, result.DeclinedReason,
                             cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (observers is not null)
+                {
+                    // After the write and after generated values have landed, still inside the
+                    // transaction: an observer sees final values, and its own work is atomic with
+                    // the rows it describes.
+                    await observers
+                        .ObserveAsync(entityType, rows, slice, beforeImages, cancellationToken)
                         .ConfigureAwait(false);
                 }
 
@@ -199,7 +213,7 @@ internal static class BulkOperations
                 context,
                 options.Savepoint,
                 async ct => await WriteGraphAsync(
-                        executor, connection, byType, order, options, batchSize, total, ct)
+                        context, executor, connection, byType, order, options, batchSize, total, ct)
                     .ConfigureAwait(false),
                 cancellationToken)
             .ConfigureAwait(false);
@@ -213,6 +227,7 @@ internal static class BulkOperations
     }
 
     private static async Task<int> WriteGraphAsync(
+        DbContext context,
         IBulkOperationExecutor executor,
         IRelationalConnection connection,
         Dictionary<IEntityType, List<object>> byType,
@@ -238,6 +253,11 @@ internal static class BulkOperations
                 var plan = BulkEntityPlan.For(entityType, EntityState.Added);
                 var graph = EntityGraphPlan.For(entityType);
 
+                // Resolved per entity type: a graph writes several, and an observer is entitled to
+                // want one of them and not another.
+                var observers = BulkObservers.For(
+                    context, entityType, BulkOperationKind.Insert, options);
+
                 foreach (var layer in EntityGraphCollector.LayerBySelfReference(entityType, entities))
                 {
                     // Principals in earlier types and layers now have their keys, so the foreign
@@ -252,8 +272,8 @@ internal static class BulkOperations
                     }
 
                     written += await WriteAsync(
-                            executor, connection, plan, layer, batchSize, options.Timeout,
-                            cancellationToken)
+                            executor, connection, entityType, plan, layer, batchSize,
+                            options.Timeout, observers, cancellationToken)
                         .ConfigureAwait(false);
 
                     options.Progress?.Invoke(new BulkProgress(written, total));
@@ -271,10 +291,12 @@ internal static class BulkOperations
     private static async Task<int> WriteAsync(
         IBulkOperationExecutor executor,
         IRelationalConnection connection,
+        IEntityType entityType,
         BulkEntityPlan plan,
         List<object> entities,
         int batchSize,
         TimeSpan? timeout,
+        BulkObservers? observers,
         CancellationToken cancellationToken)
     {
         var written = 0;
@@ -302,6 +324,13 @@ internal static class BulkOperations
                 throw new BulkNotSupportedException(
                     $"EF.Toolkit.Bulk cannot insert '{plan.TableName}' as part of a graph: "
                     + $"{result.DeclinedReason ?? "no reason given."}");
+            }
+
+            if (observers is not null)
+            {
+                await observers
+                    .ObserveAsync(entityType, rows, slice, beforeImages: null, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             written += result.RowsAffected;

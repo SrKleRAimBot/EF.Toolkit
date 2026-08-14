@@ -133,6 +133,18 @@ internal sealed class NpgsqlBulkWriteOperations
             // so without ANALYZE the planner joins it to the target on a hard-coded guess.
             var prelude = Prelude(rows, staging, staged, conditionIndices);
 
+            if (rows.BeforeImages is { } beforeImages)
+            {
+                // The prelude moves onto this statement, because it is now the first one that joins
+                // the staging table and so the first that needs it prepared.
+                await CaptureBeforeAsync(
+                        rows, connection, staging, staged, conditionIndices, beforeImages, prelude,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                prelude = string.Empty;
+            }
+
             await using (var command = connection.CreateCommand())
             {
                 _settings.Apply(command);
@@ -183,6 +195,75 @@ internal sealed class NpgsqlBulkWriteOperations
                     () => ExecuteNonQueryAsync(
                         connection, $"DROP TABLE IF EXISTS {staging}", CancellationToken.None))
                 .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Reads the rows the statement is about to change, as they stand now.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A separate read rather than part of the write, because PostgreSQL's
+    ///         <c>RETURNING</c> reports the row after the update, not before, until version 18. It
+    ///         joins the staging table that has just been loaded, so it costs one indexed scan
+    ///         rather than a lookup per row.
+    ///     </para>
+    ///     <para>
+    ///         <c>FOR UPDATE</c> is not incidental. Without it a concurrent writer could change a
+    ///         row between this read and the statement that follows, and the captured image would
+    ///         describe a state the write never actually replaced. Taking the row locks here rather
+    ///         than a moment later costs nothing: the write is about to take them anyway.
+    ///     </para>
+    /// </remarks>
+    private async Task CaptureBeforeAsync(
+        IBulkRowSet rows,
+        NpgsqlConnection connection,
+        string staging,
+        IReadOnlyList<StagingColumn> staged,
+        IReadOnlyList<int> conditionIndices,
+        BulkBeforeImages beforeImages,
+        string prelude,
+        CancellationToken cancellationToken)
+    {
+        var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
+
+        var projection = string.Join(
+            ", ",
+            beforeImages.Columns.Select(c => $"t.{_sqlHelper.DelimitIdentifier(c.Name)}"));
+
+        await using var command = connection.CreateCommand();
+        _settings.Apply(command);
+
+        command.CommandText = prelude
+            + $"SELECT s.{ordinal}, {projection} FROM {staging} AS s "
+            + $"JOIN {target} AS t ON {JoinPredicate(rows, conditionIndices, staged)} "
+            + "FOR UPDATE OF t";
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // Advance past the prelude, which describes no columns, exactly as the write path does.
+        while (reader.FieldCount == 0
+            && await reader.NextResultAsync(cancellationToken).ConfigureAwait(false))
+        {
+        }
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var row = reader.GetInt32(0);
+
+            for (var i = 0; i < beforeImages.Columns.Count; i++)
+            {
+                var position = 1 + i;
+
+                beforeImages.SetValue(
+                    row,
+                    i,
+                    await reader.IsDBNullAsync(position, cancellationToken).ConfigureAwait(false)
+                        ? null
+                        : reader.GetValue(position));
+            }
         }
     }
 

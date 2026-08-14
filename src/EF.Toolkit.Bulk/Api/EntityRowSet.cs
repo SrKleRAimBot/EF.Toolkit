@@ -27,7 +27,8 @@ internal sealed class EntityRowSet : IBulkEntityRowSet
         BulkOperationKind operation,
         MergeCounts mergeCounts,
         TimeSpan? timeout = null,
-        BulkScope? scope = null)
+        BulkScope? scope = null,
+        BulkBeforeImages? beforeImages = null)
     {
         _entities = entities;
         _plan = plan;
@@ -36,6 +37,7 @@ internal sealed class EntityRowSet : IBulkEntityRowSet
         MergeCounts = mergeCounts;
         Timeout = timeout;
         Scope = scope;
+        BeforeImages = beforeImages;
     }
 
     /// <inheritdoc />
@@ -51,6 +53,7 @@ internal sealed class EntityRowSet : IBulkEntityRowSet
     public MergeCounts MergeCounts { get; }
     public TimeSpan? Timeout { get; }
     public BulkScope? Scope { get; }
+    public BulkBeforeImages? BeforeImages { get; }
     public int RowCount => _entities.Count;
     public IReadOnlyList<BulkColumnInfo> Columns => _plan.Columns;
 
