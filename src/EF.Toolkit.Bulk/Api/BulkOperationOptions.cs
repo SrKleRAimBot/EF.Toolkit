@@ -112,6 +112,27 @@ public sealed record BulkOperationOptions
     ///     the context-wide setting applies.
     /// </summary>
     public MergeCounts? MergeCounts { get; init; }
+
+    /// <summary>
+    ///     Whether registered <see cref="Execution.IBulkWriteObserver" />s see this operation.
+    ///     Defaults to <see langword="true" />.
+    /// </summary>
+    /// <remarks>
+    ///     Turning it off is how a write opts out of whatever observers do — auditing included — and
+    ///     is therefore a decision worth making deliberately rather than for speed.
+    /// </remarks>
+    public bool Observe { get; init; } = true;
+
+    /// <summary>
+    ///     Whether observers that want the rows as they were get them, or <see langword="null" />
+    ///     for whatever they asked for.
+    /// </summary>
+    /// <remarks>
+    ///     <see langword="false" /> skips the read of the affected rows that an update, delete or
+    ///     merge would otherwise issue. Observers then see new values only, which for an audit trail
+    ///     means an entry recording what a row became and not what it was.
+    /// </remarks>
+    public bool? CaptureBeforeImages { get; init; }
 }
 
 /// <summary>Progress through a bulk operation.</summary>

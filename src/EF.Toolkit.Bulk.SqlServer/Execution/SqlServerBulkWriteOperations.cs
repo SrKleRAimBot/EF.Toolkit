@@ -140,15 +140,28 @@ internal sealed class SqlServerBulkWriteOperations
 
             var tally = new BulkRowTally(rows.RowCount);
 
+            // The index is built after the load, not before: SqlBulkCopy into an indexed table pays
+            // per-row maintenance, whereas building it over a freshly loaded heap is a single sort.
+            // It rides along with the statement that needs it so preparing the staging table costs
+            // no extra round trip.
+            var prelude = Prelude(rows, staging, staged, conditionIndices);
+
+            if (rows.BeforeImages is { } beforeImages)
+            {
+                // The prelude moves onto this statement, which is now the first one to join the
+                // staging table and so the first that needs it prepared.
+                await CaptureBeforeAsync(
+                        rows, connection, transaction, staging, staged, conditionIndices,
+                        beforeImages, prelude, cancellationToken)
+                    .ConfigureAwait(false);
+
+                prelude = "";
+            }
+
             await using (var command = connection.CreateCommand())
             {
                 _settings.Apply(command);
-                // The index is built after the load, not before: SqlBulkCopy into an indexed
-                // table pays per-row maintenance, whereas building it over a freshly loaded heap
-                // is a single sort. It rides along with the statement that needs it so preparing
-                // the staging table costs no extra round trip.
-                command.CommandText = Prelude(rows, staging, staged, conditionIndices)
-                    + buildSql(staging);
+                command.CommandText = prelude + buildSql(staging);
 
                 command.Transaction = transaction;
 
@@ -188,6 +201,72 @@ internal sealed class SqlServerBulkWriteOperations
                         connection, transaction, $"DROP TABLE IF EXISTS {staging};",
                         CancellationToken.None))
                 .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Reads the rows the statement is about to change, as they stand now.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         SQL Server could return the before-image from the write itself, through
+    ///         <c>OUTPUT deleted.*</c>. It is read separately anyway, for two reasons: a delete's
+    ///         row set knows only the columns that located the row, so <c>deleted.*</c> would have
+    ///         to be described column by column against a shape the operation never modelled; and
+    ///         doing it the same way on both engines means one behaviour to reason about rather
+    ///         than two that are nearly alike.
+    ///     </para>
+    ///     <para>
+    ///         <c>UPDLOCK, HOLDLOCK</c> takes the row locks the write is about to take anyway. A
+    ///         concurrent writer could otherwise change a row between this read and the statement
+    ///         that follows, leaving a captured image describing a state the write never replaced.
+    ///     </para>
+    /// </remarks>
+    private async Task CaptureBeforeAsync(
+        IBulkRowSet rows,
+        SqlConnection connection,
+        SqlTransaction? transaction,
+        string staging,
+        IReadOnlyList<StagingColumn> staged,
+        IReadOnlyList<int> conditionIndices,
+        BulkBeforeImages beforeImages,
+        string prelude,
+        CancellationToken cancellationToken)
+    {
+        var target = _sqlHelper.DelimitIdentifier(rows.TableName, rows.Schema);
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
+
+        var projection = string.Join(
+            ", ",
+            beforeImages.Columns.Select(c => $"t.{_sqlHelper.DelimitIdentifier(c.Name)}"));
+
+        await using var command = connection.CreateCommand();
+        _settings.Apply(command);
+        command.Transaction = transaction;
+
+        command.CommandText = prelude
+            + $"SELECT s.{ordinal}, {projection} FROM {staging} AS s "
+            + $"INNER JOIN {target} AS t WITH (UPDLOCK, HOLDLOCK) "
+            + $"ON {JoinPredicate(rows, conditionIndices, staged)};";
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var row = reader.GetInt32(0);
+
+            for (var i = 0; i < beforeImages.Columns.Count; i++)
+            {
+                var position = 1 + i;
+
+                beforeImages.SetValue(
+                    row,
+                    i,
+                    await reader.IsDBNullAsync(position, cancellationToken).ConfigureAwait(false)
+                        ? null
+                        : reader.GetValue(position));
+            }
         }
     }
 

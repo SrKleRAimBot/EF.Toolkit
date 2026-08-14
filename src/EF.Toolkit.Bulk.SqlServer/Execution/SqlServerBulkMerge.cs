@@ -75,6 +75,14 @@ internal sealed class SqlServerBulkMerge
                     .ConfigureAwait(false);
             }
 
+            if (rows.BeforeImages is { } beforeImages)
+            {
+                await CaptureBeforeAsync(
+                        rows, connection, transaction, staging, target, matchIndices, beforeImages,
+                        deleteMissing, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             return await MergeAsync(
                     rows, connection, transaction, staging, target, columnList, writeIndices,
                     matchIndices, readIndices, deleteMissing, cancellationToken)
@@ -88,6 +96,122 @@ internal sealed class SqlServerBulkMerge
                         connection, transaction, $"DROP TABLE IF EXISTS {staging};",
                         CancellationToken.None))
                 .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Reads the rows a merge or synchronise is about to change or remove, as they stand now.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Two reads. The first joins the staging table to the target, so every source row
+    ///         learns whether the target already held it — the before-image, and with it the per-row
+    ///         insert-versus-update split that <c>$action</c> only reports afterwards.
+    ///     </para>
+    ///     <para>
+    ///         The second runs only for a synchronise, and finds the rows its <c>NOT MATCHED BY
+    ///         SOURCE</c> arm is about to remove. Those correspond to nothing the caller passed in,
+    ///         so they are the one set an observer could not otherwise learn about at all.
+    ///     </para>
+    /// </remarks>
+    private async Task CaptureBeforeAsync(
+        IBulkRowSet rows,
+        SqlConnection connection,
+        SqlTransaction? transaction,
+        string staging,
+        string target,
+        IReadOnlyList<int> matchIndices,
+        BulkBeforeImages beforeImages,
+        bool deleteMissing,
+        CancellationToken cancellationToken)
+    {
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
+
+        var projection = string.Join(
+            ", ",
+            beforeImages.Columns.Select(c => $"t.{_sqlHelper.DelimitIdentifier(c.Name)}"));
+
+        var match = string.Join(
+            " AND ",
+            matchIndices.Select(i =>
+            {
+                var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
+                return $"t.{column} = s.{column}";
+            }));
+
+        await using (var matched = connection.CreateCommand())
+        {
+            _settings.Apply(matched);
+            matched.Transaction = transaction;
+
+            matched.CommandText =
+                $"SELECT s.{ordinal}, {projection} FROM {staging} AS s "
+                + $"INNER JOIN {target} AS t WITH (UPDLOCK, HOLDLOCK) ON {match};";
+
+            await using var reader = await matched.ExecuteReaderAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var row = reader.GetInt32(0);
+
+                for (var i = 0; i < beforeImages.Columns.Count; i++)
+                {
+                    var position = 1 + i;
+
+                    beforeImages.SetValue(
+                        row,
+                        i,
+                        await reader.IsDBNullAsync(position, cancellationToken).ConfigureAwait(false)
+                            ? null
+                            : reader.GetValue(position));
+                }
+            }
+        }
+
+        if (!deleteMissing)
+        {
+            return;
+        }
+
+        await using var removed = connection.CreateCommand();
+        _settings.Apply(removed);
+        removed.Transaction = transaction;
+
+        // The same predicate the delete arm uses, so the rows captured here are exactly the rows it
+        // goes on to remove — scope included, since a scope is what holds it back.
+        var fence = rows.Scope is { } scope ? $" AND ({scope.Sql})" : "";
+
+        removed.CommandText =
+            $"SELECT {projection} FROM {target} AS t WITH (UPDLOCK, HOLDLOCK) WHERE NOT EXISTS "
+            + $"(SELECT 1 FROM {staging} AS s WHERE {match}){fence};";
+
+        if (rows.Scope is { } bound)
+        {
+            // Bound rather than formatted into the SQL, exactly as the delete arm binds them.
+            for (var i = 0; i < bound.Parameters.Count; i++)
+            {
+                removed.Parameters.AddWithValue(
+                    "@" + BulkScope.ParameterName(i), bound.Parameters[i] ?? DBNull.Value);
+            }
+        }
+
+        await using var removedReader = await removed.ExecuteReaderAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        while (await removedReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var values = new object?[beforeImages.Columns.Count];
+
+            for (var i = 0; i < values.Length; i++)
+            {
+                values[i] = await removedReader.IsDBNullAsync(i, cancellationToken)
+                    .ConfigureAwait(false)
+                    ? null
+                    : removedReader.GetValue(i);
+            }
+
+            beforeImages.AddRemovedRow(values);
         }
     }
 

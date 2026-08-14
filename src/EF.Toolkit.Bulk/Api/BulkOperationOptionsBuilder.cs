@@ -234,6 +234,38 @@ public class BulkOperationOptionsBuilder<TEntity>
         return this;
     }
 
+    /// <summary>
+    ///     Hides this operation from registered
+    ///     <see cref="Execution.IBulkWriteObserver" />s.
+    /// </summary>
+    /// <remarks>
+    ///     Observers are how a write reaches anything that reacts to writes — an outbox, a cache, an
+    ///     audit trail — so this is not a tuning knob. It is a statement that this particular write
+    ///     should leave no trace.
+    /// </remarks>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOperationOptionsBuilder<TEntity> WithoutObservers()
+    {
+        Options = Options with { Observe = false };
+        return this;
+    }
+
+    /// <summary>
+    ///     Skips the read of the affected rows that observers would otherwise get their
+    ///     before-images from.
+    /// </summary>
+    /// <remarks>
+    ///     Saves one indexed read per batch on an update, delete or merge. In exchange an observer
+    ///     sees what each row became and not what it was — for an audit trail, an entry weaker than
+    ///     the one the same change would have produced through <c>SaveChanges</c>.
+    /// </remarks>
+    /// <returns>The same builder, for chaining.</returns>
+    public virtual BulkOperationOptionsBuilder<TEntity> WithoutBeforeImages()
+    {
+        Options = Options with { CaptureBeforeImages = false };
+        return this;
+    }
+
     /// <summary>Sets the maximum number of rows sent to the server in one operation.</summary>
     /// <param name="rows">Row count; must be at least 1.</param>
     /// <returns>The same builder, for chaining.</returns>

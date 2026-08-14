@@ -60,8 +60,11 @@ internal sealed class NpgsqlBulkMerge
             writeIndices.Select(i => _sqlHelper.DelimitIdentifier(rows.Columns[i].Name)));
 
         // MERGE's RETURNING can name the source, so the ordinal is worth staging there; ON CONFLICT
-        // cannot, so staging it would be dead weight on every row.
-        var ordinalProjection = useMerge ? $", 0 AS {ordinalColumn}" : "";
+        // cannot, so staging it would be dead weight on every row. A before-image read joins the
+        // staging table itself and needs the ordinal to correlate what it finds, so it earns its
+        // place on either path when one is being taken.
+        var stageOrdinal = useMerge || rows.BeforeImages is not null;
+        var ordinalProjection = stageOrdinal ? $", 0 AS {ordinalColumn}" : "";
 
         await ExecuteNonQueryAsync(
                 connection,
@@ -74,8 +77,16 @@ internal sealed class NpgsqlBulkMerge
         {
             await _copyInto(
                     connection, staging, StagingColumn.ForWrite(rows, writeIndices), rows,
-                    useMerge, cancellationToken)
+                    stageOrdinal, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (rows.BeforeImages is { } beforeImages)
+            {
+                await CaptureBeforeAsync(
+                        rows, connection, staging, target, matchIndices, beforeImages, deleteMissing,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             if (useMerge)
             {
@@ -196,6 +207,121 @@ internal sealed class NpgsqlBulkMerge
     ///     capability probe by proxy, which is why the setting can override it: a pooler or a
     ///     PostgreSQL-compatible engine can report 17 without implementing what 17 added.
     /// </remarks>
+    /// <summary>
+    ///     Reads the rows a merge or synchronise is about to change or remove, as they stand now.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Two reads, answering two different questions. The first joins the staging table to
+    ///         the target, so every source row learns whether the target already held it — which is
+    ///         both the before-image and, for free, the per-row insert-versus-update split that a
+    ///         merge otherwise only reports in total.
+    ///     </para>
+    ///     <para>
+    ///         The second runs only for a synchronise, and finds the rows its delete arm is about to
+    ///         remove: the ones the source does not contain, inside whatever scope confines it.
+    ///         Those rows correspond to nothing the caller passed in, so they are the one set an
+    ///         observer could not otherwise learn about at all.
+    ///     </para>
+    /// </remarks>
+    private async Task CaptureBeforeAsync(
+        IBulkRowSet rows,
+        NpgsqlConnection connection,
+        string staging,
+        string target,
+        IReadOnlyList<int> matchIndices,
+        BulkBeforeImages beforeImages,
+        bool deleteMissing,
+        CancellationToken cancellationToken)
+    {
+        var ordinal = _sqlHelper.DelimitIdentifier(StagingColumn.OrdinalColumnName);
+
+        var projection = string.Join(
+            ", ",
+            beforeImages.Columns.Select(c => $"t.{_sqlHelper.DelimitIdentifier(c.Name)}"));
+
+        // The staging table's columns carry the target's own names here, so the join predicate is
+        // simply column-for-column on the match set.
+        var match = string.Join(
+            " AND ",
+            matchIndices.Select(i =>
+            {
+                var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
+                return $"t.{column} = s.{column}";
+            }));
+
+        await using (var matched = connection.CreateCommand())
+        {
+            _settings.Apply(matched);
+
+            matched.CommandText =
+                $"ANALYZE {staging}; "
+                + $"SELECT s.{ordinal}, {projection} FROM {staging} AS s "
+                + $"JOIN {target} AS t ON {match} FOR UPDATE OF t";
+
+            await using var reader = await matched.ExecuteReaderAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            while (reader.FieldCount == 0
+                && await reader.NextResultAsync(cancellationToken).ConfigureAwait(false))
+            {
+            }
+
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var row = reader.GetInt32(0);
+
+                for (var i = 0; i < beforeImages.Columns.Count; i++)
+                {
+                    var position = 1 + i;
+
+                    beforeImages.SetValue(
+                        row,
+                        i,
+                        await reader.IsDBNullAsync(position, cancellationToken).ConfigureAwait(false)
+                            ? null
+                            : reader.GetValue(position));
+                }
+            }
+        }
+
+        if (!deleteMissing)
+        {
+            return;
+        }
+
+        await using var removed = connection.CreateCommand();
+        _settings.Apply(removed);
+
+        // The same predicate the delete arm uses, so the rows captured here are exactly the rows it
+        // goes on to remove — scope included, since a scope is what holds it back.
+        var scope = rows.Scope is { } fence ? $" AND ({fence.Sql})" : "";
+
+        removed.CommandText =
+            $"SELECT {projection} FROM {target} AS t WHERE NOT EXISTS "
+            + $"(SELECT 1 FROM {staging} AS s WHERE {match}){scope} FOR UPDATE";
+
+        Bind(removed, rows.Scope);
+
+        await using var removedReader = await removed.ExecuteReaderAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        while (await removedReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var values = new object?[beforeImages.Columns.Count];
+
+            for (var i = 0; i < values.Length; i++)
+            {
+                values[i] = await removedReader.IsDBNullAsync(i, cancellationToken)
+                    .ConfigureAwait(false)
+                    ? null
+                    : removedReader.GetValue(i);
+            }
+
+            beforeImages.AddRemovedRow(values);
+        }
+    }
+
     private bool SupportsMerge(NpgsqlConnection connection)
         => _useMerge ?? connection.PostgreSqlVersion.Major >= 17;
 

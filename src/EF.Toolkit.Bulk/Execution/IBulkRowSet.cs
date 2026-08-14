@@ -67,6 +67,23 @@ public interface IBulkRowSet
     /// <summary>Number of rows.</summary>
     int RowCount { get; }
 
+    /// <summary>
+    ///     Somewhere to record the target rows as they stand before the write, or
+    ///     <see langword="null" /> when nobody asked for them.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Null by default, and null for every operation nobody is observing, so the extra read
+    ///         this implies is only ever issued when something is going to use it. An executor that
+    ///         finds one here reads the affected rows before it changes them, joined to the staging
+    ///         table it has already built, inside the same transaction.
+    ///     </para>
+    ///     <para>
+    ///         Meaningless on an insert: there is no earlier state of a row that does not exist yet.
+    ///     </para>
+    /// </remarks>
+    BulkBeforeImages? BeforeImages => null;
+
     /// <summary>The columns involved, in a stable order.</summary>
     IReadOnlyList<BulkColumnInfo> Columns { get; }
 
