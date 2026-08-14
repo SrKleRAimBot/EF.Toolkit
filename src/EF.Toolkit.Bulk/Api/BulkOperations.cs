@@ -64,7 +64,11 @@ internal static class BulkOperations
                 cancellationToken)
             .ConfigureAwait(false);
 
-        // Only once the write has actually committed, so a rollback leaves the tracker untouched.
+        // Only once the write has succeeded. When this owns the transaction that means committed,
+        // so a failure leaves the tracker untouched. When the caller owns it -- their own
+        // transaction, or an ambient scope -- the write is durable only when they commit, and
+        // reconciling here matches what SaveChanges does in the same position: the tracker follows
+        // the write, and a caller who rolls back is expected to discard the context with it.
         Reconcile(context, entities, state, options.Track);
 
         return outcome;

@@ -25,6 +25,13 @@ internal sealed class BulkEntityPlan
     // cached independently of the plans that use them. ForMerge cannot be cached -- its match
     // columns vary per call -- and was compiling one or two trees per column on every single merge:
     // roughly sixty compilations for a thirty-column entity, every time.
+    //
+    // The key is the property alone, so the accessor must not close over the entity type the plan
+    // is being built for. An inherited property is one IProperty shared by every type in the
+    // hierarchy, so the first sibling to be bulk-written would otherwise win the cache entry and
+    // the next one would get an accessor that casts to its sibling's CLR type. Casting to the
+    // declaring type instead is valid for every instance that carries the member, which is exactly
+    // the set of entities the key covers.
     private static readonly ConcurrentDictionary<IProperty, Func<object, object?>> GetterCache = new();
     private static readonly ConcurrentDictionary<IProperty, Action<object, object?>?> SetterCache = new();
 
@@ -130,8 +137,8 @@ internal sealed class BulkEntityPlan
                     column.Name, column.StoreTypeMapping, property,
                     isWrite, isRead, isKey, isCondition));
 
-                getters.Add(GetterCache.GetOrAdd(property, p => BuildGetter(entityType, p)));
-                setters.Add(isRead ? SetterCache.GetOrAdd(property, p => BuildSetter(entityType, p)) : null);
+                getters.Add(GetterCache.GetOrAdd(property, BuildGetter));
+                setters.Add(isRead ? SetterCache.GetOrAdd(property, BuildSetter) : null);
                 continue;
             }
 
@@ -194,8 +201,8 @@ internal sealed class BulkEntityPlan
                 isKey,
                 isCondition));
 
-            getters.Add(GetterCache.GetOrAdd(property, p => BuildGetter(entityType, p)));
-            setters.Add(isRead ? SetterCache.GetOrAdd(property, p => BuildSetter(entityType, p)) : null);
+            getters.Add(GetterCache.GetOrAdd(property, BuildGetter));
+            setters.Add(isRead ? SetterCache.GetOrAdd(property, BuildSetter) : null);
         }
 
         return new BulkEntityPlan(
@@ -228,10 +235,10 @@ internal sealed class BulkEntityPlan
         return property.GetValueGeneratorFactory() is null;
     }
 
-    private static Func<object, object?> BuildGetter(IEntityType entityType, IProperty property)
+    private static Func<object, object?> BuildGetter(IProperty property)
     {
         var parameter = Expression.Parameter(typeof(object), "entity");
-        var typed = Expression.Convert(parameter, entityType.ClrType);
+        var typed = Expression.Convert(parameter, property.DeclaringType.ClrType);
         var access = Access(typed, property);
 
         return Expression
@@ -239,7 +246,7 @@ internal sealed class BulkEntityPlan
             .Compile();
     }
 
-    private static Action<object, object?>? BuildSetter(IEntityType entityType, IProperty property)
+    private static Action<object, object?>? BuildSetter(IProperty property)
     {
         // Prefer the backing field: a store-generated key is commonly exposed through a property
         // with no public setter, and EF writes such values through the field too.
@@ -252,7 +259,7 @@ internal sealed class BulkEntityPlan
 
         var entity = Expression.Parameter(typeof(object), "entity");
         var value = Expression.Parameter(typeof(object), "value");
-        var typed = Expression.Convert(entity, entityType.ClrType);
+        var typed = Expression.Convert(entity, property.DeclaringType.ClrType);
 
         var target = writableField
             ? Expression.Field(typed, property.FieldInfo!)

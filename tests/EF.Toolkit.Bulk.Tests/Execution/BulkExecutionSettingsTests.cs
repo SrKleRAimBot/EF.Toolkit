@@ -73,6 +73,19 @@ public class BulkExecutionSettingsTests
             .Seconds(fallback: 30)
             .ShouldBe(1);
 
+    // The other half of "zero means no limit": EF's own CommandTimeout of 0 is how a caller asks
+    // for no deadline at all, and rounding it up to one second would put the tightest possible
+    // deadline on exactly the operation that wanted none.
+    [Fact]
+    public void An_efs_command_timeout_of_zero_stays_zero_rather_than_becoming_one_second()
+    {
+        var settings = BulkExecutionSettings.Resolve(
+            perCall: null, contextWide: null, commandTimeoutSeconds: 0);
+
+        settings.Timeout.ShouldBe(TimeSpan.Zero);
+        settings.Seconds(fallback: 30).ShouldBe(0);
+    }
+
     [Fact]
     public void Fractional_seconds_round_up_so_the_deadline_is_never_shortened()
         => BulkExecutionSettings.Resolve(TimeSpan.FromSeconds(2.4), null, null)

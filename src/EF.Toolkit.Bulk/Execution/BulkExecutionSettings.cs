@@ -53,11 +53,17 @@ internal readonly record struct BulkExecutionSettings(TimeSpan? Timeout)
     ///     The timeout in whole seconds, or <paramref name="fallback" /> when none was configured.
     /// </summary>
     /// <remarks>
-    ///     Every provider reads zero as "no limit", so a sub-second timeout rounds up to one rather
-    ///     than down to the exact opposite of what the caller asked for.
+    ///     Every provider reads zero as "no limit", which cuts both ways. A sub-second timeout
+    ///     rounds up to one rather than down to the exact opposite of what the caller asked for —
+    ///     but an exact zero has to pass straight through, because that is how EF's own
+    ///     <c>CommandTimeout</c> spells "wait as long as it takes". Rounding it up would put a
+    ///     one-second deadline on the operation of someone who asked for none at all.
     /// </remarks>
     public int Seconds(int fallback)
-        => Timeout is { } timeout
-            ? (int)Math.Max(1, Math.Ceiling(timeout.TotalSeconds))
-            : fallback;
+        => Timeout switch
+        {
+            null => fallback,
+            { Ticks: 0 } => 0,
+            { } timeout => (int)Math.Max(1, Math.Ceiling(timeout.TotalSeconds)),
+        };
 }
