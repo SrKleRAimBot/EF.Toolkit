@@ -25,6 +25,9 @@ public sealed class BulkColumnInfo
     ///     Whether the column takes part in the WHERE clause that locates the row — the key, plus
     ///     any concurrency tokens.
     /// </param>
+    /// <param name="isInsertOnly">
+    ///     Whether a merge writes this column only when it inserts the row.
+    /// </param>
     public BulkColumnInfo(
         string name,
         RelationalTypeMapping? typeMapping,
@@ -32,7 +35,8 @@ public sealed class BulkColumnInfo
         bool isWrite,
         bool isRead,
         bool isKey,
-        bool isCondition = false)
+        bool isCondition = false,
+        bool isInsertOnly = false)
     {
         IsCondition = isCondition;
         Name = name;
@@ -41,6 +45,7 @@ public sealed class BulkColumnInfo
         IsWrite = isWrite;
         IsRead = isRead;
         IsKey = isKey;
+        IsInsertOnly = isInsertOnly;
     }
 
     /// <summary>The database column name.</summary>
@@ -70,6 +75,17 @@ public sealed class BulkColumnInfo
     ///     report as a conflict rather than silently miss.
     /// </remarks>
     public bool IsCondition { get; }
+
+    /// <summary>
+    ///     Whether a merge writes this column when it inserts the row but leaves it alone when it
+    ///     updates one.
+    /// </summary>
+    /// <remarks>
+    ///     Still a written column — the insert arm needs a value for it — so it is staged and
+    ///     streamed like any other; it is only dropped from the update arm's assignment list. This
+    ///     is how a created-at column survives a row being merged over.
+    /// </remarks>
+    public bool IsInsertOnly { get; }
 
     /// <summary>The CLR type the driver should expect, after any value converter has run.</summary>
     public Type ProviderClrType

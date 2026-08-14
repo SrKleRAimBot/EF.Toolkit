@@ -116,11 +116,26 @@ public static class DbContextBulkExtensions
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>What the operation did.</returns>
     /// <remarks>
-    ///     Unlike <c>SaveChanges()</c>, which writes only the properties it detected as changed,
-    ///     this writes every non-key column — there is no change tracking involved to tell it
-    ///     otherwise. A row that has gone missing raises
-    ///     <see cref="DbUpdateConcurrencyException" />, matching stock EF.
+    ///     <para>
+    ///         Unlike <c>SaveChanges()</c>, which writes only the properties it detected as changed,
+    ///         this writes every non-key column — there is no change tracking involved to tell it
+    ///         otherwise. <c>Include</c> and <c>Exclude</c> narrow that back down when you know
+    ///         which columns you touched. A row that has gone missing raises
+    ///         <see cref="DbUpdateConcurrencyException" />, matching stock EF.
+    ///     </para>
+    ///     <para>
+    ///         <c>MatchOn</c> locates rows by something other than the primary key. That needs no
+    ///         unique index — a set-based <c>UPDATE</c> is content for one source row to reach
+    ///         several target rows — so the returned count is how many of
+    ///         <paramref name="entities" /> found a row, not how many rows changed.
+    ///     </para>
     /// </remarks>
+    /// <example>
+    ///     <code>
+    ///     await context.BulkUpdateAsync(orders, o => o.Include(x => new { x.Status, x.ShippedAt }));
+    ///     await context.BulkUpdateAsync(prices, o => o.MatchOn(p => new { p.Sku, p.Region }));
+    ///     </code>
+    /// </example>
     public static Task<BulkResult> BulkUpdateAsync<TEntity>(
         this DbContext context,
         IEnumerable<TEntity> entities,
@@ -131,13 +146,15 @@ public static class DbContextBulkExtensions
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(entities);
 
+        var options = Build(configure);
+
         return BulkOperations.ExecuteAsync(
             context,
             entities as IReadOnlyList<TEntity> ?? [.. entities],
             EntityState.Modified,
             BulkOperationKind.Update,
-            matchProperties: null,
-            Build(configure),
+            OptionalMatchProperties<TEntity>(context, options),
+            options,
             cancellationToken);
     }
 
@@ -162,8 +179,15 @@ public static class DbContextBulkExtensions
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>What the operation did.</returns>
     /// <remarks>
-    ///     The entities end up <c>Detached</c> whatever the tracking setting says: their rows no
-    ///     longer exist, so leaving them <c>Unchanged</c> would assert otherwise.
+    ///     <para>
+    ///         The entities end up <c>Detached</c> whatever the tracking setting says: their rows no
+    ///         longer exist, so leaving them <c>Unchanged</c> would assert otherwise.
+    ///     </para>
+    ///     <para>
+    ///         <c>MatchOn</c> deletes by something other than the primary key — every row of an
+    ///         import batch, say — in which case one entity can remove several rows and the returned
+    ///         count is how many of <paramref name="entities" /> matched something.
+    ///     </para>
     /// </remarks>
     public static Task<BulkResult> BulkDeleteAsync<TEntity>(
         this DbContext context,
@@ -175,13 +199,15 @@ public static class DbContextBulkExtensions
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(entities);
 
+        var options = Build(configure);
+
         return BulkOperations.ExecuteAsync(
             context,
             entities as IReadOnlyList<TEntity> ?? [.. entities],
             EntityState.Deleted,
             BulkOperationKind.Delete,
-            matchProperties: null,
-            Build(configure),
+            OptionalMatchProperties<TEntity>(context, options),
+            options,
             cancellationToken);
     }
 
@@ -273,9 +299,11 @@ public static class DbContextBulkExtensions
     /// <returns>How many rows were inserted, updated and deleted.</returns>
     /// <remarks>
     ///     <para>
-    ///         <strong>The delete covers the entire table.</strong> Any row whose match value is not
-    ///         in <paramref name="entities" /> is removed — that is what makes this a synchronise
-    ///         rather than a merge, and it is easy to invoke with a partial list by accident. Use
+    ///         <strong>The delete covers the entire table</strong> unless you scope it. Any row
+    ///         whose match value is not in <paramref name="entities" /> is removed — that is what
+    ///         makes this a synchronise rather than a merge, and it is easy to invoke with a partial
+    ///         list by accident. <c>WithinScope</c> confines the delete to the rows this source is
+    ///         authoritative for; without it, <c>AllowFullTableDelete()</c> is required. Use
     ///         <c>BulkMergeAsync</c> if you only mean to upsert.
     ///     </para>
     ///     <para>
@@ -295,26 +323,31 @@ public static class DbContextBulkExtensions
         var options = Build(configure);
         var materialized = entities as IReadOnlyList<TEntity> ?? [.. entities];
 
-        if (!options.AllowFullTableDelete)
+        var scoped = options.Scope is not null || options.ScopeSql is not null;
+
+        if (!scoped && !options.AllowFullTableDelete)
         {
-            // The delete arm covers the whole table -- that is what separates a synchronise from a
-            // merge -- so a partial list silently removes everything it omitted. It is easy to do
-            // by accident, impossible to undo, and costs one method call to rule out.
+            // Unscoped, the delete arm covers the whole table -- that is what separates a
+            // synchronise from a merge -- so a partial list silently removes everything it omitted.
+            // It is easy to do by accident, impossible to undo, and costs one method call to rule
+            // out.
             throw new BulkNotSupportedException(
                 $"BulkSynchronizeAsync deletes every {typeof(TEntity).Name} row its source does "
-                + "not contain, across the whole table. Call AllowFullTableDelete() to confirm "
-                + "that is the intent, or use BulkMergeAsync to insert and update without "
-                + "deleting anything.");
+                + "not contain, across the whole table. Call WithinScope(...) to confine the "
+                + "delete to the rows this source is authoritative for, AllowFullTableDelete() to "
+                + "confirm the whole table really is the intent, or BulkMergeAsync to insert and "
+                + "update without deleting anything.");
         }
 
         if (materialized.Count == 0)
         {
-            // Synchronising to nothing would empty the table. That is a defensible reading, but it
-            // is far more often a bug in the caller's query than an intent to truncate.
+            // Synchronising to nothing would empty the table -- or the scope. That is a defensible
+            // reading, but it is far more often a bug in the caller's query than an intent to
+            // truncate.
             throw new BulkNotSupportedException(
                 $"BulkSynchronizeAsync was given no {typeof(TEntity).Name} rows, which would "
-                + "delete every row in the table. Call BulkDeleteAsync explicitly if that is the "
-                + "intent.");
+                + $"delete every row {(scoped ? "in the scope" : "in the table")}. Call "
+                + "BulkDeleteAsync explicitly if that is the intent.");
         }
 
         return BulkOperations.ExecuteAsync(
@@ -388,6 +421,16 @@ public static class DbContextBulkExtensions
     /// <returns>The number of state entries written.</returns>
     public static int BulkSaveChanges(this DbContext context, bool acceptAllChangesOnSuccess = true)
         => BulkSaveChangesAsync(context, acceptAllChangesOnSuccess).GetAwaiter().GetResult();
+
+    /// <summary>
+    ///     The columns an update or a delete locates rows by, or <see langword="null" /> to leave
+    ///     the plan on its cached primary-key path.
+    /// </summary>
+    private static IReadOnlyList<IProperty>? OptionalMatchProperties<TEntity>(
+        DbContext context,
+        BulkOperationOptions options)
+        where TEntity : class
+        => options.Match is null ? null : MatchProperties<TEntity>(context, options);
 
     private static IReadOnlyList<IProperty> MatchProperties<TEntity>(
         DbContext context,

@@ -231,17 +231,11 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
     {
         var writeIndices = new List<int>();
         var conditionIndices = new List<int>();
-        var keyIndices = new List<int>();
         var readIndices = new List<int>();
 
         for (var i = 0; i < rows.Columns.Count; i++)
         {
             var column = rows.Columns[i];
-
-            if (column.IsKey)
-            {
-                keyIndices.Add(i);
-            }
 
             if (column.IsCondition)
             {
@@ -261,10 +255,12 @@ public sealed class SqlServerBulkExecutor : IBulkOperationExecutor
             }
         }
 
-        if (keyIndices.Count == 0 || conditionIndices.Count == 0)
+        // The condition columns, not the key: with MatchOn the caller locates rows by something
+        // else entirely, and a set-based UPDATE or DELETE needs no unique index to do it.
+        if (conditionIndices.Count == 0)
         {
             return BulkExecutionResult.Declined(
-                $"'{rows.TableName}' has no key columns to join a staged {rows.EntityState} on.");
+                $"'{rows.TableName}' has no columns to join a staged {rows.EntityState} on.");
         }
 
         if (rows.EntityState == EntityState.Modified && writeIndices.Count == 0)

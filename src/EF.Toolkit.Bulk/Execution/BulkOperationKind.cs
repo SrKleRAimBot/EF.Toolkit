@@ -35,3 +35,28 @@ public enum BulkOperationKind
     /// </remarks>
     Synchronize
 }
+
+/// <summary>
+///     Names an operation the way a sentence has to read it.
+/// </summary>
+internal static class BulkOperationKindExtensions
+{
+    /// <summary>
+    ///     The kind in prose, article included: <c>an insert</c>, <c>a synchronise</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Every refusal in the explicit API names the operation the caller made, and lower-casing
+    ///     the enum behind a fixed article produced "a insert" and "a update" — a small thing, but
+    ///     one that appears in the exception a caller reads while working out what they did wrong.
+    /// </remarks>
+    /// <param name="kind">The operation.</param>
+    public static string Describe(this BulkOperationKind kind)
+        => kind switch
+        {
+            BulkOperationKind.Insert => "an insert",
+            BulkOperationKind.Update => "an update",
+            BulkOperationKind.Delete => "a delete",
+            BulkOperationKind.Merge => "a merge",
+            _ => "a synchronise"
+        };
+}

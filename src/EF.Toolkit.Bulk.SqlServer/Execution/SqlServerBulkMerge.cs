@@ -112,9 +112,10 @@ internal sealed class SqlServerBulkMerge
                 return $"t.{column} = s.{column}";
             }));
 
-        // Match columns identify the row, so they are never themselves reassigned.
+        // Match columns identify the row, so they are never themselves reassigned, and an
+        // insert-only column is written by the insert arm alone.
         var assignments = writeIndices
-            .Where(i => !matchIndices.Contains(i))
+            .Where(i => !matchIndices.Contains(i) && !rows.Columns[i].IsInsertOnly)
             .Select(i =>
             {
                 var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
@@ -130,9 +131,13 @@ internal sealed class SqlServerBulkMerge
             ", ",
             writeIndices.Select(i => $"s.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
 
-        // MERGE has a delete arm for exactly this, so a synchronise stays one statement.
+        // MERGE has a delete arm for exactly this, so a synchronise stays one statement. NOT
+        // MATCHED BY SOURCE sees only the target, which is what the scope selects, so the fence
+        // goes straight onto the arm's own condition.
+        var fence = rows.Scope is { } scope ? $" AND ({scope.Sql})" : "";
+
         var notMatchedBySource = deleteMissing
-            ? " WHEN NOT MATCHED BY SOURCE THEN DELETE"
+            ? $" WHEN NOT MATCHED BY SOURCE{fence} THEN DELETE"
             : "";
 
         var output = new List<string> { "$action" };
@@ -160,6 +165,18 @@ internal sealed class SqlServerBulkMerge
         _settings.Apply(command);
         command.CommandText = sql;
         command.Transaction = transaction;
+
+        if (deleteMissing && rows.Scope is { } bound)
+        {
+            // Bound rather than formatted into the SQL, which is what makes the
+            // interpolated-string overload of WithinScope safe to hand a value from outside the
+            // application.
+            for (var i = 0; i < bound.Parameters.Count; i++)
+            {
+                command.Parameters.AddWithValue(
+                    "@" + BulkScope.ParameterName(i), bound.Parameters[i] ?? DBNull.Value);
+            }
+        }
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken)
             .ConfigureAwait(false);

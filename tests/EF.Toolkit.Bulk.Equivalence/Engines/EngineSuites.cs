@@ -115,3 +115,20 @@ public sealed class PostgreSql16ThroughputTests(PostgreSql16Fixture fixture, ITe
 [Collection("sqlserver")]
 public sealed class SqlServerThroughputTests(SqlServerFixture fixture, ITestOutputHelper output)
     : ThroughputSmokeTests(fixture, output);
+
+[Trait("Engine", "postgres16")]
+[Collection("postgres16")]
+public sealed class PostgreSql16ProjectionAndScopeTests(PostgreSql16Fixture fixture)
+    : ProjectionAndScopeTests(fixture);
+
+// The delete arm is a separate DELETE under ON CONFLICT and a MERGE arm from 17 on, so a scope has
+// to be exercised on both.
+[Trait("Engine", "postgres17")]
+[Collection("postgres17")]
+public sealed class PostgreSql17ProjectionAndScopeTests(PostgreSql17Fixture fixture)
+    : ProjectionAndScopeTests(fixture);
+
+[Trait("Engine", "sqlserver")]
+[Collection("sqlserver")]
+public sealed class SqlServerProjectionAndScopeTests(SqlServerFixture fixture)
+    : ProjectionAndScopeTests(fixture);

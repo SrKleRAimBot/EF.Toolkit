@@ -64,9 +64,43 @@ public sealed record BulkOperationOptions
     public Action<BulkProgress>? Progress { get; init; }
 
     /// <summary>
-    ///     Columns a merge matches on. When <see langword="null" />, the primary key is used.
+    ///     Columns the operation matches rows on. When <see langword="null" />, the primary key is
+    ///     used.
     /// </summary>
+    /// <remarks>
+    ///     Applies to a merge, a synchronise, an update and a delete — everything that has to find
+    ///     an existing row.
+    /// </remarks>
     public LambdaExpression? Match { get; init; }
+
+    /// <summary>
+    ///     The only columns to write. When <see langword="null" />, every writable column is
+    ///     written.
+    /// </summary>
+    public LambdaExpression? Include { get; init; }
+
+    /// <summary>Columns to leave out of the write set.</summary>
+    public LambdaExpression? Exclude { get; init; }
+
+    /// <summary>
+    ///     Columns a merge writes when it inserts a row but leaves alone when it updates one.
+    /// </summary>
+    public LambdaExpression? InsertOnly { get; init; }
+
+    /// <summary>
+    ///     Restricts which rows a synchronise's delete arm may remove. When <see langword="null" />,
+    ///     the delete covers the whole table.
+    /// </summary>
+    public LambdaExpression? Scope { get; init; }
+
+    /// <summary>
+    ///     The same restriction, written as SQL with its values interpolated.
+    /// </summary>
+    /// <remarks>
+    ///     The escape hatch for a predicate <see cref="Scope" />'s translator does not cover. The
+    ///     interpolation holes become parameters rather than being pasted into the statement.
+    /// </remarks>
+    public FormattableString? ScopeSql { get; init; }
 
     /// <summary>
     ///     Whether to follow navigations and write the whole reachable graph, principals first.
