@@ -51,6 +51,15 @@ public interface IBulkRowSet
     /// </remarks>
     TimeSpan? Timeout { get; }
 
+    /// <summary>
+    ///     Restricts which target rows a synchronise's delete arm may remove, or
+    ///     <see langword="null" /> when it covers the whole table.
+    /// </summary>
+    /// <remarks>
+    ///     Ignored by every other operation, which only ever touches rows the caller handed over.
+    /// </remarks>
+    BulkScope? Scope { get; }
+
     /// <summary>Number of rows.</summary>
     int RowCount { get; }
 

@@ -122,6 +122,25 @@ Matches on the primary key. Note that it writes **every** non-key column, not ju
 changed — there is no change tracking involved to tell it otherwise. A row that has gone missing
 raises `DbUpdateConcurrencyException` naming the affected entities, as it would under stock EF.
 
+`Include` and `Exclude` narrow that back down when you do know which columns you touched:
+
+```csharp
+await context.BulkUpdateAsync(orders, o => o.Include(x => new { x.Status, x.ShippedAt }));
+await context.BulkUpdateAsync(orders, o => o.Exclude(x => x.CreatedAt));
+```
+
+`MatchOn` locates rows by something other than the primary key — useful when the input never had
+one, as with rows read from a file:
+
+```csharp
+await context.BulkUpdateAsync(prices, o => o.MatchOn(p => new { p.Sku, p.Region }));
+```
+
+Unlike a merge this needs **no unique index**: a set-based `UPDATE` is content for one source row to
+reach several target rows, and will. `BulkResult` then reports how many of the entities you passed
+found a row, not how many rows changed — and a source row that matched nothing is still a
+`DbUpdateConcurrencyException`.
+
 ### Delete
 
 ```csharp
@@ -129,7 +148,8 @@ await context.BulkDeleteAsync(orders);   // only the keys are read
 ```
 
 The entities end up `Detached` whatever the tracking setting says: their rows no longer exist, so
-leaving them `Unchanged` would assert otherwise.
+leaving them `Unchanged` would assert otherwise. `MatchOn` works here too, with the same
+one-to-many caveat — deleting every row of an import batch takes one entity carrying the batch id.
 
 ### Merge (upsert)
 
@@ -151,17 +171,45 @@ o.MatchOn(c => new { c.TenantId, c.Email })
 *is*, and without one a `MERGE` would happily match several rows at once. Store-generated keys are
 populated on the entities that turned out to be inserts.
 
+`InsertOnly` names the columns that record how a row came to exist, so a merge writes them when it
+inserts and leaves them alone when it updates:
+
+```csharp
+o.MatchOn(c => c.Email).InsertOnly(c => c.CreatedAt)
+```
+
 ### Synchronize
 
 ```csharp
-await context.BulkSynchronizeAsync(customers, o => o.MatchOn(c => c.Email));
+await context.BulkSynchronizeAsync(
+    customers, o => o.MatchOn(c => c.Email).AllowFullTableDelete());
 // → 25 inserted, 60 updated, 40 deleted
 ```
 
 Makes the table match your list exactly. **The delete covers the whole table** — that is what makes
-it a synchronise rather than a merge, and it is easy to trigger with a partial list by accident. It
-refuses an empty source rather than emptying the table, and runs in one transaction so the table is
-never seen half-synchronised.
+it a synchronise rather than a merge, and it is easy to trigger with a partial list by accident, so
+it has to be confirmed. It refuses an empty source rather than emptying the table, and runs in one
+transaction so the table is never seen half-synchronised.
+
+Where your list is partial *by design* — one tenant, one partition, one import — scope the delete
+instead of confirming it:
+
+```csharp
+await context.BulkSynchronizeAsync(rows, o => o
+    .MatchOn(r => r.ExternalId)
+    .WithinScope(r => r.TenantId == tenantId));
+```
+
+Now only rows inside the scope can be deleted, and `AllowFullTableDelete()` is not needed — the
+delete is no longer full-table. The translator is deliberately narrow: `&&`-ed comparisons between a
+mapped property and a value, with anything else refused by name rather than silently dropped, since
+a dropped condition widens a delete. Values are bound as parameters. For a predicate it does not
+cover there is a SQL overload, where the target is aliased `t` and every interpolation hole is bound
+rather than pasted:
+
+```csharp
+o.WithinScope($"t.tenant_id = {tenantId} AND t.archived_at IS NULL")
+```
 
 ### Writing a whole graph
 
@@ -227,6 +275,14 @@ await context.BulkInsertAsync(orders, o => o
     .IncludeGraph()
     .OnProgress(p => log.LogInformation("{Done}/{Total}", p.Completed, p.Total)));
 ```
+
+| Option | Applies to | Effect |
+| --- | --- | --- |
+| `MatchOn` | merge, synchronise, update, delete | locate rows by something other than the primary key |
+| `Include` / `Exclude` | insert, update, merge | narrow the set of columns written |
+| `InsertOnly` | merge, synchronise | write these when inserting, leave them alone when updating |
+| `WithinScope` | synchronise | confine the delete arm to the rows it selects |
+| `AllowFullTableDelete` | synchronise | confirm an unscoped, whole-table delete |
 
 Context-wide:
 
@@ -424,7 +480,7 @@ ADO, not through EF, so a self-consistently wrong conversion cannot hide), full 
 including original values, and failure behaviour. Four negative controls prove the harness detects
 divergence rather than silently comparing nothing.
 
-256 tests run against PostgreSQL 16, PostgreSQL 17 and SQL Server 2022.
+289 tests run against PostgreSQL 16, PostgreSQL 17 and SQL Server 2022.
 
 ---
 
@@ -444,8 +500,14 @@ divergence rather than silently comparing nothing.
   it was loaded, and the explicit API works from detached objects that do not carry it — for the
   usual load-increment-save pattern the token already holds the *new* value. `SaveChanges()` tracks
   the before-image and handles these correctly.
-- `BulkSynchronizeAsync` requires `AllowFullTableDelete()`. Its delete arm covers the whole table,
-  so a partial list removes everything the list omitted.
+- `BulkSynchronizeAsync` requires either `WithinScope(...)` or `AllowFullTableDelete()`. Unscoped,
+  its delete arm covers the whole table, so a partial list removes everything the list omitted.
+- `WithinScope`'s expression translator takes `&&`-ed comparisons between a mapped property and a
+  value, and nothing else. Widening it is not a priority: the SQL overload covers the rest, and a
+  scope that quietly fails to translate part of a predicate deletes more than it was asked to.
+- Column projection applies to the explicit API only, and not to `IncludeGraph()`. On the
+  transparent path EF decides the write set from change tracking, which is already narrower; a graph
+  insert writes several entity types, and a projection over one says nothing about the rest.
 - Rows of one table but differing column shape — a column with a database default, set on some rows
   and left null on others — are written shape by shape, so store-generated keys are handed out in a
   different order than `SaveChanges()` assigns them. Every row keeps its own key and its own values;

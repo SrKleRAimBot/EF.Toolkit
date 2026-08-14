@@ -61,25 +61,39 @@ internal sealed class BulkEntityPlan
     public static BulkEntityPlan For(IEntityType entityType, EntityState state)
         => entityType.GetOrAddRuntimeAnnotationValue(
             BulkAnnotations.Plan(state),
-            static key => Build(key.EntityType, key.State, null),
+            static key => Build(key.EntityType, key.State, null, null),
             (EntityType: entityType, State: state));
 
     /// <summary>
-    ///     Builds a plan for an upsert matched on <paramref name="matchProperties" />.
+    ///     Builds a plan for a call that narrowed what the operation matches on or writes.
     /// </summary>
     /// <remarks>
-    ///     Not cached: the match columns vary per call, and a merge is an explicit, comparatively
-    ///     rare operation where building the plan is dwarfed by the write itself.
+    ///     Uncached whenever either is present: both vary per call, and folding them into the cache
+    ///     key would not work anyway — record equality over an <c>IReadOnlyList</c> is reference
+    ///     equality, so the entry would silently never be hit. These are explicit, comparatively
+    ///     rare operations where building the plan is dwarfed by the write itself, and the
+    ///     per-property accessors are cached independently.
     /// </remarks>
-    public static BulkEntityPlan ForMerge(
+    /// <param name="entityType">The entity type being written.</param>
+    /// <param name="state">What is being done to the rows.</param>
+    /// <param name="matchProperties">
+    ///     The columns that locate the row, or <see langword="null" /> for the primary key.
+    /// </param>
+    /// <param name="projection">The narrowed write set, or <see langword="null" /> for all of it.</param>
+    public static BulkEntityPlan For(
         IEntityType entityType,
-        IReadOnlyList<IProperty> matchProperties)
-        => Build(entityType, EntityState.Added, matchProperties);
+        EntityState state,
+        IReadOnlyList<IProperty>? matchProperties,
+        BulkProjection? projection)
+        => matchProperties is null && projection is null
+            ? For(entityType, state)
+            : Build(entityType, state, matchProperties, projection);
 
     private static BulkEntityPlan Build(
         IEntityType entityType,
         EntityState state,
-        IReadOnlyList<IProperty>? matchProperties)
+        IReadOnlyList<IProperty>? matchProperties,
+        BulkProjection? projection)
     {
         var mapping = entityType.GetTableMappings().FirstOrDefault()
             ?? throw new BulkNotSupportedException(
@@ -111,14 +125,17 @@ internal sealed class BulkEntityPlan
 
             bool isWrite, isRead, isCondition;
 
-            if (matchProperties is not null)
+            // Only a merge or a synchronise pairs match columns with Added: an insert has nothing
+            // to match, so match columns on this state can only have come from one of those.
+            if (matchProperties is not null && state == EntityState.Added)
             {
                 // Merge. The match columns locate the row and are also written, so a row that does
                 // not exist yet can be inserted with them. A store-generated key is read back,
                 // because only the rows that turned out to be inserts will have one.
                 isCondition = matchProperties.Any(p => p.Name == property.Name);
                 isRead = isStoreGenerated;
-                isWrite = !isStoreGenerated;
+                isWrite = Project(
+                    projection, entityType, property, !isStoreGenerated, isKey, isCondition);
 
                 if (!isWrite && !isRead && !isCondition)
                 {
@@ -127,7 +144,8 @@ internal sealed class BulkEntityPlan
 
                 columns.Add(new BulkColumnInfo(
                     column.Name, column.StoreTypeMapping, property,
-                    isWrite, isRead, isKey, isCondition));
+                    isWrite, isRead, isKey, isCondition,
+                    isWrite && projection?.IsInsertOnly(property) == true));
 
                 getters.Add(Getter(property));
                 setters.Add(isRead ? Setter(property) : null);
@@ -139,7 +157,8 @@ internal sealed class BulkEntityPlan
                 case EntityState.Added:
                     isCondition = false;
                     isRead = isStoreGenerated;
-                    isWrite = !isStoreGenerated;
+                    isWrite = Project(
+                        projection, entityType, property, !isStoreGenerated, isKey, isCondition);
                     break;
 
                 case EntityState.Modified when property.IsConcurrencyToken:
@@ -158,16 +177,26 @@ internal sealed class BulkEntityPlan
                         + "type, which tracks the loaded value and can.");
 
                 case EntityState.Modified:
-                    // The key locates the row; everything else the application owns is set. A
-                    // store-generated non-key column is left alone entirely — it is the database's
-                    // to maintain.
-                    isCondition = isKey;
+                    // The match columns locate the row -- the key unless the caller named others --
+                    // and everything else the application owns is set. A store-generated non-key
+                    // column is left alone entirely: it is the database's to maintain.
+                    //
+                    // A key stays out of the write set even when it is not a match column. It is
+                    // still what identifies the row, and reassigning it would turn an update into a
+                    // silent re-key.
+                    isCondition = Matches(matchProperties, property, isKey);
                     isRead = false;
-                    isWrite = !isKey && !isStoreGenerated;
+                    isWrite = Project(
+                        projection,
+                        entityType,
+                        property,
+                        !isKey && !isCondition && !isStoreGenerated,
+                        isKey,
+                        isCondition);
                     break;
 
                 case EntityState.Deleted:
-                    isCondition = isKey;
+                    isCondition = Matches(matchProperties, property, isKey);
                     isRead = false;
                     isWrite = false;
                     break;
@@ -197,9 +226,69 @@ internal sealed class BulkEntityPlan
             setters.Add(isRead ? Setter(property) : null);
         }
 
+        if (projection is not null && state == EntityState.Modified && !columns.Any(c => c.IsWrite))
+        {
+            // Left to run, this reaches the executor's "no columns to set" decline and falls back
+            // to stock EF -- which writes every column, the exact opposite of what the projection
+            // asked for. Better to say so than to do the opposite quietly.
+            throw new BulkNotSupportedException(
+                $"An update of '{entityType.DisplayName()}' has no columns left to write after "
+                + $"{projection.Describe()}. Every remaining column either locates the row or is "
+                + "the database's to maintain.");
+        }
+
         return new BulkEntityPlan(
             entityType.ClrType,
             table.Name, table.Schema, columns, [.. getters], [.. setters]);
+    }
+
+    /// <summary>Whether <paramref name="property" /> is one of the columns that locates the row.</summary>
+    /// <remarks>
+    ///     Matched by name rather than by reference: an inherited property is one <c>IProperty</c>
+    ///     for the whole hierarchy, and a selector resolved against a sibling type would otherwise
+    ///     miss it.
+    /// </remarks>
+    private static bool Matches(
+        IReadOnlyList<IProperty>? matchProperties,
+        IProperty property,
+        bool isKey)
+        => matchProperties is null
+            ? isKey
+            : matchProperties.Any(p => p.Name == property.Name);
+
+    /// <summary>
+    ///     Applies the caller's projection to a column that would otherwise be written.
+    /// </summary>
+    /// <remarks>
+    ///     A projection narrows what gets written, never what locates the row. Dropping a key or a
+    ///     match column would leave the statement joining on a column it never staged, or inserting
+    ///     a row with no key at all — so that is refused rather than accommodated.
+    /// </remarks>
+    private static bool Project(
+        BulkProjection? projection,
+        IEntityType entityType,
+        IProperty property,
+        bool isWrite,
+        bool isKey,
+        bool isCondition)
+    {
+        if (projection is null)
+        {
+            return isWrite;
+        }
+
+        var projected = projection.Writes(property, isWrite);
+
+        if (projected == isWrite || !(isKey || isCondition))
+        {
+            return projected;
+        }
+
+        throw new BulkNotSupportedException(
+            $"'{entityType.DisplayName()}.{property.Name}' is "
+            + (isKey ? "part of the key" : "one of the match columns")
+            + $", so it cannot be left out of the write set by {projection.Describe()}. It is what "
+            + "identifies the row, and the operation has no way to locate one without it.");
     }
 
     /// <summary>
@@ -230,9 +319,9 @@ internal sealed class BulkEntityPlan
     /// <summary>Gets, or compiles and caches, the getter for <paramref name="property" />.</summary>
     /// <remarks>
     ///     Cached on the property rather than on the plan that asked for it. Compiling an
-    ///     expression tree is expensive and a property's accessor never varies, while
-    ///     <see cref="ForMerge" /> cannot cache its plan at all — its match columns vary per call —
-    ///     and so was compiling one or two trees per column on every single merge: roughly sixty
+    ///     expression tree is expensive and a property's accessor never varies, while a plan built
+    ///     for explicit match columns or a projection cannot be cached at all — both vary per call
+    ///     — and so was compiling one or two trees per column on every single merge: roughly sixty
     ///     compilations for a thirty-column entity, every time.
     /// </remarks>
     private static Func<object, object?> Getter(IProperty property)

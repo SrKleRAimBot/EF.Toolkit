@@ -60,6 +60,12 @@ internal sealed class ModificationCommandRowSet : IBulkRowSet
     /// </remarks>
     public TimeSpan? Timeout => null;
 
+    /// <remarks>
+    ///     A transparent save writes only the rows the change tracker holds, so there is nothing for
+    ///     a scope to fence.
+    /// </remarks>
+    public BulkScope? Scope => null;
+
     /// <summary>Builds a row set over <paramref name="partition" />.</summary>
     public static ModificationCommandRowSet Create(BulkPartition partition)
     {

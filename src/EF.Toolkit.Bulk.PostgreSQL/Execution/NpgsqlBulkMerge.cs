@@ -89,9 +89,10 @@ internal sealed class NpgsqlBulkMerge
                 ", ",
                 matchIndices.Select(i => _sqlHelper.DelimitIdentifier(rows.Columns[i].Name)));
 
-            // Match columns are what identify the row, so they are never themselves reassigned.
+            // Match columns are what identify the row, so they are never themselves reassigned, and
+            // an insert-only column is written by the insert arm alone.
             var updates = writeIndices
-                .Where(i => !matchIndices.Contains(i))
+                .Where(i => !matchIndices.Contains(i) && !rows.Columns[i].IsInsertOnly)
                 .Select(i =>
                 {
                     var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
@@ -161,9 +162,16 @@ internal sealed class NpgsqlBulkMerge
 
                 await using var delete = connection.CreateCommand();
                 _settings.Apply(delete);
+
+                // The scope fences which target rows the delete may reach at all, so it is ANDed
+                // onto the "not in the source" test rather than replacing it.
+                var scope = rows.Scope is { } fence ? $" AND ({fence.Sql})" : "";
+
                 delete.CommandText =
                     $"DELETE FROM {target} AS t WHERE NOT EXISTS "
-                    + $"(SELECT 1 FROM {staging} AS s WHERE {missing})";
+                    + $"(SELECT 1 FROM {staging} AS s WHERE {missing}){scope}";
+
+                Bind(delete, rows.Scope);
 
                 deleted = await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -234,9 +242,10 @@ internal sealed class NpgsqlBulkMerge
                 return $"t.{column} = s.{column}";
             }));
 
-        // Match columns identify the row, so they are never themselves reassigned.
+        // Match columns identify the row, so they are never themselves reassigned, and an
+        // insert-only column is written by the insert arm alone.
         var assignments = writeIndices
-            .Where(i => !match.Contains(i))
+            .Where(i => !match.Contains(i) && !rows.Columns[i].IsInsertOnly)
             .Select(i =>
             {
                 var column = _sqlHelper.DelimitIdentifier(rows.Columns[i].Name);
@@ -252,8 +261,12 @@ internal sealed class NpgsqlBulkMerge
             ", ",
             writeIndices.Select(i => $"s.{_sqlHelper.DelimitIdentifier(rows.Columns[i].Name)}"));
 
+        // NOT MATCHED BY SOURCE sees only the target, which is exactly what the scope selects, so
+        // the fence goes straight onto the arm's own condition.
+        var fence = rows.Scope is { } scope ? $" AND ({scope.Sql})" : "";
+
         var notMatchedBySource = deleteMissing
-            ? "\nWHEN NOT MATCHED BY SOURCE THEN DELETE"
+            ? $"\nWHEN NOT MATCHED BY SOURCE{fence} THEN DELETE"
             : "";
 
         var returning = new List<string>
@@ -281,6 +294,7 @@ internal sealed class NpgsqlBulkMerge
         await using var command = connection.CreateCommand();
         _settings.Apply(command);
         command.CommandText = sql;
+        Bind(command, deleteMissing ? rows.Scope : null);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -424,6 +438,25 @@ internal sealed class NpgsqlBulkMerge
 
         var count = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return Convert.ToInt32(count, provider: null);
+    }
+
+    /// <summary>Binds a scope's values, if the statement was built with one.</summary>
+    /// <remarks>
+    ///     Bound rather than formatted into the SQL, which is what makes the interpolated-string
+    ///     overload of <c>WithinScope</c> safe to hand a value from outside the application.
+    /// </remarks>
+    private static void Bind(NpgsqlCommand command, BulkScope? scope)
+    {
+        if (scope is null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < scope.Parameters.Count; i++)
+        {
+            command.Parameters.AddWithValue(
+                BulkScope.ParameterName(i), scope.Parameters[i] ?? DBNull.Value);
+        }
     }
 
     private async Task ExecuteNonQueryAsync(

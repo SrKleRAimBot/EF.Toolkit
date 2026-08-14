@@ -69,8 +69,8 @@ public class MetadataCacheTests
             .ShouldBeSameAs(plan.Getters[Ordinal(plan, nameof(Product.Name))]);
     }
 
-    // ForMerge deliberately does not cache its plan -- the match columns vary per call -- which is
-    // why the accessors are cached one level down, on the properties.
+    // A plan built for explicit match columns deliberately is not cached -- they vary per call --
+    // which is why the accessors are cached one level down, on the properties.
     [Fact]
     public void An_uncached_merge_plan_still_reuses_the_cached_accessors()
     {
@@ -78,8 +78,8 @@ public class MetadataCacheTests
         var entityType = context.Model.FindEntityType(typeof(Product))!;
         var match = new[] { entityType.FindProperty(nameof(Product.Sku))! };
 
-        var first = BulkEntityPlan.ForMerge(entityType, match);
-        var second = BulkEntityPlan.ForMerge(entityType, match);
+        var first = BulkEntityPlan.For(entityType, EntityState.Added, match, null);
+        var second = BulkEntityPlan.For(entityType, EntityState.Added, match, null);
 
         second.ShouldNotBeSameAs(first);
         second.Getters[Ordinal(second, nameof(Product.Name))]

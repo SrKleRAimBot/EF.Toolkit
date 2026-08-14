@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using EFToolkit.Bulk.Configuration;
 using EFToolkit.Bulk.Execution;
 using EFToolkit.Bulk.Planning;
@@ -38,9 +39,14 @@ internal static class BulkOperations
                 $"'{typeof(TEntity).Name}' is not part of the model for "
                 + $"'{context.GetType().Name}'.");
 
-        var plan = matchProperties is null
-            ? BulkEntityPlan.For(entityType, state)
-            : BulkEntityPlan.ForMerge(entityType, matchProperties);
+        var plan = BulkEntityPlan.For(
+            entityType,
+            state,
+            matchProperties,
+            BulkProjection.Resolve<TEntity>(entityType, options, kind));
+
+        var scope = Scope<TEntity>(context, entityType, kind, options);
+
         // A synchronise removes every row its source does not contain, so it is the one operation
         // that cannot be split: the second batch's delete arm would remove exactly what the first
         // batch had just written. It runs as a single unit, which does mean holding the whole
@@ -58,8 +64,8 @@ internal static class BulkOperations
                 context,
                 options.Savepoint,
                 async ct => await WriteBatchesAsync(
-                        context, entities, state, kind, plan, executor, connection, batchSize,
-                        mergeCounts, options, ct)
+                        context, entities, state, kind, plan, scope, executor, connection,
+                        batchSize, mergeCounts, options, ct)
                     .ConfigureAwait(false),
                 cancellationToken)
             .ConfigureAwait(false);
@@ -89,6 +95,7 @@ internal static class BulkOperations
         EntityState state,
         BulkOperationKind kind,
         BulkEntityPlan plan,
+        BulkScope? scope,
         IBulkOperationExecutor executor,
         IRelationalConnection connection,
         int batchSize,
@@ -107,7 +114,8 @@ internal static class BulkOperations
             for (var offset = 0; offset < entities.Count; offset += batchSize)
             {
                 var slice = Slice(entities, offset, Math.Min(batchSize, entities.Count - offset));
-                var rows = new EntityRowSet(slice, plan, state, kind, mergeCounts, options.Timeout);
+                var rows = new EntityRowSet(
+                    slice, plan, state, kind, mergeCounts, options.Timeout, scope);
 
                 if (!executor.CanExecute(rows, out var reason))
                 {
@@ -165,6 +173,17 @@ internal static class BulkOperations
         if (roots.Count == 0)
         {
             return BulkResult.ForInsert(0);
+        }
+
+        if (options.Include is not null || options.Exclude is not null)
+        {
+            // A graph insert writes several entity types, and a projection is expressed over one of
+            // them. Applying it to the root alone and silently writing every column of everything
+            // else would be the worst of both readings.
+            throw new BulkNotSupportedException(
+                "Include and Exclude cannot be combined with IncludeGraph(): a graph insert writes "
+                + $"every entity type reachable from '{typeof(TEntity).Name}', and a projection "
+                + "over one of them says nothing about the rest.");
         }
 
         var bulkOptions = Resolve<BulkOptions>(context, "UseBulkOperations()");
@@ -296,6 +315,49 @@ internal static class BulkOperations
         }
 
         return written;
+    }
+
+    /// <summary>
+    ///     Translates the call's scope, if it has one, against the provider's identifier rules.
+    /// </summary>
+    /// <remarks>
+    ///     Translated here rather than inside the executor so the two providers share one
+    ///     translator: the only provider-specific part is how an identifier is delimited, which
+    ///     <see cref="ISqlGenerationHelper" /> already answers. The <c>t</c> alias is the one both
+    ///     the synchronise statements give the target table.
+    /// </remarks>
+    private static BulkScope? Scope<TEntity>(
+        DbContext context,
+        IEntityType entityType,
+        BulkOperationKind kind,
+        BulkOperationOptions options)
+        where TEntity : class
+    {
+        if (options.Scope is null && options.ScopeSql is null)
+        {
+            return null;
+        }
+
+        if (kind != BulkOperationKind.Synchronize)
+        {
+            // Nothing else reaches a row the caller did not hand over, so a scope here has nothing
+            // to fence and would silently do nothing at all -- on the one setting whose entire job
+            // is to stop a delete going too wide.
+            throw new BulkNotSupportedException(
+                $"WithinScope applies to BulkSynchronizeAsync, not to a "
+                + $"{kind.ToString().ToLowerInvariant()}. Only a synchronise deletes rows its "
+                + "source never named, so only a synchronise has anything to confine.");
+        }
+
+        if (options.ScopeSql is { } sql)
+        {
+            return BulkScopePredicate.Translate(sql);
+        }
+
+        return options.Scope is Expression<Func<TEntity, bool>> predicate
+            ? BulkScopePredicate.Translate(
+                entityType, predicate, context.GetService<ISqlGenerationHelper>(), alias: "t")
+            : null;
     }
 
     private static BulkResult Result(BulkOperationKind kind, int rows)
