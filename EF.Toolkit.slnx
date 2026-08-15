@@ -2,6 +2,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/EF.Toolkit.Audit.Sample/EF.Toolkit.Audit.Sample.csproj" />
     <Project Path="samples/EF.Toolkit.Bulk.Sample/EF.Toolkit.Bulk.Sample.csproj" />
+    <Project Path="samples/EF.Toolkit.Query.Sample/EF.Toolkit.Query.Sample.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/EF.Toolkit.Audit.Bulk/EF.Toolkit.Audit.Bulk.csproj" />
@@ -11,6 +12,7 @@
     <Project Path="src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
     <Project Path="src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
     <Project Path="src/EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
+    <Project Path="src/EF.Toolkit.Query/EF.Toolkit.Query.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/EF.Toolkit.Audit.Equivalence/EF.Toolkit.Audit.Equivalence.csproj" />
@@ -18,5 +20,7 @@
     <Project Path="tests/EF.Toolkit.Bulk.Benchmarks/EF.Toolkit.Bulk.Benchmarks.csproj" />
     <Project Path="tests/EF.Toolkit.Bulk.Equivalence/EF.Toolkit.Bulk.Equivalence.csproj" />
     <Project Path="tests/EF.Toolkit.Bulk.Tests/EF.Toolkit.Bulk.Tests.csproj" />
+    <Project Path="tests/EF.Toolkit.Query.Equivalence/EF.Toolkit.Query.Equivalence.csproj" />
+    <Project Path="tests/EF.Toolkit.Query.Tests/EF.Toolkit.Query.Tests.csproj" />
   </Folder>
 </Solution>

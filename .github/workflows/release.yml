@@ -47,6 +47,9 @@ jobs:
       - name: Unit tests (audit)
         run: dotnet test tests/EF.Toolkit.Audit.Tests -c Release --no-build --verbosity normal
 
+      - name: Unit tests (query)
+        run: dotnet test tests/EF.Toolkit.Query.Tests -c Release --no-build --verbosity normal
+
       # The differential harnesses are the primary correctness gate, so a release runs them
       # rather than trusting that the tagged commit was already validated on a branch.
       - name: Equivalence tests (bulk)
@@ -54,6 +57,9 @@ jobs:
 
       - name: Equivalence tests (audit)
         run: dotnet test tests/EF.Toolkit.Audit.Equivalence -c Release --no-build --verbosity normal
+
+      - name: Equivalence tests (query)
+        run: dotnet test tests/EF.Toolkit.Query.Equivalence -c Release --no-build --verbosity normal
 
       - name: Pack
         run: dotnet pack -c Release --no-build -o artifacts
@@ -93,8 +99,9 @@ jobs:
           user: ${{ secrets.NUGET_USER }}
 
       # Each core package goes before its dependents, so they resolve against something already
-      # accepted, and the bridge goes last because it depends on both cores. --skip-duplicate keeps
-      # a re-run after a partial failure safe.
+      # accepted, and the bridge goes after both cores it depends on. EF.Toolkit.Query depends on
+      # nothing here, so its position is free. --skip-duplicate keeps a re-run after a partial
+      # failure safe.
       - name: Push
         if: github.event_name == 'push' || inputs.dry_run == false
         run: |
@@ -107,7 +114,8 @@ jobs:
             artifacts/EF.Toolkit.Audit.[0-9]*.nupkg \
             artifacts/EF.Toolkit.Audit.SqlServer.*.nupkg \
             artifacts/EF.Toolkit.Audit.PostgreSQL.*.nupkg \
-            artifacts/EF.Toolkit.Audit.Bulk.*.nupkg
+            artifacts/EF.Toolkit.Audit.Bulk.*.nupkg \
+            artifacts/EF.Toolkit.Query.[0-9]*.nupkg
           do
             echo "::group::push $pkg"
             dotnet nuget push "$pkg" \

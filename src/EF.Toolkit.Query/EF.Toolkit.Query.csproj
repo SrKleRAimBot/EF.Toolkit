@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Query</PackageId>
+    <PackageTags>entity-framework-core;efcore;query;pagination;paging;keyset;cursor;sorting;filtering;linq</PackageTags>
+    <Description>
+      Standard query patterns for EF Core. Offset and keyset pagination, sorting contracts with a
+      guaranteed total order, composable filtering and search, keyset-driven batched streaming, and
+      ambient tracking scopes — plus a development-time advisor that reports missing indexes and
+      non-deterministic ordering from the model alone. Not a query abstraction: every entry point is
+      an extension method over IQueryable, so callers keep writing ordinary LINQ.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../docs/query.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Query.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Query.Equivalence" />
+  </ItemGroup>
+
+</Project>

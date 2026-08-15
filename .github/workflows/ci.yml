@@ -26,6 +26,8 @@ jobs:
         run: dotnet test tests/EF.Toolkit.Bulk.Tests -c Release --no-build --verbosity normal
       - name: Unit tests (audit)
         run: dotnet test tests/EF.Toolkit.Audit.Tests -c Release --no-build --verbosity normal
+      - name: Unit tests (query)
+        run: dotnet test tests/EF.Toolkit.Query.Tests -c Release --no-build --verbosity normal
       - name: Pack
         run: dotnet pack -c Release --no-build -o artifacts
       - uses: actions/upload-artifact@v4
@@ -37,8 +39,9 @@ jobs:
     # The differential harnesses are the primary correctness gate. The bulk suite runs each scenario
     # against stock EF and against EF.Toolkit.Bulk on real engines and asserts the database contents
     # and change-tracker state match; the audit suite runs the same change through SaveChanges and
-    # through the explicit bulk API and asserts the audit entries are identical. Both need Docker,
-    # so they are a separate job.
+    # through the explicit bulk API and asserts the audit entries are identical; the query suite
+    # walks a result set by keyset and by offset and asserts both cover every row exactly once. All
+    # three need Docker, so they are a separate job.
     name: Equivalence (${{ matrix.engine }})
     runs-on: ubuntu-latest
     strategy:
@@ -59,4 +62,8 @@ jobs:
       - name: Equivalence tests (audit)
         run: >
           dotnet test tests/EF.Toolkit.Audit.Equivalence -c Release --no-build --verbosity normal
+          --filter "Engine=${{ matrix.engine }}"
+      - name: Equivalence tests (query)
+        run: >
+          dotnet test tests/EF.Toolkit.Query.Equivalence -c Release --no-build --verbosity normal
           --filter "Engine=${{ matrix.engine }}"
