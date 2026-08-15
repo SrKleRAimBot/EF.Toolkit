@@ -584,7 +584,7 @@ public abstract class TransactionTests(DatabaseFixture fixture)
                 .CountAsync(TestContext.Current.CancellationToken))
             .ShouldBe(500);
 
-        var seen = await CountFromAnotherConnectionAsync("Customers", timeoutSeconds: 5);
+        var seen = await CountFromAnotherConnectionAsync("Customers", lockWaitSeconds: 5);
 
         seen.ShouldBe(
             0,
@@ -898,14 +898,15 @@ public abstract class TransactionTests(DatabaseFixture fixture)
     ///     Counts rows from a connection that is not the one holding the open transaction.
     /// </summary>
     /// <param name="table">The table to count.</param>
-    /// <param name="timeoutSeconds">
-    ///     How long to wait before treating the read as blocked. SQL Server's read-committed reader
-    ///     waits on the writer's locks rather than skipping the rows, so a lock wait is the expected
-    ///     outcome there and proves the same thing a count of zero does — the rows belong to a
-    ///     transaction that has not committed. PostgreSQL's MVCC reader answers immediately.
+    /// <param name="lockWaitSeconds">
+    ///     How long to wait on another transaction's locks before giving up. SQL Server's
+    ///     read-committed reader waits on the writer's locks rather than skipping the rows, so a lock
+    ///     wait is the expected outcome there and proves the same thing a count of zero does — the
+    ///     rows belong to a transaction that has not committed. PostgreSQL's MVCC reader answers
+    ///     immediately.
     /// </param>
     /// <returns>The number of rows visible, treating a lock wait as none.</returns>
-    private async Task<int> CountFromAnotherConnectionAsync(string table, int timeoutSeconds)
+    private async Task<int> CountFromAnotherConnectionAsync(string table, int lockWaitSeconds)
     {
         await using var context = fixture.CreateBulkContext();
         var helper = context.GetService<ISqlGenerationHelper>();
@@ -913,19 +914,24 @@ public abstract class TransactionTests(DatabaseFixture fixture)
         await using var connection = context.Database.GetDbConnection();
         await connection.OpenAsync(TestContext.Current.CancellationToken);
 
+        await LockWait.LimitAsync(connection, fixture.Engine, lockWaitSeconds);
+
         await using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {helper.DelimitIdentifier(table)}";
-        command.CommandTimeout = timeoutSeconds;
+
+        // Comfortably longer than the lock wait, so the engine's lock timeout is what ends a blocked
+        // read. Reaching this one means something other than a lock is wrong, and it should say so.
+        command.CommandTimeout = lockWaitSeconds * 4;
 
         try
         {
             var count = await command.ExecuteScalarAsync(TestContext.Current.CancellationToken);
             return Convert.ToInt32(count, System.Globalization.CultureInfo.InvariantCulture);
         }
-        catch (DbException)
+        catch (DbException exception) when (LockWait.IsTimeout(exception))
         {
-            // Blocked on the writer's locks until the timeout expired, which is only possible while
-            // the rows are held by an uncommitted transaction.
+            // Blocked on the writer's locks until the lock timeout expired, which is only possible
+            // while the rows are held by an uncommitted transaction.
             return 0;
         }
     }

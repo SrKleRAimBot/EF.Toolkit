@@ -239,7 +239,7 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
         context.Products.Add(NewProduct());
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        (await CountEntriesFromAnotherConnectionAsync(timeoutSeconds: 5)).ShouldBe(
+        (await CountEntriesFromAnotherConnectionAsync(lockWaitSeconds: 5)).ShouldBe(
             0,
             "an uncommitted audit entry must be invisible outside its transaction; a non-zero count "
             + "means auditing committed it separately from the change it describes");
@@ -247,7 +247,7 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
         await transaction.CommitAsync(TestContext.Current.CancellationToken);
 
         // And visible the moment it is committed, so the reader above was capable of seeing it.
-        (await CountEntriesFromAnotherConnectionAsync(timeoutSeconds: 5)).ShouldBe(1);
+        (await CountEntriesFromAnotherConnectionAsync(lockWaitSeconds: 5)).ShouldBe(1);
     }
 
     // ---------------------------------------------------------------- audit-owned transactions
@@ -743,32 +743,38 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
     /// <summary>
     ///     Counts audit entries from a connection that is not the one holding the open transaction.
     /// </summary>
-    /// <param name="timeoutSeconds">
-    ///     How long to wait before treating the read as blocked. SQL Server's read-committed reader
-    ///     waits on the writer's locks rather than skipping the rows, so a lock wait is the expected
-    ///     outcome there and proves the same thing a count of zero does. PostgreSQL's MVCC reader
-    ///     answers immediately.
+    /// <param name="lockWaitSeconds">
+    ///     How long to wait on another transaction's locks before giving up. SQL Server's
+    ///     read-committed reader waits on the writer's locks rather than skipping the rows, so a lock
+    ///     wait is the expected outcome there and proves the same thing a count of zero does.
+    ///     PostgreSQL's MVCC reader answers immediately.
     /// </param>
     /// <returns>The number of entries visible, treating a lock wait as none.</returns>
-    private async Task<int> CountEntriesFromAnotherConnectionAsync(int timeoutSeconds)
+    private async Task<int> CountEntriesFromAnotherConnectionAsync(int lockWaitSeconds)
     {
         await using var connection = fixture.OpenConnection();
+
+        await LockWait.LimitAsync(connection, fixture.Engine, lockWaitSeconds);
+
         await using var command = connection.CreateCommand();
 
         command.CommandText =
             $"SELECT COUNT(*) FROM {fixture.Quote(AuditOptions.DefaultSchema)}."
             + $"{fixture.Quote(AuditOptions.DefaultTableName)}";
-        command.CommandTimeout = timeoutSeconds;
+
+        // Comfortably longer than the lock wait, so the engine's lock timeout is what ends a blocked
+        // read. Reaching this one means something other than a lock is wrong, and it should say so.
+        command.CommandTimeout = lockWaitSeconds * 4;
 
         try
         {
             var count = await command.ExecuteScalarAsync(TestContext.Current.CancellationToken);
             return Convert.ToInt32(count, System.Globalization.CultureInfo.InvariantCulture);
         }
-        catch (DbException)
+        catch (DbException exception) when (LockWait.IsTimeout(exception))
         {
-            // Blocked on the writer's locks until the timeout expired, which is only possible while
-            // the rows are held by an uncommitted transaction.
+            // Blocked on the writer's locks until the lock timeout expired, which is only possible
+            // while the rows are held by an uncommitted transaction.
             return 0;
         }
     }
