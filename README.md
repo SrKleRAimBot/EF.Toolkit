@@ -1,7 +1,7 @@
 # EF.Toolkit
 
 Extensions for [EF Core](https://learn.microsoft.com/ef/core) that do the things applications keep
-writing by hand — fast bulk writes, and a real audit trail.
+writing by hand — fast bulk writes, a real audit trail, and pagination that is actually correct.
 
 Every package **extends** EF Core from the outside. None is a fork, and none bundles EF: you install
 it alongside whatever EF Core version your app already uses.
@@ -17,14 +17,16 @@ it alongside whatever EF Core version your app already uses.
 | `EF.Toolkit.Bulk` | Makes `SaveChanges()` faster with no call-site changes, and adds an explicit `BulkInsert` / `Update` / `Delete` / `Merge` / `Synchronize` API — up to **10x faster and 44x less memory**. | [docs/bulk.md](docs/bulk.md) |
 | `EF.Toolkit.Audit` | Records who changed what and when, with old and new values per column, into one audit table whose payload is queryable `jsonb`. | [docs/audit.md](docs/audit.md) |
 | `EF.Toolkit.Audit.Bulk` | Joins the two: audits the explicit bulk API, and writes audit entries in bulk. | [docs/audit.md#with-eftoolkitbulk](docs/audit.md#with-eftoolkitbulk) |
+| `EF.Toolkit.Query` | Offset and keyset pagination, sorting contracts with a guaranteed total order, composable filters, batched streaming and ambient tracking scopes — plus a development-time advisor for missing indexes. | [docs/query.md](docs/query.md) |
 
-Each capability has a provider package — `.PostgreSQL` or `.SqlServer` — which is the one you
-install. The bridge is provider-neutral.
+The write-side capabilities have a provider package — `.PostgreSQL` or `.SqlServer` — which is the
+one you install. The bridge and `EF.Toolkit.Query` are provider-neutral.
 
 ```bash
 dotnet add package EF.Toolkit.Bulk.PostgreSQL
 dotnet add package EF.Toolkit.Audit.PostgreSQL
 dotnet add package EF.Toolkit.Audit.Bulk       # only if you use both
+dotnet add package EF.Toolkit.Query
 ```
 
 | Version | EF Core | TFM |
@@ -46,7 +48,8 @@ services.AddDbContext<AppDb>(o => o
     .UseNpgsql(connectionString)
     .UseBulkOperations()
     .UseAuditing(a => a.Schema("audit"))
-    .UseBulkAuditing());          // from EF.Toolkit.Audit.Bulk
+    .UseBulkAuditing()            // from EF.Toolkit.Audit.Bulk
+    .UseQueryHelpers());
 ```
 
 If you reference both provider packages for a capability, the un-prefixed name is ambiguous — use
@@ -56,8 +59,8 @@ If you reference both provider packages for a capability, the un-prefixed name i
 
 ## They are independent
 
-`EF.Toolkit.Bulk` and `EF.Toolkit.Audit` reference neither each other nor anything of each other's.
-Install one, the other, or both.
+`EF.Toolkit.Bulk`, `EF.Toolkit.Audit` and `EF.Toolkit.Query` reference neither each other nor anything
+of each other's. Install one, some, or all.
 
 What each exposes for the other to build on is public API worth having on its own:
 
@@ -80,29 +83,35 @@ The primary gate for both capabilities is a differential harness against real en
 compares raw table contents, full change-tracker state and failure behaviour.
 
 `EF.Toolkit.Audit` runs the same logical change twice — once through `SaveChanges()`, once through
-the explicit bulk API — and requires the resulting audit entries to be byte-identical. Both suites
-carry negative controls that deliberately diverge and must be reported.
+the explicit bulk API — and requires the resulting audit entries to be byte-identical.
+
+`EF.Toolkit.Query` walks a whole result set three ways — forward by keyset, backward by keyset, and
+page by page by offset — and requires all three to cover every row exactly once, in the ordering's own
+order. All three suites carry negative controls that deliberately diverge and must be reported.
 
 Everything runs against PostgreSQL 16, PostgreSQL 17 and SQL Server 2022.
 
 ```bash
 dotnet test tests/EF.Toolkit.Bulk.Tests
 dotnet test tests/EF.Toolkit.Audit.Tests
+dotnet test tests/EF.Toolkit.Query.Tests
 
 # Docker required
 dotnet test tests/EF.Toolkit.Bulk.Equivalence
 dotnet test tests/EF.Toolkit.Audit.Equivalence
+dotnet test tests/EF.Toolkit.Query.Equivalence
 ```
 
 ---
 
 ## Samples
 
-Both start their own PostgreSQL in Docker, so they need no setup:
+Each starts its own PostgreSQL in Docker, so they need no setup:
 
 ```bash
 dotnet run --project samples/EF.Toolkit.Bulk.Sample
 dotnet run --project samples/EF.Toolkit.Audit.Sample
+dotnet run --project samples/EF.Toolkit.Query.Sample
 ```
 
 ## License

@@ -18,7 +18,9 @@
   <ItemGroup Condition="'$(MSBuildProjectName)' == 'EF.Toolkit.Bulk.Tests'
                         or '$(MSBuildProjectName)' == 'EF.Toolkit.Bulk.Equivalence'
                         or '$(MSBuildProjectName)' == 'EF.Toolkit.Audit.Tests'
-                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Audit.Equivalence'">
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Audit.Equivalence'
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Query.Tests'
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Query.Equivalence'">
     <Using Include="Xunit" />
     <Using Include="Shouldly" />
   </ItemGroup>
