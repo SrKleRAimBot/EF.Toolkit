@@ -70,7 +70,16 @@ internal static class KeysetValueCodec
 
             if (type == typeof(bool))
             {
-                return raw == "1";
+                // Encode writes "1" or "0" and nothing else, so anything else is a value this codec
+                // never issued. Reading it as false rather than refusing it would move the page
+                // boundary on a cursor nobody handed out — the one thing decoding is here to prevent.
+                return raw switch
+                {
+                    "1" => true,
+                    "0" => false,
+                    _ => throw new FormatException(
+                        $"'{raw}' is not an encoded boolean; expected '1' or '0'.")
+                };
             }
 
             if (type == typeof(Guid))

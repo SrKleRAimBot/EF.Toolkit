@@ -69,6 +69,33 @@ public class KeysetCursorTests
                 .ShouldBe(value);
     }
 
+    /// <summary>
+    ///     A boolean is refused unless it is one of the two forms the encoder writes.
+    /// </summary>
+    /// <remarks>
+    ///     Reading anything else as <see langword="false" /> would let an altered cursor through with
+    ///     a boundary the caller never asked for, which is the one thing decoding exists to prevent.
+    ///     Every other key type already refuses text it did not write; this one used to be the gap.
+    /// </remarks>
+    [Theory]
+    [InlineData("2")]
+    [InlineData("true")]
+    [InlineData("True")]
+    [InlineData("false")]
+    [InlineData("")]
+    [InlineData(" 1")]
+    public void A_boolean_the_encoder_never_wrote_is_refused(string raw)
+        => Should.Throw<QueryNotSupportedException>(
+                () => KeysetValueCodec.Decode(raw, typeof(bool)))
+            .Message.ShouldContain("altered in transit");
+
+    [Fact]
+    public void Both_boolean_values_decode_from_the_forms_the_encoder_writes()
+    {
+        KeysetValueCodec.Decode("1", typeof(bool)).ShouldBe(true);
+        KeysetValueCodec.Decode("0", typeof(bool)).ShouldBe(false);
+    }
+
     [Fact]
     public void A_separator_inside_a_value_does_not_split_the_cursor()
     {

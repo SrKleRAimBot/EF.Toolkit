@@ -97,8 +97,8 @@ public class SortSpecificationBuilder<T>
                 $"The sort specification for {typeof(T).Name} has neither a default ordering nor a "
                 + "tiebreaker, so a request that names no fields would produce an unordered query and "
                 + "paginating it would return rows in whatever order the server happened to use. Call "
-                + "Default(\"name\") to choose an ordering, Tiebreaker(x => x.Id) to guarantee a total "
-                + "one, or both.");
+                + "DefaultOrder(\"name\") to choose an ordering, Tiebreaker(x => x.Id) to guarantee a "
+                + "total one, or both.");
         }
 
         foreach (var field in _defaults)
