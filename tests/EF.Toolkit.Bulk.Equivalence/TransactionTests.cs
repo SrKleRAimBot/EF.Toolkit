@@ -184,27 +184,8 @@ public abstract class TransactionTests(DatabaseFixture fixture)
             await using var transaction = await context.Database
                 .BeginTransactionAsync(TestContext.Current.CancellationToken);
 
-            var customers = Customers(150);
-            foreach (var customer in customers)
-            {
-                var order = new Order
-                {
-                    Customer = customer,
-                    Reference = $"REF-{customer.Email}",
-                    Status = OrderStatus.Placed,
-                    PlacedAt = Epoch
-                };
-
-                order.Lines.Add(new OrderLine
-                {
-                    Order = order, Sku = "SKU-1", Quantity = 2, UnitPrice = 9.99m
-                });
-
-                customer.Orders.Add(order);
-            }
-
             await context.BulkInsertAsync(
-                customers, o => o.IncludeGraph(), TestContext.Current.CancellationToken);
+                Graph(150), o => o.IncludeGraph(), TestContext.Current.CancellationToken);
 
             await transaction.RollbackAsync(TestContext.Current.CancellationToken);
         }
@@ -450,6 +431,426 @@ public abstract class TransactionTests(DatabaseFixture fixture)
     }
 
     /// <summary>
+    ///     A synchronise removes every row its source does not contain. Those deletions are the one
+    ///     thing in the library that touches rows the caller never named, so a rollback that failed
+    ///     to take them back would destroy data rather than merely duplicate it.
+    /// </summary>
+    [Fact]
+    public async Task Synchronize_restores_the_rows_its_delete_arm_removed()
+    {
+        await ResetAsync();
+
+        await using (var seed = fixture.CreateBulkContext())
+        {
+            await seed.BulkInsertAsync(
+                Customers(300), cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        await using (var context = fixture.CreateBulkContext())
+        {
+            await using var transaction = await context.Database
+                .BeginTransactionAsync(TestContext.Current.CancellationToken);
+
+            // Keeps 200, deletes 100, inserts 40.
+            var desired = Customers(200);
+            desired.AddRange(Customers(40, startAt: 900));
+
+            var result = await context.BulkSynchronizeAsync(
+                desired,
+                o => o.MatchOn(c => c.Email).AllowFullTableDelete(),
+                TestContext.Current.CancellationToken);
+
+            result.Deleted.ShouldBe(100);
+            result.Inserted.ShouldBe(40);
+
+            await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+        }
+
+        // All three arms go back: the deleted hundred return and the inserted forty do not stay.
+        (await CountAsync("Customers")).ShouldBe(300);
+    }
+
+    [Fact]
+    public async Task Synchronize_survives_commit()
+    {
+        await ResetAsync();
+
+        await using (var seed = fixture.CreateBulkContext())
+        {
+            await seed.BulkInsertAsync(
+                Customers(300), cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        await using (var context = fixture.CreateBulkContext())
+        {
+            await using var transaction = await context.Database
+                .BeginTransactionAsync(TestContext.Current.CancellationToken);
+
+            var desired = Customers(200);
+            desired.AddRange(Customers(40, startAt: 900));
+
+            await context.BulkSynchronizeAsync(
+                desired,
+                o => o.MatchOn(c => c.Email).AllowFullTableDelete(),
+                TestContext.Current.CancellationToken);
+
+            await transaction.CommitAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await CountAsync("Customers")).ShouldBe(240);
+    }
+
+    /// <summary>
+    ///     The positive control for <see cref="Update_delete_merge_and_synchronize_all_roll_back" />:
+    ///     without it that test would still pass if the staged paths silently wrote nothing.
+    /// </summary>
+    [Fact]
+    public async Task Update_delete_and_merge_all_survive_commit()
+    {
+        await ResetAsync();
+
+        await using (var seed = fixture.CreateBulkContext())
+        {
+            await seed.BulkInsertAsync(
+                Customers(400), cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        await using (var context = fixture.CreateBulkContext())
+        {
+            var loaded = await context.Customers.AsNoTracking()
+                .OrderBy(c => c.Id)
+                .ToListAsync(TestContext.Current.CancellationToken);
+
+            await using var transaction = await context.Database
+                .BeginTransactionAsync(TestContext.Current.CancellationToken);
+
+            foreach (var customer in loaded)
+            {
+                customer.Name = "Renamed";
+            }
+
+            await context.BulkUpdateAsync(
+                loaded, cancellationToken: TestContext.Current.CancellationToken);
+
+            await context.BulkDeleteAsync(
+                loaded.Take(100).ToList(), cancellationToken: TestContext.Current.CancellationToken);
+
+            await context.BulkMergeAsync(
+                Customers(50, startAt: 900),
+                o => o.MatchOn(c => c.Email),
+                TestContext.Current.CancellationToken);
+
+            await transaction.CommitAsync(TestContext.Current.CancellationToken);
+        }
+
+        // 400 updated, 100 of them deleted, 50 merged in.
+        (await CountAsync("Customers")).ShouldBe(350);
+
+        await using var check = fixture.CreateBulkContext();
+        (await check.Customers.AsNoTracking()
+                .CountAsync(c => c.Name == "Renamed", TestContext.Current.CancellationToken))
+            .ShouldBe(300);
+    }
+
+    /// <summary>
+    ///     Rows written but not yet committed must not be readable by anyone else.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Every other test here proves rows are <em>gone</em> after a rollback, which a write
+    ///         that never happened would also satisfy. This proves the opposite half: the rows exist
+    ///         on the server and are held by the transaction rather than by nothing at all.
+    ///     </para>
+    ///     <para>
+    ///         Under read-committed — the default on both engines — a reader facing uncommitted rows
+    ///         either sees none of them or blocks on their locks. Both outcomes prove the point;
+    ///         seeing them would mean the bulk copy opened a transaction of its own and committed it.
+    ///     </para>
+    /// </remarks>
+    [Fact]
+    public async Task Uncommitted_bulk_rows_are_not_visible_to_another_connection()
+    {
+        await ResetAsync();
+
+        await using var context = fixture.CreateBulkContext();
+        await using var transaction = await context.Database
+            .BeginTransactionAsync(TestContext.Current.CancellationToken);
+
+        await context.BulkInsertAsync(
+            Customers(500), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Visible to the writer, which is what makes the reader's answer meaningful.
+        (await context.Customers.AsNoTracking()
+                .CountAsync(TestContext.Current.CancellationToken))
+            .ShouldBe(500);
+
+        var seen = await CountFromAnotherConnectionAsync("Customers", timeoutSeconds: 5);
+
+        seen.ShouldBe(
+            0,
+            "an uncommitted bulk write must be invisible outside its transaction; a non-zero count "
+            + "means the rows were committed by a transaction of the bulk copy's own");
+
+        await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+
+        (await CountAsync("Customers")).ShouldBe(0);
+    }
+
+    /// <summary>
+    ///     The synchronous API blocks on the same asynchronous implementation, but it reaches the
+    ///     providers' synchronous executor entry points, which is a separate code path to enlist on.
+    /// </summary>
+    [Fact]
+    public async Task The_synchronous_api_is_discarded_by_a_rollback()
+    {
+        await ResetAsync();
+
+        using (var context = fixture.CreateBulkContext())
+        {
+            using var transaction = context.Database.BeginTransaction();
+
+            context.BulkInsert(Customers(300));
+
+            transaction.Rollback();
+        }
+
+        (await CountAsync("Customers")).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task The_synchronous_api_survives_a_commit()
+    {
+        await ResetAsync();
+
+        using (var context = fixture.CreateBulkContext())
+        {
+            using var transaction = context.Database.BeginTransaction();
+
+            context.BulkInsert(Customers(300));
+
+            transaction.Commit();
+        }
+
+        (await CountAsync("Customers")).ShouldBe(300);
+    }
+
+    /// <summary>
+    ///     Transparent mode under synchronous <c>SaveChanges</c>, which takes the executors'
+    ///     <c>Execute</c> overload rather than <c>ExecuteAsync</c>.
+    /// </summary>
+    [Theory]
+    [InlineData(20)]
+    [InlineData(500)]
+    public async Task Synchronous_save_changes_rolls_back_on_either_side_of_the_threshold(int rows)
+    {
+        await ResetAsync();
+
+        using (var context = fixture.CreateBulkContext(b => b.Threshold(100)))
+        {
+            using var transaction = context.Database.BeginTransaction();
+
+            context.Customers.AddRange(Customers(rows));
+            context.SaveChanges();
+
+            transaction.Rollback();
+        }
+
+        (await CountAsync("Customers")).ShouldBe(0);
+    }
+
+    /// <summary>
+    ///     A transaction EF did not begin, handed to it with <c>UseTransaction</c>. EF reports it as
+    ///     the current one, so a bulk write has to enlist in it exactly as it would in its own.
+    /// </summary>
+    [Fact]
+    public async Task Bulk_operations_join_a_transaction_given_to_use_transaction()
+    {
+        await ResetAsync();
+
+        await using (var context = fixture.CreateBulkContext())
+        {
+            var connection = context.Database.GetDbConnection();
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+
+            await using var ado = await connection
+                .BeginTransactionAsync(TestContext.Current.CancellationToken);
+
+            await context.Database.UseTransactionAsync(ado, TestContext.Current.CancellationToken);
+
+            await context.BulkInsertAsync(
+                Customers(300), cancellationToken: TestContext.Current.CancellationToken);
+
+            await ado.RollbackAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await CountAsync("Customers")).ShouldBe(0);
+    }
+
+    /// <summary>
+    ///     A caller's own savepoint has to be able to undo a bulk call, which means the call's writes
+    ///     — and the savepoint it takes for itself — have to be nested inside the caller's.
+    /// </summary>
+    [Fact]
+    public async Task A_bulk_call_is_discarded_by_rolling_back_to_a_caller_savepoint()
+    {
+        await ResetAsync();
+
+        await using (var context = fixture.CreateBulkContext())
+        {
+            await using var transaction = await context.Database
+                .BeginTransactionAsync(TestContext.Current.CancellationToken);
+
+            Assert.SkipUnless(
+                transaction.SupportsSavepoints, "the engine does not support savepoints");
+
+            await context.BulkInsertAsync(
+                Customers(200), cancellationToken: TestContext.Current.CancellationToken);
+
+            await transaction.CreateSavepointAsync(
+                "caller", TestContext.Current.CancellationToken);
+
+            await context.BulkInsertAsync(
+                Customers(100, startAt: 900),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            await transaction.RollbackToSavepointAsync(
+                "caller", TestContext.Current.CancellationToken);
+
+            await transaction.CommitAsync(TestContext.Current.CancellationToken);
+        }
+
+        // The second call is undone, the first survives.
+        (await CountAsync("Customers")).ShouldBe(200);
+    }
+
+    /// <summary>
+    ///     <c>WithoutSavepoint</c> gives up the ability to recover the caller's transaction after a
+    ///     failure. It must not give up the transaction itself — the writes still have to be inside
+    ///     it, so a rollback still takes everything.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_call_without_a_savepoint_still_commits_nothing()
+    {
+        await ResetAsync();
+
+        await using (var context = fixture.CreateBulkContext())
+        {
+            await using var transaction = await context.Database
+                .BeginTransactionAsync(TestContext.Current.CancellationToken);
+
+            await context.BulkInsertAsync(
+                Customers(200),
+                o => o.WithoutSavepoint(),
+                TestContext.Current.CancellationToken);
+
+            // Duplicate emails: the unique index rejects the whole operation.
+            await Should.ThrowAsync<Exception>(
+                () => context.BulkInsertAsync(
+                    Customers(200),
+                    o => o.WithoutSavepoint(),
+                    TestContext.Current.CancellationToken));
+
+            await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await CountAsync("Customers")).ShouldBe(0);
+    }
+
+    /// <summary>
+    ///     One scope, several bulk calls and an ordinary save. Each call opens and closes the
+    ///     connection around its own work, so this is where a lost enlistment would show up.
+    /// </summary>
+    [Fact]
+    public async Task Several_operations_in_one_transaction_scope_are_discarded_together()
+    {
+        await ResetAsync();
+
+        using (new TransactionScope(
+            TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await using var context = fixture.CreateBulkContext();
+
+            context.Categories.Add(new Category { Name = "Tools" });
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+            await context.BulkInsertAsync(
+                Customers(200), cancellationToken: TestContext.Current.CancellationToken);
+
+            await context.BulkInsertAsync(
+                Customers(200, startAt: 900),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            var loaded = await context.Customers.AsNoTracking()
+                .ToListAsync(TestContext.Current.CancellationToken);
+
+            foreach (var customer in loaded)
+            {
+                customer.Name = "Renamed";
+            }
+
+            await context.BulkUpdateAsync(
+                loaded, cancellationToken: TestContext.Current.CancellationToken);
+
+            // Disposed without Complete(), so the scope rolls back.
+        }
+
+        (await CountAsync("Customers")).ShouldBe(0);
+        (await CountAsync("Categories")).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Several_operations_in_one_transaction_scope_survive_complete()
+    {
+        await ResetAsync();
+
+        using (var scope = new TransactionScope(
+            TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await using var context = fixture.CreateBulkContext();
+
+            context.Categories.Add(new Category { Name = "Tools" });
+            await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+            await context.BulkInsertAsync(
+                Customers(200), cancellationToken: TestContext.Current.CancellationToken);
+
+            await context.BulkInsertAsync(
+                Customers(200, startAt: 900),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            scope.Complete();
+        }
+
+        (await CountAsync("Customers")).ShouldBe(400);
+        (await CountAsync("Categories")).ShouldBe(1);
+    }
+
+    /// <summary>
+    ///     A graph writes several tables in turn, so under a scope it is the operation with the most
+    ///     opportunities to lose the enlistment.
+    /// </summary>
+    [Fact]
+    public async Task A_graph_insert_inside_a_transaction_scope_is_discarded_without_complete()
+    {
+        await ResetAsync();
+
+        using (new TransactionScope(
+            TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await using var context = fixture.CreateBulkContext();
+
+            await context.BulkInsertAsync(
+                Graph(120), o => o.IncludeGraph(), TestContext.Current.CancellationToken);
+
+            // Disposed without Complete(), so the scope rolls back.
+        }
+
+        (await CountAsync("Customers")).ShouldBe(0);
+        (await CountAsync("Orders")).ShouldBe(0);
+        (await CountAsync("OrderLines")).ShouldBe(0);
+    }
+
+    /// <summary>
     ///     No staging table may outlive a failed operation. They are named per operation, so a
     ///     leaked one is invisible until the schema fills up with them.
     /// </summary>
@@ -493,6 +894,42 @@ public abstract class TransactionTests(DatabaseFixture fixture)
         return Convert.ToInt32(count, System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    ///     Counts rows from a connection that is not the one holding the open transaction.
+    /// </summary>
+    /// <param name="table">The table to count.</param>
+    /// <param name="timeoutSeconds">
+    ///     How long to wait before treating the read as blocked. SQL Server's read-committed reader
+    ///     waits on the writer's locks rather than skipping the rows, so a lock wait is the expected
+    ///     outcome there and proves the same thing a count of zero does — the rows belong to a
+    ///     transaction that has not committed. PostgreSQL's MVCC reader answers immediately.
+    /// </param>
+    /// <returns>The number of rows visible, treating a lock wait as none.</returns>
+    private async Task<int> CountFromAnotherConnectionAsync(string table, int timeoutSeconds)
+    {
+        await using var context = fixture.CreateBulkContext();
+        var helper = context.GetService<ISqlGenerationHelper>();
+
+        await using var connection = context.Database.GetDbConnection();
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {helper.DelimitIdentifier(table)}";
+        command.CommandTimeout = timeoutSeconds;
+
+        try
+        {
+            var count = await command.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+            return Convert.ToInt32(count, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (DbException)
+        {
+            // Blocked on the writer's locks until the timeout expired, which is only possible while
+            // the rows are held by an uncommitted transaction.
+            return 0;
+        }
+    }
+
     /// <summary>Counts leftover staging tables, whatever the engine calls them.</summary>
     private async Task<int> StagingTableCountAsync()
     {
@@ -510,6 +947,32 @@ public abstract class TransactionTests(DatabaseFixture fixture)
 
         var count = await command.ExecuteScalarAsync(TestContext.Current.CancellationToken);
         return Convert.ToInt32(count, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Customers each carrying one order and one order line, for graph inserts.</summary>
+    private static List<Customer> Graph(int count, int startAt = 0)
+    {
+        var customers = Customers(count, startAt);
+
+        foreach (var customer in customers)
+        {
+            var order = new Order
+            {
+                Customer = customer,
+                Reference = $"REF-{customer.Email}",
+                Status = OrderStatus.Placed,
+                PlacedAt = Epoch
+            };
+
+            order.Lines.Add(new OrderLine
+            {
+                Order = order, Sku = "SKU-1", Quantity = 2, UnitPrice = 9.99m
+            });
+
+            customer.Orders.Add(order);
+        }
+
+        return customers;
     }
 
     private static List<Customer> Customers(int count, int startAt = 0)
