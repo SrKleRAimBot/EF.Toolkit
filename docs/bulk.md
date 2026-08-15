@@ -38,6 +38,11 @@ install it alongside whatever EF Core version your app already uses.
 dotnet add package EF.Toolkit.Bulk.PostgreSQL   # or EF.Toolkit.Bulk.SqlServer
 ```
 
+The provider package brings this one with it. For how each engine executes a batch, and what differs
+between them, see the notes for
+[PostgreSQL](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/bulk-postgresql.md) and
+[SQL Server](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/bulk-sqlserver.md).
+
 | Package | EF Core | TFM |
 | --- | --- | --- |
 | `EF.Toolkit.Bulk 10.x` | 10.x | `net10.0` |

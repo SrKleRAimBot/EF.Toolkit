@@ -39,6 +39,11 @@ queryable JSON.
 dotnet add package EF.Toolkit.Audit.PostgreSQL   # or EF.Toolkit.Audit.SqlServer
 ```
 
+The provider package brings this one with it. For the audit table's column types on each engine, and
+how the payload is indexed, see the notes for
+[PostgreSQL](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit-postgresql.md) and
+[SQL Server](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit-sqlserver.md).
+
 ## Setup
 
 One call, after the provider:

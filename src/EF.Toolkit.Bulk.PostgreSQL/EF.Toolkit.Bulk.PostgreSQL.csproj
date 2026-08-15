@@ -16,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../docs/bulk.md" Pack="true" PackagePath="README.md" />
+    <None Include="$(MSBuildThisFileDirectory)../../docs/bulk-postgresql.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
   <ItemGroup>

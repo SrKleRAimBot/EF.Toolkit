@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../docs/audit.md" Pack="true" PackagePath="README.md" />
+    <None Include="$(MSBuildThisFileDirectory)../../docs/audit-bulk.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
   <ItemGroup>
