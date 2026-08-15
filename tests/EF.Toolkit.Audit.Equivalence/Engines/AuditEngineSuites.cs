@@ -79,6 +79,21 @@ public sealed class SqlServerAtomicityTests(SqlServerAuditFixture fixture)
 
 [Trait("Engine", "postgres16")]
 [Collection("audit-postgres16")]
+public sealed class PostgreSql16TransactionTests(PostgreSql16AuditFixture fixture)
+    : AuditTransactionTests(fixture);
+
+[Trait("Engine", "postgres17")]
+[Collection("audit-postgres17")]
+public sealed class PostgreSql17TransactionTests(PostgreSql17AuditFixture fixture)
+    : AuditTransactionTests(fixture);
+
+[Trait("Engine", "sqlserver")]
+[Collection("audit-sqlserver")]
+public sealed class SqlServerTransactionTests(SqlServerAuditFixture fixture)
+    : AuditTransactionTests(fixture);
+
+[Trait("Engine", "postgres16")]
+[Collection("audit-postgres16")]
 public sealed class PostgreSql16HarnessSelfTests(PostgreSql16AuditFixture fixture)
     : HarnessSelfTests(fixture);
 

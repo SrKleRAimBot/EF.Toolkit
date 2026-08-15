@@ -60,16 +60,23 @@ public abstract class AuditDatabaseFixture : IAsyncLifetime
     ///     Stands in for the container an application would register the context with, for the
     ///     settings that resolve from it — a custom sink, an actor provider.
     /// </param>
+    /// <param name="retryOnFailure">
+    ///     Configures a retrying execution strategy. Such a strategy refuses a user-initiated
+    ///     transaction unless the whole unit of work runs inside its retry loop, which is exactly
+    ///     what an interceptor cannot do — so it is the configuration auditing has to say something
+    ///     honest about rather than quietly mis-handle.
+    /// </param>
     public ShopContext CreateContext(
         Action<AuditOptionsBuilder>? configure = null,
         bool bulk = false,
         bool auditing = true,
-        IServiceProvider? applicationServices = null)
+        IServiceProvider? applicationServices = null,
+        bool retryOnFailure = false)
     {
         var builder = new DbContextOptionsBuilder<ShopContext>()
             .UseApplicationServiceProvider(applicationServices);
 
-        ConfigureProvider(builder, ConnectionString);
+        ConfigureProvider(builder, ConnectionString, retryOnFailure);
 
         if (bulk)
         {
@@ -119,9 +126,13 @@ public abstract class AuditDatabaseFixture : IAsyncLifetime
     protected abstract Task<string> CreateDatabaseAsync(string databaseName);
 
     /// <summary>Applies the EF Core provider.</summary>
+    /// <param name="builder">The builder being configured.</param>
+    /// <param name="connectionString">The database to point at.</param>
+    /// <param name="retryOnFailure">Whether to configure a retrying execution strategy.</param>
     protected abstract void ConfigureProvider(
         DbContextOptionsBuilder<ShopContext> builder,
-        string connectionString);
+        string connectionString,
+        bool retryOnFailure);
 
     /// <summary>Applies the provider's <c>UseAuditing()</c>.</summary>
     protected abstract void ConfigureAuditing(

@@ -112,8 +112,17 @@ public sealed class SqlServerAuditFixture : AuditDatabaseFixture
 
     protected override void ConfigureProvider(
         DbContextOptionsBuilder<ShopContext> builder,
-        string connectionString)
-        => builder.UseSqlServer(connectionString);
+        string connectionString,
+        bool retryOnFailure)
+        => builder.UseSqlServer(
+            connectionString,
+            o =>
+            {
+                if (retryOnFailure)
+                {
+                    o.EnableRetryOnFailure();
+                }
+            });
 
     protected override void ConfigureAuditing(
         DbContextOptionsBuilder<ShopContext> builder,
