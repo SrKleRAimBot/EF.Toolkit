@@ -180,10 +180,11 @@ internal sealed class SqlServerBulkWriteOperations
                     for (var i = 0; i < readIndices.Count; i++)
                     {
                         var position = 1 + i;
-                        var value = await reader.IsDBNullAsync(position, cancellationToken)
-                            .ConfigureAwait(false)
-                            ? null
-                            : reader.GetValue(position);
+                        var column = rows.Columns[readIndices[i]];
+
+                        var value = await BulkValueReader
+                            .ReadAsync(reader, position, column, cancellationToken)
+                            .ConfigureAwait(false);
 
                         rows.SetGeneratedValue(row, readIndices[i], value);
                     }
@@ -258,14 +259,12 @@ internal sealed class SqlServerBulkWriteOperations
 
             for (var i = 0; i < beforeImages.Columns.Count; i++)
             {
-                var position = 1 + i;
-
                 beforeImages.SetValue(
                     row,
                     i,
-                    await reader.IsDBNullAsync(position, cancellationToken).ConfigureAwait(false)
-                        ? null
-                        : reader.GetValue(position));
+                    await BulkValueReader
+                        .ReadAsync(reader, 1 + i, beforeImages.Columns[i], cancellationToken)
+                        .ConfigureAwait(false));
             }
         }
     }

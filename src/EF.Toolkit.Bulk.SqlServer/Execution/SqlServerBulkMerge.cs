@@ -157,14 +157,12 @@ internal sealed class SqlServerBulkMerge
 
                 for (var i = 0; i < beforeImages.Columns.Count; i++)
                 {
-                    var position = 1 + i;
-
                     beforeImages.SetValue(
                         row,
                         i,
-                        await reader.IsDBNullAsync(position, cancellationToken).ConfigureAwait(false)
-                            ? null
-                            : reader.GetValue(position));
+                        await BulkValueReader
+                            .ReadAsync(reader, 1 + i, beforeImages.Columns[i], cancellationToken)
+                            .ConfigureAwait(false));
                 }
             }
         }
@@ -205,10 +203,9 @@ internal sealed class SqlServerBulkMerge
 
             for (var i = 0; i < values.Length; i++)
             {
-                values[i] = await removedReader.IsDBNullAsync(i, cancellationToken)
-                    .ConfigureAwait(false)
-                    ? null
-                    : removedReader.GetValue(i);
+                values[i] = await BulkValueReader
+                    .ReadAsync(removedReader, i, beforeImages.Columns[i], cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             beforeImages.AddRemovedRow(values);
@@ -330,10 +327,11 @@ internal sealed class SqlServerBulkMerge
 
             for (var i = 0; i < readIndices.Count; i++)
             {
-                var column = i + 1;   // $action occupies position zero
-                var value = await reader.IsDBNullAsync(column, cancellationToken).ConfigureAwait(false)
-                    ? null
-                    : reader.GetValue(column);
+                var position = i + 1;   // $action occupies position zero
+
+                var value = await BulkValueReader
+                    .ReadAsync(reader, position, rows.Columns[readIndices[i]], cancellationToken)
+                    .ConfigureAwait(false);
 
                 rows.SetGeneratedValue(row, readIndices[i], value);
             }

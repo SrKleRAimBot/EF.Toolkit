@@ -9,6 +9,7 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
     public DbSet<Warehouse> Warehouses => Set<Warehouse>();
     public DbSet<Assignment> Assignments => Set<Assignment>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
+    public DbSet<Shift> Shifts => Set<Shift>();
     public DbSet<Session> Sessions => Set<Session>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -35,6 +36,14 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
         modelBuilder.Entity<Assignment>(b =>
         {
             b.HasKey(a => new { a.ProductSku, a.UserId });
+            b.IsAudited();
+        });
+
+        modelBuilder.Entity<Shift>(b =>
+        {
+            // Merge and synchronise match on the code, which needs a unique index behind it.
+            b.HasIndex(s => s.Code).IsUnique();
+
             b.IsAudited();
         });
 

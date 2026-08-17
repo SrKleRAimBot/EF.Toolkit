@@ -76,6 +76,40 @@ public class ApiKey
     public string Name { get; set; } = "";
 }
 
+/// <summary>
+///     An audited entity whose properties are declared as CLR types the drivers do not hand back
+///     for those columns by default.
+/// </summary>
+/// <remarks>
+///     <para>
+///         A before-image is read straight off the reader, so a column whose driver default type is
+///         not the property's declared type has to be asked for by type rather than reconciled
+///         afterwards — most of these pairs have no conversion between them at all.
+///     </para>
+///     <para>
+///         One entity covers both engines, because they disagree about which columns those are.
+///         Npgsql reads <c>timestamptz</c> as a <see cref="DateTime" />, so
+///         <see cref="RecordedAt" /> is the mismatched one there; SQL Server reads <c>date</c> as a
+///         <see cref="DateTime" /> and <c>time</c> as a <see cref="TimeSpan" />, so
+///         <see cref="Date" /> and <see cref="StartsAt" /> are the mismatched ones there.
+///     </para>
+/// </remarks>
+public class Shift
+{
+    public int Id { get; set; }
+    public string Code { get; set; } = "";
+    public string Name { get; set; } = "";
+
+    /// <summary>Read as a <see cref="DateTime" /> by SQL Server.</summary>
+    public DateOnly Date { get; set; }
+
+    /// <summary>Read as a <see cref="TimeSpan" /> by SQL Server.</summary>
+    public TimeOnly StartsAt { get; set; }
+
+    /// <summary>Read as a <see cref="DateTime" /> by Npgsql.</summary>
+    public DateTimeOffset RecordedAt { get; set; }
+}
+
 /// <summary>Not audited, so that "everything is audited" is never accidentally true.</summary>
 public class Session
 {

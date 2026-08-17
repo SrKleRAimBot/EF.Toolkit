@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using EFToolkit.Audit.Api;
 using EFToolkit.Audit.Equivalence.Infrastructure;
@@ -220,6 +221,144 @@ public abstract class BulkAuditTests(AuditDatabaseFixture fixture)
         (await check.Products.CountAsync(TestContext.Current.CancellationToken)).ShouldBe(0);
     }
 
+    [Fact]
+    public async Task Bulk_update_records_columns_the_driver_reads_as_another_type()
+    {
+        await ResetAsync();
+
+        var shifts = Shifts(5);
+        await SeedAsync(shifts);
+        await ClearAuditAsync();
+
+        foreach (var shift in shifts)
+        {
+            shift.Name = "Late";
+            shift.Date = shift.Date.AddDays(1);
+            shift.StartsAt = shift.StartsAt.AddHours(4);
+            shift.RecordedAt = shift.RecordedAt.AddDays(1);
+        }
+
+        await using (var context = fixture.CreateContext(bulk: true))
+        {
+            await context.BulkUpdateAsync(
+                shifts, cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        var entries = await AuditSnapshot.ReadAsync(fixture);
+        entries.Count.ShouldBe(5);
+
+        var entry = entries.Single(e => e.EntityKey == shifts[0].Id.ToString(Invariant));
+        var payload = Payload(entry);
+
+        // The old halves are the before-image read, in the CLR types the model declares rather than
+        // the ones the driver reaches for. Before that read asked for them by type, every column
+        // here failed on a database whose driver disagrees about one of them.
+        payload.GetProperty("old").GetProperty("Date").GetString().ShouldBe("2026-03-02");
+        payload.GetProperty("new").GetProperty("Date").GetString().ShouldBe("2026-03-03");
+
+        payload.GetProperty("old").GetProperty("StartsAt").GetString().ShouldStartWith("09:30");
+        payload.GetProperty("new").GetProperty("StartsAt").GetString().ShouldStartWith("13:30");
+
+        DateTimeOffset.Parse(
+                payload.GetProperty("old").GetProperty("RecordedAt").GetString()!, Invariant)
+            .ShouldBe(RecordedAt(1));
+
+        DateTimeOffset.Parse(
+                payload.GetProperty("new").GetProperty("RecordedAt").GetString()!, Invariant)
+            .ShouldBe(RecordedAt(1).AddDays(1));
+    }
+
+    [Fact]
+    public async Task Bulk_delete_records_such_a_row_as_it_was()
+    {
+        await ResetAsync();
+
+        var shifts = Shifts(3);
+        await SeedAsync(shifts);
+        await ClearAuditAsync();
+
+        await using (var context = fixture.CreateContext(bulk: true))
+        {
+            await context.BulkDeleteAsync(
+                shifts, cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        var entries = await AuditSnapshot.ReadAsync(fixture);
+
+        entries.Count.ShouldBe(3);
+        entries.ShouldAllBe(e => e.Operation == (int)AuditOperation.Delete);
+
+        // A delete's row set knows only the key, so every column below came from the read alone.
+        var payload = Payload(entries.Single(e => e.EntityKey == shifts[0].Id.ToString(Invariant)));
+
+        payload.GetProperty("old").GetProperty("Date").GetString().ShouldBe("2026-03-02");
+        payload.GetProperty("old").GetProperty("StartsAt").GetString().ShouldStartWith("09:30");
+
+        DateTimeOffset.Parse(
+                payload.GetProperty("old").GetProperty("RecordedAt").GetString()!, Invariant)
+            .ShouldBe(RecordedAt(1));
+    }
+
+    [Fact]
+    public async Task Bulk_merge_tells_inserts_from_updates_for_such_an_entity()
+    {
+        await ResetAsync();
+
+        var existing = Shifts(3);
+        await SeedAsync(existing);
+        await ClearAuditAsync();
+
+        foreach (var shift in existing)
+        {
+            shift.Name = "Late";
+        }
+
+        var merged = existing.Concat(Shifts(2, startAt: 100)).ToList();
+
+        await using (var context = fixture.CreateContext(bulk: true))
+        {
+            await context.BulkMergeAsync(
+                merged,
+                o => o.MatchOn(s => s.Code),
+                TestContext.Current.CancellationToken);
+        }
+
+        var entries = await AuditSnapshot.ReadAsync(fixture);
+
+        // The split comes from the before-image read matching or not, so a read that could not
+        // capture these rows at all could not report it.
+        entries.Count(e => e.Operation == (int)AuditOperation.Insert).ShouldBe(2);
+        entries.Count(e => e.Operation == (int)AuditOperation.Update).ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task Bulk_synchronise_records_such_rows_when_its_delete_arm_removes_them()
+    {
+        await ResetAsync();
+
+        await SeedAsync(Shifts(5));
+        await ClearAuditAsync();
+
+        // Two of the five survive; the other three correspond to nothing in the source, so the
+        // before-image read is the only thing that ever sees them.
+        await using (var context = fixture.CreateContext(bulk: true))
+        {
+            await context.BulkSynchronizeAsync(
+                Shifts(2),
+                o => o.MatchOn(s => s.Code).AllowFullTableDelete(),
+                TestContext.Current.CancellationToken);
+        }
+
+        var entries = await AuditSnapshot.ReadAsync(fixture);
+        var deletes = entries.Where(e => e.Operation == (int)AuditOperation.Delete).ToList();
+
+        deletes.Count.ShouldBe(3);
+        deletes.ShouldAllBe(e => e.Source == AuditSources.BulkSynchronize);
+
+        Payload(deletes[0]).GetProperty("old").GetProperty("StartsAt").GetString()
+            .ShouldStartWith("09:30");
+    }
+
     /// <summary>Empties every table, audit entries included.</summary>
     protected Task ResetAsync()
     {
@@ -247,6 +386,14 @@ public abstract class BulkAuditTests(AuditDatabaseFixture fixture)
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
     }
 
+    /// <inheritdoc cref="SeedAsync(IEnumerable{Product})" />
+    protected async Task SeedAsync(IEnumerable<Shift> shifts)
+    {
+        await using var context = fixture.CreateContext(auditing: false);
+        context.Shifts.AddRange(shifts);
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+    }
+
     /// <summary>The payload of an entry, parsed.</summary>
     protected static JsonElement Payload(AuditRow entry)
     {
@@ -264,4 +411,26 @@ public abstract class BulkAuditTests(AuditDatabaseFixture fixture)
             Status = ProductStatus.Draft,
             TenantId = "acme",
         })];
+
+    /// <summary>A run of shifts with distinct codes.</summary>
+    protected static List<Shift> Shifts(int count, int startAt = 1)
+        => [.. Enumerable.Range(startAt, count).Select(i => new Shift
+        {
+            Code = $"SHIFT-{i}",
+            Name = "Early",
+
+            // Fixed rather than derived from the row, so what a before-image should have read is
+            // one value the assertions can name.
+            Date = new DateOnly(2026, 3, 2),
+            StartsAt = new TimeOnly(9, 30),
+            RecordedAt = RecordedAt(1),
+        })];
+
+    /// <summary>
+    ///     A UTC instant, which is the only offset PostgreSQL's <c>timestamptz</c> accepts.
+    /// </summary>
+    protected static DateTimeOffset RecordedAt(int day)
+        => new(2026, 3, day, 8, 0, 0, TimeSpan.Zero);
+
+    private static CultureInfo Invariant => CultureInfo.InvariantCulture;
 }
