@@ -280,7 +280,10 @@ internal sealed class AuditPayloadWriter : IDisposable
                 return;
 
             case decimal number:
-                _writer.WriteNumberValue(number);
+                // Canonicalized, because a decimal's trailing zeros are part of its representation
+                // and the two capture paths do not obtain them from the same place. See
+                // AuditValues.Canonical.
+                _writer.WriteNumberValue(AuditValues.Canonical(number));
                 return;
 
             case double number:

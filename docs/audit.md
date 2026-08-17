@@ -241,7 +241,13 @@ nothing moved produces no entry at all.
 Values go through the property's own value converter before being recorded, so an enum mapped to
 text appears as text and a strongly-typed id as its underlying value. Store-type precision is not
 applied — a `decimal` written to a `numeric(18,2)` column is recorded as the application supplied
-it, which is also the value EF's change tracker keeps. Owned value objects mapped into their owner's table are
+it, which is also the value EF's change tracker keeps — but it is written at the smallest scale that
+represents it exactly, so `1.50m` and `1.5m` both record as `1.5`. A decimal's trailing zeros are
+part of its representation and the two write paths do not obtain them from the same place: the change
+tracker holds what you assigned, and a bulk delete reads the row back from the store with the
+column's scale applied. Stripping them costs nothing — no digit that changes the value is ever
+removed — and is what keeps the two paths byte-identical.
+Owned value objects mapped into their owner's table are
 folded into the owner's entry under their navigation path (`"Address.City"`), rather than becoming a
 second entry for the same row.
 [Complex types](https://learn.microsoft.com/ef/core/modeling/complex-types) are folded the same way

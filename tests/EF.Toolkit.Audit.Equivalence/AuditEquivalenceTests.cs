@@ -41,7 +41,7 @@ public abstract class AuditEquivalenceTests(AuditDatabaseFixture fixture)
                              .ToListAsync(TestContext.Current.CancellationToken))
                 {
                     product.Name = "Renamed";
-                    product.Price = 12.50m;
+                    product.Price = 12.5m;
                 }
 
                 await context.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -56,7 +56,7 @@ public abstract class AuditEquivalenceTests(AuditDatabaseFixture fixture)
                 foreach (var product in products)
                 {
                     product.Name = "Renamed";
-                    product.Price = 12.50m;
+                    product.Price = 12.5m;
                 }
 
                 context.ChangeTracker.Clear();
@@ -117,25 +117,33 @@ public abstract class AuditEquivalenceTests(AuditDatabaseFixture fixture)
     }
 
     /// <remarks>
-    ///     Decimals are written at the scale their column declares. The change-tracker path records
-    ///     the value the application supplied and the bulk path reads a deleted row's back from the
-    ///     store, so a decimal whose CLR scale differs from its column's — <c>1.5m</c> into a
-    ///     <c>numeric(18,2)</c> — is rendered <c>1.5</c> by one and <c>1.50</c> by the other. That
-    ///     is a pre-existing difference in how the two paths obtain a before-image and has nothing
-    ///     to do with what these tests cover, so the seed does not walk into it.
+    ///     <para>
+    ///         The decimals here are deliberately at scales their columns do not declare. A
+    ///         <see cref="decimal" /> carries its scale as part of its representation, and the two
+    ///         paths obtain their values from different places: the change tracker holds what the
+    ///         application assigned, while a bulk operation reads a deleted row's before-image back
+    ///         from the store, where <c>numeric(18,2)</c> has been applied. So <c>20m</c> arrives as
+    ///         <c>20</c> one way and <c>20.00</c> the other, and the entries diverge over a
+    ///         difference that carries no information.
+    ///     </para>
+    ///     <para>
+    ///         Seeding scale-matched values would make these tests pass without saying anything.
+    ///         Every decimal below is mismatched on purpose — scale 0 and scale 1 into a scale-2
+    ///         column — so the payload writer's canonicalization is what keeps them equal.
+    ///     </para>
     /// </remarks>
     private static List<Product> Products(int count)
         => [.. Enumerable.Range(1, count).Select(i => new Product
         {
             Sku = $"SKU-{i}",
             Name = "Widget",
-            Price = 9.99m,
+            Price = 9.9m,
             Status = ProductStatus.Draft,
             TenantId = "acme",
             Dimensions = new Dimensions
             {
-                Width = 10.50m,
-                Height = 20.25m,
+                Width = 10.5m,
+                Height = 20m,
                 Packaging = new Packaging { Material = "card" },
             },
         })];
