@@ -218,7 +218,8 @@ a scope is not optional, and `AllowFullTableDelete()` will not substitute for on
 rows from every read this context performs, so the source list could not have named them — but the
 delete arm still reaches them. Give the scope the same predicate the filter applies, and the two
 sides agree again.
- The translator is deliberately narrow: `&&`-ed comparisons between a
+
+The translator is deliberately narrow: `&&`-ed comparisons between a
 mapped property and a value, with anything else refused by name rather than silently dropped, since
 a dropped condition widens a delete. Values are bound as parameters. For a predicate it does not
 cover there is a SQL overload, where the target is aliased `t` and every interpolation hole is bound
