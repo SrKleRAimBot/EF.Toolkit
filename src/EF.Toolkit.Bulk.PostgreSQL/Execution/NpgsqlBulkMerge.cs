@@ -265,14 +265,12 @@ internal sealed class NpgsqlBulkMerge
 
                 for (var i = 0; i < beforeImages.Columns.Count; i++)
                 {
-                    var position = 1 + i;
-
                     beforeImages.SetValue(
                         row,
                         i,
-                        await reader.IsDBNullAsync(position, cancellationToken).ConfigureAwait(false)
-                            ? null
-                            : reader.GetValue(position));
+                        await BulkValueReader
+                            .ReadAsync(reader, 1 + i, beforeImages.Columns[i], cancellationToken)
+                            .ConfigureAwait(false));
                 }
             }
         }
@@ -304,10 +302,9 @@ internal sealed class NpgsqlBulkMerge
 
             for (var i = 0; i < values.Length; i++)
             {
-                values[i] = await removedReader.IsDBNullAsync(i, cancellationToken)
-                    .ConfigureAwait(false)
-                    ? null
-                    : removedReader.GetValue(i);
+                values[i] = await BulkValueReader
+                    .ReadAsync(removedReader, i, beforeImages.Columns[i], cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             beforeImages.AddRemovedRow(values);
@@ -450,11 +447,9 @@ internal sealed class NpgsqlBulkMerge
 
             for (var i = 0; i < readIndices.Count; i++)
             {
-                var position = 2 + i;
-                var value = await reader.IsDBNullAsync(position, cancellationToken)
-                    .ConfigureAwait(false)
-                    ? null
-                    : reader.GetValue(position);
+                var value = await BulkValueReader
+                    .ReadAsync(reader, 2 + i, rows.Columns[readIndices[i]], cancellationToken)
+                    .ConfigureAwait(false);
 
                 rows.SetGeneratedValue(row, readIndices[i], value);
             }
@@ -495,9 +490,9 @@ internal sealed class NpgsqlBulkMerge
         {
             for (var i = 0; i < matchIndices.Count; i++)
             {
-                returnedMatch[i] = await reader.IsDBNullAsync(i, cancellationToken).ConfigureAwait(false)
-                    ? null
-                    : reader.GetValue(i);
+                returnedMatch[i] = await BulkValueReader
+                    .ReadAsync(reader, i, rows.Columns[matchIndices[i]], cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             if (approximate)
@@ -527,9 +522,9 @@ internal sealed class NpgsqlBulkMerge
                     continue;
                 }
 
-                var value = await reader.IsDBNullAsync(offset, cancellationToken).ConfigureAwait(false)
-                    ? null
-                    : reader.GetValue(offset);
+                var value = await BulkValueReader
+                    .ReadAsync(reader, offset, rows.Columns[readIndex], cancellationToken)
+                    .ConfigureAwait(false);
 
                 rows.SetGeneratedValue(row, readIndex, value);
                 offset++;

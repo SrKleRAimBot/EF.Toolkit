@@ -163,9 +163,9 @@ internal sealed class SqlServerStagingInsert
 
             for (var i = 0; i < readIndices.Count; i++)
             {
-                var value = await reader.IsDBNullAsync(i, cancellationToken).ConfigureAwait(false)
-                    ? null
-                    : reader.GetValue(i);
+                var value = await BulkValueReader
+                    .ReadAsync(reader, i, rows.Columns[readIndices[i]], cancellationToken)
+                    .ConfigureAwait(false);
 
                 rows.SetGeneratedValue(row, readIndices[i], value);
             }

@@ -135,14 +135,58 @@ public sealed class BulkColumnInfo
         return Property?.ClrType is { } clrType ? Coerce(value, clrType) : value;
     }
 
-    private static object Coerce(object value, Type target)
+    private object Coerce(object value, Type target)
     {
         var underlying = Nullable.GetUnderlyingType(target) ?? target;
 
+        if (underlying.IsInstanceOfType(value))
+        {
+            return value;
+        }
+
         // Providers widen freely -- a bigint from a sequence, a decimal from an identity -- so the
         // value is narrowed back to what the target actually declares.
-        return value.GetType() == underlying
-            ? value
-            : Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
+        try
+        {
+            return Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
+        }
+        catch (Exception exception)
+            when (exception is InvalidCastException
+                or FormatException
+                or OverflowException
+                or ArgumentException)
+        {
+            throw new BulkNotSupportedException(Mismatch(value, underlying), exception);
+        }
+    }
+
+    /// <summary>
+    ///     Explains a value the database returned that cannot be reconciled with what the model
+    ///     declares.
+    /// </summary>
+    /// <remarks>
+    ///     The framework's own message for this is "Object must implement IConvertible", which names
+    ///     neither the column, the entity, nor what was being done — and the answer is nearly always
+    ///     a driver reading a store type as a CLR type the property is not declared as, which is
+    ///     worth saying outright.
+    /// </remarks>
+    private string Mismatch(object value, Type target)
+    {
+        var owner = Property is { } property
+            ? $"{property.DeclaringType.DisplayName()}.{property.Name}"
+            : Name;
+
+        // A converted property is not "declared as" its provider type, it is stored as one, and
+        // saying so is the difference between a reader looking at the property and at the converter.
+        var expectation = TypeMapping?.Converter is not null
+            ? $"'{owner}' is stored as '{target.FullName}'"
+            : $"'{owner}' is declared as '{target.FullName}'";
+
+        return $"Column '{Name}' came back from the database as '{value.GetType().FullName}', but "
+            + $"{expectation}, and neither the driver nor the CLR converts between the two. That "
+            + "usually means the driver reads the column's store type as a CLR type the model does "
+            + "not use — a provider plugin such as Npgsql's NodaTime support does exactly that. "
+            + $"Map '{owner}' to a store type the driver reads as '{target.Name}', or give it a "
+            + $"value converter between '{value.GetType().Name}' and what the model holds.";
     }
 }
