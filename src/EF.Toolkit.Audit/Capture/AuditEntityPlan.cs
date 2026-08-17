@@ -162,7 +162,7 @@ internal sealed class AuditEntityPlan
     /// </remarks>
     private static void AddProperties(
         IEntityType root,
-        IEntityType declaring,
+        ITypeBase declaring,
         AuditOptions options,
         string? prefix,
         Dictionary<IProperty, AuditPropertyPlan> captured,
@@ -207,6 +207,54 @@ internal sealed class AuditEntityPlan
                 redactor);
 
             collected.Add(property);
+        }
+
+        AddComplexProperties(root, declaring, options, prefix, captured, collected);
+    }
+
+    /// <summary>
+    ///     Folds a complex property's own properties into the capture set that contains it.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A complex type is not an entity type and has no identity of its own: its values are
+    ///         columns of the row that declares it, so a change to one is a change to that row and
+    ///         belongs in that row's entry. Because those columns are mapped by the complex type
+    ///         rather than by the entity, walking the entity's own properties missed them entirely
+    ///         and produced a trail that quietly disagreed with the table it described.
+    ///     </para>
+    ///     <para>
+    ///         Named by the path that reaches them — <c>Money.Amount</c> — for the same reason an
+    ///         owned reference is: the payload has to say which value moved, and <c>Amount</c> alone
+    ///         would collide with any other complex value carrying the same member name. Nesting is
+    ///         followed to any depth, so <c>Money.Audit.By</c> reads as it is written.
+    ///     </para>
+    ///     <para>
+    ///         The exclusion and masking annotations are read from the complex type itself, so
+    ///         <c>[AuditMask]</c> sits on the value object where the sensitive member is declared
+    ///         rather than being restated by every entity that uses it.
+    ///     </para>
+    /// </remarks>
+    private static void AddComplexProperties(
+        IEntityType root,
+        ITypeBase declaring,
+        AuditOptions options,
+        string? prefix,
+        Dictionary<IProperty, AuditPropertyPlan> captured,
+        List<IProperty> collected)
+    {
+        foreach (var complex in declaring.GetComplexProperties())
+        {
+            if (complex.IsCollection)
+            {
+                // A complex collection is stored as one JSON column, which the owner already
+                // captures as a property in its own right.
+                continue;
+            }
+
+            var nestedPrefix = prefix is null ? complex.Name : $"{prefix}.{complex.Name}";
+
+            AddProperties(root, complex.ComplexType, options, nestedPrefix, captured, collected);
         }
     }
 
@@ -313,7 +361,7 @@ internal sealed class AuditEntityPlan
             : (false, "it is not registered for auditing");
     }
 
-    private static HashSet<string> Excluded(IEntityType entityType)
+    private static HashSet<string> Excluded(ITypeBase entityType)
     {
         var excluded = new HashSet<string>(StringComparer.Ordinal);
 
@@ -334,7 +382,7 @@ internal sealed class AuditEntityPlan
         return excluded;
     }
 
-    private static Dictionary<string, Func<object?, object?>?> Masked(IEntityType entityType)
+    private static Dictionary<string, Func<object?, object?>?> Masked(ITypeBase entityType)
         => entityType.FindAnnotation(AuditAnnotations.MaskedProperties)?.Value
             is IReadOnlyDictionary<string, Func<object?, object?>?> fluent
             ? new Dictionary<string, Func<object?, object?>?>(fluent, StringComparer.Ordinal)

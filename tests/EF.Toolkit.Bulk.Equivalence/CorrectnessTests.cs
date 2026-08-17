@@ -445,6 +445,177 @@ public abstract class CorrectnessTests(DatabaseFixture fixture)
         unchanged.ShouldBe(200);
     }
 
+    /// <summary>
+    ///     A bulk delete of an entity carrying a concurrency token is refused too, and leaves every
+    ///     row in place.
+    /// </summary>
+    /// <remarks>
+    ///     The update was refused from the start; the delete was not, and that gap was the more
+    ///     dangerous of the two. Stock EF puts the token in a delete's <c>WHERE</c> clause exactly as
+    ///     it does an update's, so a bulk delete without it removed rows that had moved underneath
+    ///     the caller — and unlike a lost update, there is nothing left afterwards to notice it by.
+    /// </remarks>
+    [Fact]
+    public async Task Bulk_delete_refuses_an_entity_with_a_concurrency_token()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        context.Inventories.AddRange(
+            Enumerable.Range(0, 50).Select(i => new Inventory
+            {
+                Sku = $"SKU-{i:D5}", Quantity = i, Version = 1
+            }));
+
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var loaded = await context.Inventories.AsNoTracking()
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        var refusal = await Should.ThrowAsync<BulkNotSupportedException>(
+            () => context.BulkDeleteAsync(
+                loaded, cancellationToken: TestContext.Current.CancellationToken));
+
+        refusal.Message.ShouldContain("concurrency token");
+        refusal.Message.ShouldContain("A delete");
+
+        var remaining = await context.Inventories.AsNoTracking()
+            .CountAsync(TestContext.Current.CancellationToken);
+
+        remaining.ShouldBe(50);
+    }
+
+    /// <summary>
+    ///     A bulk merge of an entity carrying a concurrency token is refused, because its update arm
+    ///     rewrites rows that already exist.
+    /// </summary>
+    [Fact]
+    public async Task Bulk_merge_refuses_an_entity_with_a_concurrency_token()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var refusal = await Should.ThrowAsync<BulkNotSupportedException>(
+            () => context.BulkMergeAsync(
+                [new Inventory { Sku = "SKU-00001", Quantity = 1, Version = 1 }],
+                o => o.MatchOn(i => i.Sku),
+                TestContext.Current.CancellationToken));
+
+        refusal.Message.ShouldContain("concurrency token");
+        refusal.Message.ShouldContain("A merge or synchronise");
+    }
+
+    /// <summary>
+    ///     A complex property's columns are written and read back exactly as stock EF writes them.
+    /// </summary>
+    /// <remarks>
+    ///     Complex-type columns sit on the entity's table but are mapped by the complex type, so
+    ///     they are absent from the entity's own column mappings. Reading only those wrote every
+    ///     other column and left these to the table's defaults: a row that came back with a null
+    ///     currency and a zero amount from a call that reported success.
+    /// </remarks>
+    [Fact]
+    public async Task Bulk_insert_writes_complex_type_columns()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var invoices = Enumerable.Range(0, 200).Select(i => new Invoice
+        {
+            Reference = $"INV-{i:D5}",
+            Total = new Money
+            {
+                Amount = 10m + i,
+                Currency = i % 2 == 0 ? "GBP" : "EUR",
+                Stamp = new Stamp { By = $"user-{i}" }
+            },
+
+            // Half the rows leave the optional value absent, which has to come back as nulls
+            // rather than as a materialised zero.
+            Discount = i % 2 == 0
+                ? new Money { Amount = 1m, Currency = "GBP", Stamp = new Stamp { By = "promo" } }
+                : null
+        }).ToList();
+
+        await context.BulkInsertAsync(
+            invoices, cancellationToken: TestContext.Current.CancellationToken);
+
+        var stored = await context.Invoices.AsNoTracking()
+            .OrderBy(x => x.Reference)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        stored.Count.ShouldBe(200);
+
+        for (var i = 0; i < 200; i++)
+        {
+            var invoice = stored[i];
+
+            invoice.Total.Amount.ShouldBe(10m + i);
+            invoice.Total.Currency.ShouldBe(i % 2 == 0 ? "GBP" : "EUR");
+            invoice.Total.Stamp.By.ShouldBe($"user-{i}");
+
+            if (i % 2 == 0)
+            {
+                invoice.Discount.ShouldNotBeNull().Amount.ShouldBe(1m);
+                invoice.Discount.Stamp.By.ShouldBe("promo");
+            }
+            else
+            {
+                invoice.Discount.ShouldBeNull();
+            }
+        }
+    }
+
+    /// <summary>
+    ///     A bulk update rewrites a complex property's columns, and does not treat them as locators.
+    /// </summary>
+    [Fact]
+    public async Task Bulk_update_writes_complex_type_columns()
+    {
+        await ResetAsync();
+        await using var context = fixture.CreateBulkContext();
+
+        var invoices = Enumerable.Range(0, 100).Select(i => new Invoice
+        {
+            Reference = $"INV-{i:D5}",
+            Total = new Money
+            {
+                Amount = i,
+                Currency = "GBP",
+                Stamp = new Stamp { By = "before" }
+            }
+        }).ToList();
+
+        context.Invoices.AddRange(invoices);
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var loaded = await context.Invoices.AsNoTracking()
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        foreach (var invoice in loaded)
+        {
+            invoice.Total.Amount += 1000m;
+            invoice.Total.Currency = "USD";
+            invoice.Total.Stamp.By = "after";
+        }
+
+        await context.BulkUpdateAsync(
+            loaded, cancellationToken: TestContext.Current.CancellationToken);
+
+        var stored = await context.Invoices.AsNoTracking()
+            .OrderBy(x => x.Reference)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        stored.Count.ShouldBe(100);
+
+        for (var i = 0; i < 100; i++)
+        {
+            stored[i].Total.Amount.ShouldBe(1000m + i);
+            stored[i].Total.Currency.ShouldBe("USD");
+            stored[i].Total.Stamp.By.ShouldBe("after");
+        }
+    }
+
     private async Task ResetAsync()
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");

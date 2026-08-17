@@ -412,6 +412,7 @@ internal static class BulkOperations
     {
         if (options.Scope is null && options.ScopeSql is null)
         {
+            RefuseAnUnscopedSynchronizeUnderAQueryFilter(entityType, kind);
             return null;
         }
 
@@ -435,6 +436,68 @@ internal static class BulkOperations
             ? BulkScopePredicate.Translate(
                 entityType, predicate, context.GetService<ISqlGenerationHelper>(), alias: "t")
             : null;
+    }
+
+    /// <summary>
+    ///     Refuses a synchronise over an entity type with a global query filter and no scope.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Every other verb touches only rows the caller handed over, located by key — the same
+    ///         rows <c>SaveChanges()</c> would write, and stock EF applies no query filter there
+    ///         either. A synchronise is the exception: its delete arm removes every row its source
+    ///         does not name, which is a set the caller never enumerated. Under a global query
+    ///         filter that set includes the rows the filter exists to hide — another tenant's rows,
+    ///         or the ones a soft-delete filter has already retired.
+    ///     </para>
+    ///     <para>
+    ///         The application cannot see those rows through the context, and would have no reason
+    ///         to expect a call scoped to what it can see to delete them. So this is refused rather
+    ///         than run, and the fix is the one setting that already exists for exactly this shape:
+    ///         name the fence with <c>WithinScope</c>. A caller who supplies one has stated which
+    ///         rows the synchronise owns, and is taken at their word — including when they
+    ///         deliberately want the wider set.
+    ///     </para>
+    ///     <para>
+    ///         Filters are read from the root type. EF declares them on the root of a hierarchy and
+    ///         applies them to every type in it, so a derived type reports none of its own.
+    ///     </para>
+    /// </remarks>
+    private static void RefuseAnUnscopedSynchronizeUnderAQueryFilter(
+        IEntityType entityType,
+        BulkOperationKind kind)
+    {
+        if (kind != BulkOperationKind.Synchronize)
+        {
+            return;
+        }
+
+        var filters = entityType.GetRootType().GetDeclaredQueryFilters();
+        if (filters.Count == 0)
+        {
+            return;
+        }
+
+        var named = filters
+            .Where(f => f.Key is not null)
+            .Select(f => $"'{f.Key}'")
+            .ToList();
+
+        var which = named.Count == 0
+            ? "a global query filter"
+            : $"global query filters ({string.Join(", ", named)})";
+
+        throw new BulkNotSupportedException(
+            $"'{entityType.DisplayName()}' has {which}, and BulkSynchronizeAsync deletes every row "
+            + "its source does not contain — including the rows the filter hides, which this "
+            + "context cannot see and the source therefore could never have named. Add WithinScope "
+            + "to say which rows the synchronise owns, for example "
+            + ".WithinScope(e => e.TenantId == tenantId), which is the same predicate the filter "
+            + "applies on the read side. AllowFullTableDelete() does not stand in for it: it "
+            + "confirms that the whole table is the intent, and under a query filter 'the whole "
+            + "table' is wider than anything this context can read. Passing a scope is taken as "
+            + "the decision it is — the synchronise then confines itself to exactly what the scope "
+            + "names, whether that is narrower or wider than the filter.");
     }
 
     private static BulkResult Result(BulkOperationKind kind, int rows)

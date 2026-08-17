@@ -243,8 +243,12 @@ text appears as text and a strongly-typed id as its underlying value. Store-type
 applied — a `decimal` written to a `numeric(18,2)` column is recorded as the application supplied
 it, which is also the value EF's change tracker keeps. Owned value objects mapped into their owner's table are
 folded into the owner's entry under their navigation path (`"Address.City"`), rather than becoming a
-second entry for the same row. Keys are sorted, so two write paths describing the same change
-produce byte-identical JSON.
+second entry for the same row.
+[Complex types](https://learn.microsoft.com/ef/core/modeling/complex-types) are folded the same way
+and to any depth (`"Money.Amount"`, `"Money.Stamp.By"`) — they are columns of the row that declares
+them, so a change to one is a change to that row. `[AuditMask]` and `[AuditIgnore]` are read off the
+value object itself, so a type used by five entities states it once. Keys are sorted, so two write
+paths describing the same change produce byte-identical JSON.
 
 ## Querying it
 

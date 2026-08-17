@@ -116,6 +116,14 @@ public abstract class AuditEquivalenceTests(AuditDatabaseFixture fixture)
         await command.ExecuteNonQueryAsync();
     }
 
+    /// <remarks>
+    ///     Decimals are written at the scale their column declares. The change-tracker path records
+    ///     the value the application supplied and the bulk path reads a deleted row's back from the
+    ///     store, so a decimal whose CLR scale differs from its column's — <c>1.5m</c> into a
+    ///     <c>numeric(18,2)</c> — is rendered <c>1.5</c> by one and <c>1.50</c> by the other. That
+    ///     is a pre-existing difference in how the two paths obtain a before-image and has nothing
+    ///     to do with what these tests cover, so the seed does not walk into it.
+    /// </remarks>
     private static List<Product> Products(int count)
         => [.. Enumerable.Range(1, count).Select(i => new Product
         {
@@ -124,6 +132,12 @@ public abstract class AuditEquivalenceTests(AuditDatabaseFixture fixture)
             Price = 9.99m,
             Status = ProductStatus.Draft,
             TenantId = "acme",
+            Dimensions = new Dimensions
+            {
+                Width = 10.50m,
+                Height = 20.25m,
+                Packaging = new Packaging { Material = "card" },
+            },
         })];
 
     private static List<Product> Sensitive(int count)

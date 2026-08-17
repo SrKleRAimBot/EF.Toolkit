@@ -78,6 +78,15 @@ internal static class AuditValues
             return null;
         }
 
+        if (property.DeclaringType is IComplexType)
+        {
+            // Declared on a complex type, so it is reached through the member holding that value
+            // rather than off the entity — the cast below would be to the wrong CLR type. Only key
+            // columns are read this way and a complex type has no key, so this is a guard rather
+            // than a path anything takes today; it costs one check to keep it that way.
+            return null;
+        }
+
         var parameter = Expression.Parameter(typeof(object), "entity");
 
         // Cast to the declaring type, not to whichever type asked: an inherited property is one

@@ -20,6 +20,31 @@ public class Product
     public string TenantId { get; set; } = "";
     public string? InternalNotes { get; set; }
     public string? CardNumber { get; set; }
+
+    /// <summary>
+    ///     A complex value, nested one level deeper.
+    /// </summary>
+    /// <remarks>
+    ///     Its columns are on this table but are mapped by the complex type rather than by the
+    ///     entity, so the two capture paths reach them differently: the change tracker reads them
+    ///     off the entry, and the bulk path reads them off the columns the write staged. The
+    ///     equivalence guarantee is that both produce the same entry regardless.
+    /// </remarks>
+    public Dimensions Dimensions { get; set; } = new();
+}
+
+/// <summary>A complex value object recorded under its path in the payload.</summary>
+public class Dimensions
+{
+    public decimal Width { get; set; }
+    public decimal Height { get; set; }
+
+    public Packaging Packaging { get; set; } = new();
+}
+
+public class Packaging
+{
+    public string Material { get; set; } = "";
 }
 
 /// <summary>Stored as text, so the audit payload has to record the text and not the ordinal.</summary>

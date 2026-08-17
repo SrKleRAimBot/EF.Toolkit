@@ -270,7 +270,7 @@ boolean per query.
 
 | Check | Reports |
 | --- | --- |
-| `MissingIndex` | No declared index leads with the query's equality-filtered columns followed by its ordering columns, so the server sorts every matching row to answer a page. |
+| `MissingIndex` | No declared index leads with the query's equality-filtered columns followed by its ordering columns, so the server sorts every matching row to answer a page. Counts the entity type's [global query filters](https://learn.microsoft.com/ef/core/querying/filters) as equality columns — a tenant or soft-delete filter pins its column just as a `Where` does, and is usually what the right index leads with — unless the query dropped them with `IgnoreQueryFilters`. |
 | `NonDeterministicOrder` | The ordering covers no key or unique index, so tied rows can appear on two pages or on neither. |
 | `DeepOffset` | The page starts past `MaxOffsetRows`, so the server walks and discards everything before it. |
 | `LargeInClause` | An `IN` list is longer than `MaxInClauseValues`. SQL Server caps a command at 2100 parameters and fails at execution, not at compile time. |

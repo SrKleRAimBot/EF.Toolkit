@@ -98,18 +98,34 @@ public sealed class BulkBeforeImages
                 $"'{entityType.DisplayName()}' is not mapped to a table, so its rows cannot be "
                 + "read before they are changed.");
 
+        var table = mapping.Table;
         var columns = new List<BulkColumnInfo>();
 
-        foreach (var columnMapping in mapping.ColumnMappings)
+        // Flattened, and for the same reason the plan is: a complex property's columns are on this
+        // table but mapped by the complex type, so the entity's own column mappings do not list
+        // them. "The whole row" has to mean the whole row, or a deleted row's before-image comes
+        // back missing exactly the columns nothing else can recover.
+        foreach (var property in entityType.GetFlattenedProperties())
         {
+            var column = property.GetTableColumnMappings()
+                .FirstOrDefault(m => m.TableMapping.Table == table)?.Column;
+
+            if (column is null)
+            {
+                continue;
+            }
+
             columns.Add(
                 new BulkColumnInfo(
-                    columnMapping.Column.Name,
-                    columnMapping.Column.StoreTypeMapping,
-                    columnMapping.Property,
+                    column.Name,
+                    column.StoreTypeMapping,
+                    property,
                     isWrite: false,
                     isRead: false,
-                    isKey: columnMapping.Property.IsKey()));
+
+                    // Primary key, matching the plan: an alternate key is an ordinary column here
+                    // too, and this flag is what correlates a before-image row back to its entity.
+                    isKey: property.IsPrimaryKey()));
         }
 
         return columns;
