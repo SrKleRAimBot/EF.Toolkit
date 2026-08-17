@@ -95,11 +95,16 @@ internal static class BulkValueReader
         {
             return Readers.GetOrAdd(target, Compile)(reader, ordinal);
         }
-        catch (Exception exception)
-            when (exception is InvalidCastException or NotSupportedException or InvalidOperationException)
+        catch (Exception exception) when (exception is InvalidCastException or NotSupportedException)
         {
             // The driver cannot produce this type from this field. Fall back to the raw value; if
             // it cannot be reconciled either, the column reports that with the detail to act on.
+            //
+            // Only these two, and deliberately: they are how a driver says "not that type", and
+            // nothing else. A reader that is closed or positioned on no row raises
+            // InvalidOperationException, which is a fault in the caller rather than an answer about
+            // types — swallowing it would both hide the fault and record this shape as unreadable
+            // for the rest of the process.
             Refused[shape] = true;
             return reader.GetValue(ordinal);
         }

@@ -59,6 +59,11 @@ public class BulkColumnInfoTests
         exception.Message.ShouldContain("System.DateTime");
         exception.Message.ShouldContain("System.DateTimeOffset");
 
+        // Namespace-qualified wherever a type is named, the advice included: the whole point is to
+        // be read by someone whose model has a Duration or a DateTime of its own.
+        exception.Message.ShouldNotContain("'DateTime'");
+        exception.Message.ShouldNotContain("'DateTimeOffset'");
+
         // The cause is kept, so anything reading the exception chain still sees the original.
         exception.InnerException.ShouldBeOfType<InvalidCastException>();
     }

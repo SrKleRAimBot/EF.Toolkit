@@ -115,6 +115,29 @@ public class BulkValueReaderTests
     }
 
     [Fact]
+    public void Lets_a_reader_that_is_not_in_a_state_to_be_read_say_so()
+    {
+        // What a closed reader, or one positioned on no row, raises. It says nothing about types,
+        // so treating it as a refusal would report the wrong problem.
+        var reader = Row(new StubField(
+            "Note",
+            typeof(char[]),
+            "EARLY".ToCharArray(),
+            _ => throw new InvalidOperationException("Invalid attempt to read when no data is present.")));
+
+        var column = ColumnModel.Column("Note");
+
+        Should.Throw<InvalidOperationException>(() => BulkValueReader.Read(reader, 0, column));
+
+        // And it is not remembered as one either: a driver that can read this shape is still asked
+        // the next time round, rather than being written off for the life of the process.
+        var working = Row(new StubField("Note", typeof(char[]), "EARLY".ToCharArray(), _ => "EARLY"));
+
+        BulkValueReader.Read(working, 0, column).ShouldBe("EARLY");
+        working.TypedReads.ShouldBe([typeof(string)]);
+    }
+
+    [Fact]
     public void Takes_the_plain_value_for_a_column_the_model_does_not_describe()
     {
         var reader = Row(new StubField("anything", typeof(DateTime), DateTime.UnixEpoch));

@@ -176,17 +176,32 @@ public sealed class BulkColumnInfo
             ? $"{property.DeclaringType.DisplayName()}.{property.Name}"
             : Name;
 
+        // Namespace-qualified throughout, including in the advice. Two types of the same short name
+        // in different namespaces is not a hypothetical here -- a temporal model that mismatches
+        // this way is usually one that brought its own -- and a message that names one type both
+        // ways leaves the reader to guess which it meant.
+        var source = Describe(value.GetType());
+        var declared = Describe(target);
+
         // A converted property is not "declared as" its provider type, it is stored as one, and
         // saying so is the difference between a reader looking at the property and at the converter.
         var expectation = TypeMapping?.Converter is not null
-            ? $"'{owner}' is stored as '{target.FullName}'"
-            : $"'{owner}' is declared as '{target.FullName}'";
+            ? $"'{owner}' is stored as '{declared}'"
+            : $"'{owner}' is declared as '{declared}'";
 
-        return $"Column '{Name}' came back from the database as '{value.GetType().FullName}', but "
+        return $"Column '{Name}' came back from the database as '{source}', but "
             + $"{expectation}, and neither the driver nor the CLR converts between the two. That "
             + "usually means the driver reads the column's store type as a CLR type the model does "
             + "not use — a provider plugin such as Npgsql's NodaTime support does exactly that. "
-            + $"Map '{owner}' to a store type the driver reads as '{target.Name}', or give it a "
-            + $"value converter between '{value.GetType().Name}' and what the model holds.";
+            + $"Map '{owner}' to a store type the driver reads as '{declared}', or give it a value "
+            + $"converter between '{source}' and what the model holds.";
     }
+
+    /// <summary>Names a type as unambiguously as the runtime allows.</summary>
+    /// <remarks>
+    ///     <see cref="Type.FullName" /> is null for a generic parameter and for an open generic
+    ///     built at runtime, neither of which reaches a column mapping — but a diagnostic that
+    ///     printed "null" rather than a name would be a poor way to find that out.
+    /// </remarks>
+    private static string Describe(Type type) => type.FullName ?? type.Name;
 }
