@@ -29,7 +29,11 @@ internal static class QueryAdvisor
 
         var findings = new List<QueryAdvisory>();
         var entityType = context.Model.FindEntityType(typeof(T));
-        var shape = QueryShapeProbe.Inspect(source.Expression);
+
+        // The entity type's own global query filters are folded in: EF adds them during translation,
+        // so they constrain the executed query without ever appearing in the tree the probe reads.
+        var shape = QueryShapeProbe.IncludingQueryFilters(
+            QueryShapeProbe.Inspect(source.Expression), entityType);
 
         if (options.Diagnostics.Runs(QueryChecks.DeepOffset) && page.Offset > options.MaxOffsetRows)
         {
@@ -80,7 +84,9 @@ internal static class QueryAdvisor
 
         // The ordering comes from the definition rather than the tree — a keyset query is handed in
         // unordered — so the probe is only consulted for the filters and the includes.
-        var probed = QueryShapeProbe.Inspect(source.Expression);
+        var probed = QueryShapeProbe.IncludingQueryFilters(
+            QueryShapeProbe.Inspect(source.Expression), entityType);
+
         var shape = probed with { OrderingPaths = keys.ColumnPaths };
 
         InspectCommon(findings, entityType, shape, options);

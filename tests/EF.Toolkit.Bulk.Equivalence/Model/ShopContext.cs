@@ -14,6 +14,7 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
     public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
     public DbSet<Reading> Readings => Set<Reading>();
     public DbSet<Sensor> Sensors => Set<Sensor>();
+    public DbSet<Invoice> Invoices => Set<Invoice>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -112,6 +113,28 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
             // A default on a nullable column: without KeepNulls the server substitutes this
             // wherever a null is written, so an explicit null would silently become 'unlabelled'.
             b.Property(x => x.Label).HasMaxLength(64).HasDefaultValue("unlabelled");
+        });
+
+        modelBuilder.Entity<Invoice>(b =>
+        {
+            b.Property(x => x.Reference).HasMaxLength(64).IsRequired();
+
+            // Complex properties, which map to columns of this table that the entity does not map
+            // itself. The nested one gives Total_Stamp_By, and the optional one has to come back as
+            // nulls when it was never set.
+            b.ComplexProperty(x => x.Total, t =>
+            {
+                t.Property(m => m.Amount).HasPrecision(18, 2);
+                t.Property(m => m.Currency).HasMaxLength(3).IsRequired();
+                t.ComplexProperty(m => m.Stamp).Property(s => s.By).HasMaxLength(64).IsRequired();
+            });
+
+            b.ComplexProperty(x => x.Discount, d =>
+            {
+                d.Property(m => m.Amount).HasPrecision(18, 2);
+                d.Property(m => m.Currency).HasMaxLength(3);
+                d.ComplexProperty(m => m.Stamp).Property(s => s.By).HasMaxLength(64);
+            });
         });
 
         modelBuilder.Entity<Category>(b =>

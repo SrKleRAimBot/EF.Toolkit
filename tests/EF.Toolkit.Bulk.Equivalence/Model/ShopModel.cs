@@ -152,6 +152,43 @@ public class Sensor
     public string Name { get; set; } = "";
 }
 
+/// <summary>
+///     Carries complex properties, one of them nested and one of them optional.
+/// </summary>
+/// <remarks>
+///     A complex type's columns sit on this table but are mapped by the complex type rather than by
+///     the entity, so the explicit API has to reach them through the flattened property set and
+///     read their values through the members that hold them. Getting that wrong writes the entity's
+///     own columns and leaves these to the table's defaults — which is a silent half-written row,
+///     and exactly what a differential run against stock EF catches.
+/// </remarks>
+public class Invoice
+{
+    public int Id { get; set; }
+
+    public string Reference { get; set; } = "";
+
+    /// <summary>Required, and itself carrying a nested complex value.</summary>
+    public Money Total { get; set; } = new();
+
+    /// <summary>Optional, so an absent value has to be written as nulls rather than dereferenced.</summary>
+    public Money? Discount { get; set; }
+}
+
+public class Money
+{
+    public decimal Amount { get; set; }
+    public string Currency { get; set; } = "";
+
+    /// <summary>Nested one level deeper, giving a Total_Stamp_By column.</summary>
+    public Stamp Stamp { get; set; } = new();
+}
+
+public class Stamp
+{
+    public string By { get; set; } = "";
+}
+
 public enum OrderStatus
 {
     Draft,

@@ -60,7 +60,23 @@ internal sealed class AuditModelConvention(AuditOptions options) : IModelFinaliz
             }
         }
 
-        foreach (var property in entityType.GetDeclaredProperties())
+        ApplyPropertyAttributes(entityType);
+    }
+
+    /// <summary>
+    ///     Marks the properties carrying <c>[AuditIgnore]</c> or <c>[AuditMask]</c>, including those
+    ///     declared on a complex type.
+    /// </summary>
+    /// <remarks>
+    ///     A complex type's members are where the attribute naturally sits — a <c>Card</c> value
+    ///     object declares the number that must be masked, and every entity using it should inherit
+    ///     that without restating it. Walking only the declaring entity's own properties meant an
+    ///     attribute on a value object was read by nobody and the value went into the trail in
+    ///     clear.
+    /// </remarks>
+    private static void ApplyPropertyAttributes(IConventionTypeBase declaring)
+    {
+        foreach (var property in declaring.GetDeclaredProperties())
         {
             var member = (MemberInfo?)property.PropertyInfo ?? property.FieldInfo;
 
@@ -78,6 +94,11 @@ internal sealed class AuditModelConvention(AuditOptions options) : IModelFinaliz
             {
                 property.SetAnnotation(AuditAnnotations.MaskedByAttribute, true);
             }
+        }
+
+        foreach (var complex in declaring.GetDeclaredComplexProperties())
+        {
+            ApplyPropertyAttributes(complex.ComplexType);
         }
     }
 

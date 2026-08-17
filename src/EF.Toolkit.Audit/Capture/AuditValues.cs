@@ -54,9 +54,62 @@ internal static class AuditValues
             null => string.Empty,
             string text => text,
             byte[] bytes => Convert.ToBase64String(bytes),
+
+            // Canonicalized for the reason Canonical sets out: a decimal key read back from the
+            // store carries the column's scale, and one read off an entity carries whatever the
+            // application supplied, so the same key rendered as text two ways would not match.
+            decimal number => Canonical(number).ToString(CultureInfo.InvariantCulture),
+
             IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
             _ => value.ToString() ?? string.Empty,
         };
+
+    /// <summary>
+    ///     Strips a decimal's trailing zeros, so the same number always renders the same way.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         A <see cref="decimal" /> carries its scale as part of its representation:
+    ///         <c>1.5m</c> and <c>1.50m</c> are equal and serialize differently. That is normally
+    ///         harmless, but the two capture paths obtain their values from different places. The
+    ///         change tracker holds what the application assigned, while a bulk operation reads a
+    ///         deleted row's before-image back from the store, where the column's declared scale has
+    ///         been applied. The same change then produced <c>"Width": 1.5</c> through one path and
+    ///         <c>"Width": 1.50</c> through the other, breaking a byte-identity guarantee over a
+    ///         difference that carries no information.
+    ///     </para>
+    ///     <para>
+    ///         Stripping is the direction that invents nothing. Padding to the column's scale would
+    ///         mean applying store precision, which this library deliberately does not do — the
+    ///         payload records the value, not the column's declaration — and there is no scale to
+    ///         pad to when the column does not declare one.
+    ///     </para>
+    ///     <para>
+    ///         Only trailing zeros go. A digit that changes the value stops the reduction, so
+    ///         <c>9.99m</c> is left alone and no precision is ever lost.
+    ///     </para>
+    /// </remarks>
+    /// <param name="value">The value to canonicalize.</param>
+    /// <returns>The same number, at the smallest scale that represents it exactly.</returns>
+    public static decimal Canonical(decimal value)
+    {
+        // Rounding away a zero leaves the value equal to what it was; rounding away anything else
+        // does not, whichever way the midpoint falls. So equality alone decides when to stop, and
+        // the loop runs at most once per declared decimal place.
+        for (var scale = value.Scale; scale > 0; scale--)
+        {
+            var reduced = Math.Round(value, scale - 1);
+
+            if (reduced != value)
+            {
+                return value;
+            }
+
+            value = reduced;
+        }
+
+        return value;
+    }
 
     /// <summary>Gets, or compiles and caches, a delegate reading <paramref name="property" />.</summary>
     /// <remarks>
@@ -75,6 +128,15 @@ internal static class AuditValues
         if (property.PropertyInfo is null && property.FieldInfo is null)
         {
             // A shadow property has no CLR member. Readable through an entry, not through an object.
+            return null;
+        }
+
+        if (property.DeclaringType is IComplexType)
+        {
+            // Declared on a complex type, so it is reached through the member holding that value
+            // rather than off the entity — the cast below would be to the wrong CLR type. Only key
+            // columns are read this way and a complex type has no key, so this is a guard rather
+            // than a path anything takes today; it costs one check to keep it that way.
             return null;
         }
 

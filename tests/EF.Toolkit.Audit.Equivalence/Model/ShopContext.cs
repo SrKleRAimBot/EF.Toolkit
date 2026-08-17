@@ -20,6 +20,14 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
             b.Property(p => p.Price).HasPrecision(18, 2);
             b.HasIndex(p => p.Sku).IsUnique();
 
+            b.ComplexProperty(p => p.Dimensions, d =>
+            {
+                d.Property(x => x.Width).HasPrecision(18, 2);
+                d.Property(x => x.Height).HasPrecision(18, 2);
+                d.ComplexProperty(x => x.Packaging)
+                    .Property(x => x.Material).HasMaxLength(32).IsRequired();
+            });
+
             b.IsAudited(a => a
                 .Exclude(p => p.InternalNotes)
                 .Mask(p => p.CardNumber));

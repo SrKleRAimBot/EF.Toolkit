@@ -142,6 +142,10 @@ one, as with rows read from a file:
 await context.BulkUpdateAsync(prices, o => o.MatchOn(p => new { p.Sku, p.Region }));
 ```
 
+Only the **primary** key locates a row by default. An alternate key — `HasAlternateKey(...)` — is an
+ordinary writable column here, so an update can change one; name it in `MatchOn` if you want to
+locate rows by it instead.
+
 Unlike a merge this needs **no unique index**: a set-based `UPDATE` is content for one source row to
 reach several target rows, and will. `BulkResult` then reports how many of the entities you passed
 found a row, not how many rows changed — and a source row that matched nothing is still a
@@ -207,7 +211,15 @@ await context.BulkSynchronizeAsync(rows, o => o
 ```
 
 Now only rows inside the scope can be deleted, and `AllowFullTableDelete()` is not needed — the
-delete is no longer full-table. The translator is deliberately narrow: `&&`-ed comparisons between a
+delete is no longer full-table.
+
+On an entity type with a [global query filter](https://learn.microsoft.com/ef/core/querying/filters)
+a scope is not optional, and `AllowFullTableDelete()` will not substitute for one. The filter hides
+rows from every read this context performs, so the source list could not have named them — but the
+delete arm still reaches them. Give the scope the same predicate the filter applies, and the two
+sides agree again.
+
+The translator is deliberately narrow: `&&`-ed comparisons between a
 mapped property and a value, with anything else refused by name rather than silently dropped, since
 a dropped condition widens a delete. Values are bound as parameters. For a predicate it does not
 cover there is a SQL overload, where the target is aliased `t` and every interpolation hole is bound
@@ -540,12 +552,42 @@ divergence rather than silently comparing nothing.
   second pass that `SaveChanges()` performs and this does not.
 - Sequence block reservation consumes values on rollback — the same behaviour as stock EF, since
   sequence allocation is non-transactional. PostgreSQL 17 and later do not reserve at all.
-- `BulkUpdateAsync` refuses an entity type with a concurrency token. Checking one needs the value as
-  it was loaded, and the explicit API works from detached objects that do not carry it — for the
-  usual load-increment-save pattern the token already holds the *new* value. `SaveChanges()` tracks
-  the before-image and handles these correctly.
+- The explicit API refuses an entity type with a concurrency token on every operation that has to
+  locate an existing row — `BulkUpdateAsync`, `BulkDeleteAsync`, `BulkMergeAsync` and
+  `BulkSynchronizeAsync`. Checking a token needs the value as it was loaded, and the explicit API
+  works from detached objects that do not carry it — for the usual load-increment-save pattern the
+  token already holds the *new* value. `BulkInsertAsync` is unaffected: an insert locates no row, so
+  it writes the token like any other column. `SaveChanges()` tracks the before-image and handles all
+  of these correctly.
+- The explicit API refuses an entity type mapped to more than one table — table-per-type inheritance
+  and entity splitting — because one bulk statement writes one table, and the rest of the row would
+  be left behind. Table-per-hierarchy is fine, as long as the discriminator is mapped to a property
+  rather than left as a shadow one.
+- The explicit API refuses an entity type that shares its table with another entity type outside its
+  hierarchy: an owned reference, an owned type mapped to JSON, or table splitting. Those columns are
+  absent from the owner's own mappings, so the row would come out half-populated. An owned collection
+  in a table of its own is not affected — the owner's row is complete, and the owned rows are written
+  the way any dependent is. [Complex types](https://learn.microsoft.com/ef/core/modeling/complex-types)
+  are *not* affected either: they are not separate entity types, and their columns are written.
+- The explicit API refuses an update or a delete on a keyless entity type. With no key there is
+  nothing to put in the `WHERE` clause, so the statement would apply to every row in the table. Name
+  the columns that identify a row with `MatchOn` if there are any; an insert needs no key and is
+  allowed as it stands.
+- The explicit API refuses a property-bag entity type — in practice the implicit join entity behind a
+  many-to-many skip navigation, which EF models as a `Dictionary<string, object>` with no members to
+  read. Declare the join entity explicitly with `UsingEntity<T>()` to bulk-write it.
+- The explicit API refuses an entity type mapped to a SQL Server temporal table. Its period columns
+  are shadow properties the provider maintains, and there is nothing on your objects to read them
+  from. `SaveChanges()` handles these, still accelerated, and history is recorded as usual.
 - `BulkSynchronizeAsync` requires either `WithinScope(...)` or `AllowFullTableDelete()`. Unscoped,
   its delete arm covers the whole table, so a partial list removes everything the list omitted.
+- `BulkSynchronizeAsync` requires `WithinScope(...)` specifically — `AllowFullTableDelete()` is not
+  enough — on an entity type with a [global query filter](https://learn.microsoft.com/ef/core/querying/filters).
+  Its delete arm reaches the rows the filter hides, which the context cannot read and the source
+  therefore could never have named. Scope it with the same predicate the filter applies:
+  `.WithinScope(e => e.TenantId == tenantId)`. The other verbs are unaffected — they touch only the
+  rows you hand over, located by key, exactly as `SaveChanges()` does, and stock EF applies no query
+  filter there either.
 - `WithinScope`'s expression translator takes `&&`-ed comparisons between a mapped property and a
   value, and nothing else. Widening it is not a priority: the SQL overload covers the rest, and a
   scope that quietly fails to translate part of a predicate deletes more than it was asked to.
