@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace EFToolkit.Query.Equivalence.Model;
 
@@ -10,6 +11,8 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
     public DbSet<Customer> Customers => Set<Customer>();
 
     public DbSet<Shipment> Shipments => Set<Shipment>();
+
+    public DbSet<Employee> Employees => Set<Employee>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -48,6 +51,22 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
             b.HasKey(x => x.Id);
             b.Property(x => x.Id).ValueGeneratedNever();
             b.Property(x => x.Carrier).HasMaxLength(64).IsRequired();
+        });
+
+        modelBuilder.Entity<Employee>(b =>
+        {
+            // The reason this entity exists: the key is stored as text through a converter, so a
+            // cursor over it has to carry the stored string rather than anything the CLR type says
+            // about itself. Both engines sort that column, so both have to walk it identically.
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id)
+                .HasConversion(new ValueConverter<EmployeeId, string>(
+                    id => id.Value,
+                    value => new EmployeeId(value)))
+                .HasMaxLength(32)
+                .ValueGeneratedNever();
+
+            b.Property(x => x.Name).HasMaxLength(128).IsRequired();
         });
     }
 }

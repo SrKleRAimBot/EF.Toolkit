@@ -84,7 +84,7 @@ public sealed class KeysetDefinition<T>
     }
 
     /// <summary>Builds the cursor pointing at <paramref name="row" />.</summary>
-    internal KeysetCursor CursorFor(T row, KeysetPageDirection direction)
+    internal KeysetCursor CursorFor(T row, KeysetPageDirection direction, KeysetBinding binding)
     {
         var values = new string[Components.Count];
 
@@ -97,7 +97,7 @@ public sealed class KeysetDefinition<T>
                     + "model and the CLR type disagree — check for a column mapped as required whose "
                     + "property is not.");
 
-            values[i] = KeysetValueCodec.Encode(value, Components[i].KeyType);
+            values[i] = binding.Encode(i, value);
         }
 
         return new KeysetCursor(Fingerprint, direction, values);
@@ -105,7 +105,7 @@ public sealed class KeysetDefinition<T>
 
     /// <summary>Converts a cursor's rendered values back to the component key types.</summary>
     /// <exception cref="QueryNotSupportedException">The cursor does not belong to this ordering.</exception>
-    internal IReadOnlyList<object?> Decode(KeysetCursor cursor)
+    internal IReadOnlyList<object?> Decode(KeysetCursor cursor, KeysetBinding binding)
     {
         if (cursor.Fingerprint != Fingerprint)
         {
@@ -127,68 +127,83 @@ public sealed class KeysetDefinition<T>
         var values = new object?[Components.Count];
         for (var i = 0; i < Components.Count; i++)
         {
-            values[i] = KeysetValueCodec.Decode(cursor.Values[i], Components[i].KeyType);
+            values[i] = binding.Decode(i, cursor.Values[i]);
         }
 
         return values;
     }
 
     /// <summary>The predicate selecting rows past <paramref name="cursor" />.</summary>
-    internal Expression<Func<T, bool>> After(KeysetCursor cursor)
+    internal Expression<Func<T, bool>> After(KeysetCursor cursor, KeysetBinding binding)
         => KeysetPredicate.After<T>(
             Components,
-            Decode(cursor),
+            Decode(cursor, binding),
             backward: cursor.Direction == KeysetPageDirection.Backward);
 
     /// <summary>
     ///     Checks the ordering against the EF model, refusing the cases where the SQL comparison would
-    ///     not mean what the definition says.
+    ///     not mean what the definition says, and resolves what a cursor renders each component as.
     /// </summary>
-    /// <remarks>
-    ///     Skipped when <typeparamref name="T" /> is not a mapped entity type — paging a projection is
-    ///     legitimate, and there is no model to check it against. The checks that need no model have
-    ///     already run at build time.
-    /// </remarks>
-    internal void ValidateAgainst(IEntityType? entityType)
+    /// <param name="entityType">
+    ///     The mapped type, or <see langword="null" /> when <typeparamref name="T" /> is not one.
+    ///     Paging a projection is legitimate; the model-dependent refusals are skipped for it, and
+    ///     each component binds to its own CLR type.
+    /// </param>
+    /// <returns>The components bound to the model, for encoding and decoding cursors.</returns>
+    internal KeysetBinding ValidateAgainst(IEntityType? entityType)
     {
-        if (entityType is null)
-        {
-            return;
-        }
+        var binding = KeysetBinding.For(Components, entityType);
 
-        foreach (var component in Components)
+        for (var i = 0; i < Components.Count; i++)
         {
-            var property = entityType.FindProperty(component.PropertyPath!);
+            var component = Components[i];
+            var property = entityType?.FindProperty(component.PropertyPath!);
 
-            if (property is null)
+            // A null property is a navigation, a shadow-state mismatch, a property EF does not map, or
+            // a projection with no model behind it at all. There is nothing model-shaped to check;
+            // the query itself will fail clearly enough if it cannot translate.
+            if (property is not null)
             {
-                // A navigation, a shadow-state mismatch, or a property EF does not map. Nothing to
-                // check; the query itself will fail clearly enough if it cannot translate.
-                continue;
+                if (property.IsNullable)
+                {
+                    throw new QueryNotSupportedException(
+                        $"Keyset column '{component.PropertyPath}' is mapped as nullable. Databases "
+                        + "disagree about where NULLs sort, and a comparison against NULL is neither "
+                        + "true nor false, so every row with a NULL there would be skipped by every "
+                        + "page. Page along a required column, or make this one required.");
+                }
+
+                if (!_allowConvertedKey && ConverterLosesOrder(property))
+                {
+                    throw new QueryNotSupportedException(
+                        $"Keyset column '{component.PropertyPath}' is stored through a value converter, "
+                        + "so both the ORDER BY and the page comparison run against the converted "
+                        + "value, not the CLR one. An enum stored as text, for instance, sorts "
+                        + "alphabetically rather than by its numbering, and the pages come back in "
+                        + "that order instead. Page along an unconverted column, or call "
+                        + "AllowConvertedKey() if you know this conversion preserves order.");
+                }
             }
 
-            if (property.IsNullable)
+            // Checked here rather than at build time because the answer depends on the model: what a
+            // cursor has to carry is the stored value, and a converted column stores something other
+            // than its CLR type. The property may be a NodaTime Instant the provider maps natively, or
+            // a strongly typed id stored as text — neither is anything the CLR type alone can say.
+            var cursorType = binding.CursorTypeOf(i);
+
+            if (!KeysetValueCodec.IsSupported(cursorType))
             {
                 throw new QueryNotSupportedException(
-                    $"Keyset column '{component.PropertyPath}' is mapped as nullable. Databases "
-                    + "disagree about where NULLs sort, and a comparison against NULL is neither true "
-                    + "nor false, so every row with a NULL there would be skipped by every page. Page "
-                    + "along a required column, or make this one required.");
-            }
-
-            if (!_allowConvertedKey && ConverterLosesOrder(property))
-            {
-                throw new QueryNotSupportedException(
-                    $"Keyset column '{component.PropertyPath}' is stored through a value converter, so "
-                    + "both the ORDER BY and the page comparison run against the converted value, not "
-                    + "the CLR one. An enum stored as text, for instance, sorts alphabetically rather "
-                    + "than by its numbering, and the pages come back in that order instead. Page "
-                    + "along an unconverted column, or call AllowConvertedKey() if you know this "
-                    + "conversion preserves order.");
+                    $"Keyset column '{component.PropertyPath}' is stored as {cursorType.Name}"
+                    + (cursorType == component.KeyType ? "" : $" (from {component.KeyType.Name})")
+                    + ", which a cursor cannot carry because it has no round-trippable text form. Page "
+                    + "along a column of a primitive, string, Guid, date, time or byte-array type, "
+                    + "store this one through a value converter to one of those, or give its type a "
+                    + "TypeConverter that reads its own output back.");
             }
         }
 
-        if (!_allowNonUniqueKey && !IsTotalOrdering(entityType))
+        if (entityType is not null && !_allowNonUniqueKey && !IsTotalOrdering(entityType))
         {
             throw new QueryNotSupportedException(
                 $"The keyset ordering ({string.Join(", ", ColumnPaths)}) is not total: no key or unique "
@@ -197,6 +212,8 @@ public sealed class KeysetDefinition<T>
                 + "returned on two pages or on none. End the ordering with the primary key, or call "
                 + "AllowNonUniqueKey() if uniqueness is guaranteed outside the model.");
         }
+
+        return binding;
     }
 
     /// <summary>
@@ -204,23 +221,15 @@ public sealed class KeysetDefinition<T>
     ///     to the database.
     /// </summary>
     /// <remarks>
-    ///     <para>
-    ///         Read from the type mapping as well as the explicitly configured converter, because
-    ///         <c>HasConversion&lt;string&gt;()</c> leaves nothing on the property itself — it changes
-    ///         the mapping. Checking only the property is how this misses the exact case it exists
-    ///         for.
-    ///     </para>
-    ///     <para>
-    ///         The one conversion allowed through is an enum stored as its own underlying number,
-    ///         which EF applies by default and which sorts identically on both sides. Everything else
-    ///         is refused: <c>ORDER BY</c> and the page comparison both run against the stored value,
-    ///         so an enum written as text pages alphabetically rather than by the enum's numbering,
-    ///         and the caller has no way to see it from the results.
-    ///     </para>
+    ///     The one conversion allowed through is an enum stored as its own underlying number, which EF
+    ///     applies by default and which sorts identically on both sides. Everything else is refused:
+    ///     <c>ORDER BY</c> and the page comparison both run against the stored value, so an enum
+    ///     written as text pages alphabetically rather than by the enum's numbering, and the caller
+    ///     has no way to see it from the results.
     /// </remarks>
     private static bool ConverterLosesOrder(IProperty property)
     {
-        var converter = property.GetValueConverter() ?? property.FindTypeMapping()?.Converter;
+        var converter = KeysetBinding.ConverterOf(property);
 
         if (converter is null)
         {

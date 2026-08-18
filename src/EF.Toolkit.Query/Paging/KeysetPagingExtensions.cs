@@ -92,7 +92,7 @@ public static class KeysetPagingExtensions
         var options = QueryConfiguration.Required(context, nameof(ToKeysetPageAsync));
         var size = Math.Min(pageSize ?? options.DefaultPageSize, options.MaxPageSize);
 
-        keys.ValidateAgainst(context.Model.FindEntityType(typeof(T)));
+        var binding = keys.ValidateAgainst(context.Model.FindEntityType(typeof(T)));
         QueryAdvisor.InspectKeyset(context, source, keys, options);
 
         var backward = cursor is { Direction: KeysetPageDirection.Backward };
@@ -101,7 +101,7 @@ public static class KeysetPagingExtensions
 
         if (cursor is not null)
         {
-            query = query.Where(keys.After(cursor));
+            query = query.Where(keys.After(cursor, binding));
         }
 
         // One row past the page: its existence is the answer to "is there more", and it costs a row
@@ -128,10 +128,10 @@ public static class KeysetPagingExtensions
             rows,
             size,
             next: hasNext && rows.Count > 0
-                ? keys.CursorFor(rows[^1], KeysetPageDirection.Forward)
+                ? keys.CursorFor(rows[^1], KeysetPageDirection.Forward, binding)
                 : null,
             previous: hasPrevious && rows.Count > 0
-                ? keys.CursorFor(rows[0], KeysetPageDirection.Backward)
+                ? keys.CursorFor(rows[0], KeysetPageDirection.Backward, binding)
                 : null,
             hasNext,
             hasPrevious);

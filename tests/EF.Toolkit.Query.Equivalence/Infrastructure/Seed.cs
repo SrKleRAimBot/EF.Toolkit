@@ -91,4 +91,33 @@ public static class Seed
 
         return shipments;
     }
+
+    /// <summary>Writes <paramref name="count" /> employees keyed by a value-converted id.</summary>
+    /// <returns>The employees as written.</returns>
+    /// <remarks>
+    ///     Ids are zero-padded so the text ordering the database applies is the insertion ordering,
+    ///     and three employees share each hire date so a walk led by that column has to fall back on
+    ///     the converted key to break the tie.
+    /// </remarks>
+    public static async Task<IReadOnlyList<Employee>> EmployeesAsync(
+        ShopContext context,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var employees = Enumerable.Range(0, count)
+            .Select(i => new Employee
+            {
+                Id = new EmployeeId($"EMP-{i:D4}"),
+                Name = $"Employee {i:D2}",
+                HiredOn = Epoch.AddDays(i / 3),
+            })
+            .ToArray();
+
+        context.Employees.AddRange(employees);
+        await context.SaveChangesAsync(cancellationToken);
+
+        return employees;
+    }
 }

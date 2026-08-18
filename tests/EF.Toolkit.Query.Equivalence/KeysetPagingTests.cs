@@ -45,6 +45,15 @@ public abstract class KeysetPagingTests(QueryDatabaseFixture fixture)
         .Descending(s => s.DispatchedAt)
         .Ascending(s => s.Id));
 
+    private static readonly KeysetDefinition<Employee> ByEmployeeId = KeysetDefinition.For<Employee>(k => k
+        .Ascending(e => e.Id)
+        .AllowConvertedKey());
+
+    private static readonly KeysetDefinition<Employee> ByHiredThenEmployeeId = KeysetDefinition.For<Employee>(k => k
+        .Descending(e => e.HiredOn)
+        .Ascending(e => e.Id)
+        .AllowConvertedKey());
+
     [Theory]
     [InlineData(1)]
     [InlineData(3)]
@@ -147,6 +156,33 @@ public abstract class KeysetPagingTests(QueryDatabaseFixture fixture)
         second.Items.Select(static o => o.Id)
             .Intersect(first.Items.Select(static o => o.Id))
             .ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(4)]
+    [InlineData(7)]
+    public async Task A_value_converted_key_walks_every_row_exactly_once(int pageSize)
+    {
+        // The cursor carries the stored text, and the comparison is written against the property and
+        // converted by EF on the way to SQL. If those two ever disagree about what the boundary is,
+        // the walk drops the row sitting on it — which is what this asserts against the real engine.
+        var (context, token) = await SeededEmployeesAsync(25);
+        await using var _ = context;
+
+        await PagingEquivalence.AssertAsync(
+            context, context.Employees, ByEmployeeId, static e => e.Id, pageSize, token);
+    }
+
+    [Fact]
+    public async Task A_value_converted_key_breaks_ties_behind_another_column()
+    {
+        // Three employees per hire date, so every page boundary the leading column reaches is a tie
+        // that only the converted key resolves.
+        var (context, token) = await SeededEmployeesAsync(25);
+        await using var _ = context;
+
+        await PagingEquivalence.AssertAsync(
+            context, context.Employees, ByHiredThenEmployeeId, static e => e.Id, 4, token);
     }
 
     [Fact]
@@ -352,6 +388,20 @@ public abstract class KeysetPagingTests(QueryDatabaseFixture fixture)
         {
             await Seed.OrdersAsync(context, orderCount, token);
         }
+
+        context.ChangeTracker.Clear();
+        return (context, token);
+    }
+
+    private async Task<(ShopContext Context, CancellationToken Token)> SeededEmployeesAsync(int count)
+    {
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        await fixture.ResetAsync();
+
+        var token = TestContext.Current.CancellationToken;
+        var context = fixture.CreateContext();
+
+        await Seed.EmployeesAsync(context, count, token);
 
         context.ChangeTracker.Clear();
         return (context, token);

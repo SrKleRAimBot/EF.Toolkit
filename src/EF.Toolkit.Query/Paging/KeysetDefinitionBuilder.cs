@@ -106,13 +106,10 @@ public class KeysetDefinitionBuilder<T>
                 + "non-nullable column, or project a substitute value with a computed column.");
         }
 
-        if (!KeysetValueCodec.IsSupported(component.KeyType))
-        {
-            throw new QueryNotSupportedException(
-                $"Keyset component '{component.PropertyPath}' is {component.KeyType.Name}, which a "
-                + "cursor cannot carry because it has no round-trippable text form. Page along a "
-                + "column of a primitive, string, Guid, date, time or byte-array type.");
-        }
+        // Whether a cursor can carry the component is *not* checked here. That depends on how the
+        // column is stored — a strongly typed id is text, a NodaTime Instant is a timestamp — and the
+        // model is not available yet. KeysetDefinition.ValidateAgainst makes that call once the
+        // property, and any value converter on it, is in hand.
     }
 
     private KeysetDefinitionBuilder<T> Add<TKey>(

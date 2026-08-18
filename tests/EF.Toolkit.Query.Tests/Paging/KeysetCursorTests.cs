@@ -17,18 +17,18 @@ public class KeysetCursorTests
         var keys = ByPlacedThenId();
         var row = new Order { Id = 42, PlacedAt = new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc) };
 
-        var original = keys.CursorFor(row, KeysetPageDirection.Forward);
+        var original = keys.CursorFor(row, KeysetPageDirection.Forward, Unbound(keys));
         var parsed = KeysetCursor.Parse(original.Token);
 
         parsed.Direction.ShouldBe(KeysetPageDirection.Forward);
-        keys.Decode(parsed).ShouldBe([row.PlacedAt, row.Id]);
+        keys.Decode(parsed, Unbound(keys)).ShouldBe([row.PlacedAt, row.Id]);
     }
 
     [Fact]
     public void A_backward_cursor_says_so()
     {
         var keys = ByPlacedThenId();
-        var cursor = keys.CursorFor(new Order { Id = 1 }, KeysetPageDirection.Backward);
+        var cursor = keys.CursorFor(new Order { Id = 1 }, KeysetPageDirection.Backward, Unbound(keys));
 
         KeysetCursor.Parse(cursor.Token).Direction.ShouldBe(KeysetPageDirection.Backward);
     }
@@ -106,9 +106,10 @@ public class KeysetCursorTests
             .Ascending(o => o.Id));
 
         var row = new Order { Id = 3, Reference = "a|b|c" };
-        var parsed = KeysetCursor.Parse(keys.CursorFor(row, KeysetPageDirection.Forward).Token);
+        var parsed = KeysetCursor.Parse(
+            keys.CursorFor(row, KeysetPageDirection.Forward, Unbound(keys)).Token);
 
-        keys.Decode(parsed).ShouldBe(["a|b|c", 3]);
+        keys.Decode(parsed, Unbound(keys)).ShouldBe(["a|b|c", 3]);
     }
 
     [Theory]
@@ -148,13 +149,14 @@ public class KeysetCursorTests
     {
         // Replayed against the wrong ordering the boundary values line up with the wrong columns, and
         // the page that comes back is arbitrary rather than empty — so this has to be loud.
-        var issued = ByPlacedThenId().CursorFor(new Order { Id = 1 }, KeysetPageDirection.Forward);
+        var ordering = ByPlacedThenId();
+        var issued = ordering.CursorFor(new Order { Id = 1 }, KeysetPageDirection.Forward, Unbound(ordering));
 
         var otherOrdering = KeysetDefinition.For<Order>(k => k
             .Ascending(o => o.Total)
             .Ascending(o => o.Id));
 
-        var failure = Should.Throw<QueryNotSupportedException>(() => otherOrdering.Decode(issued));
+        var failure = Should.Throw<QueryNotSupportedException>(() => otherOrdering.Decode(issued, Unbound(otherOrdering)));
         failure.Message.ShouldContain("different ordering");
     }
 
@@ -177,7 +179,7 @@ public class KeysetCursorTests
         var keys = ByPlacedThenId();
         var truncated = new KeysetCursor(keys.Fingerprint, KeysetPageDirection.Forward, ["1"]);
 
-        Should.Throw<QueryNotSupportedException>(() => keys.Decode(truncated))
+        Should.Throw<QueryNotSupportedException>(() => keys.Decode(truncated, Unbound(keys)))
             .Message.ShouldContain("altered in transit");
     }
 
@@ -187,20 +189,27 @@ public class KeysetCursorTests
         var keys = KeysetDefinition.For<Order>(k => k.Ascending(o => o.Id));
         var tampered = new KeysetCursor(keys.Fingerprint, KeysetPageDirection.Forward, ["not-a-number"]);
 
-        Should.Throw<QueryNotSupportedException>(() => keys.Decode(tampered))
+        Should.Throw<QueryNotSupportedException>(() => keys.Decode(tampered, Unbound(keys)))
             .Message.ShouldContain("altered in transit");
     }
 
     [Fact]
     public void A_cursor_renders_as_its_token_so_it_interpolates_into_a_url()
     {
-        var cursor = ByPlacedThenId().CursorFor(new Order { Id = 1 }, KeysetPageDirection.Forward);
+        var keys = ByPlacedThenId();
+        var cursor = keys.CursorFor(new Order { Id = 1 }, KeysetPageDirection.Forward, Unbound(keys));
 
         cursor.ToString().ShouldBe(cursor.Token);
         cursor.Token.ShouldNotContain("=");
         cursor.Token.ShouldNotContain("+");
         cursor.Token.ShouldNotContain("/");
     }
+
+    /// <summary>
+    ///     The binding a definition gets with no model behind it: every component rendered as its own
+    ///     CLR type, which is the answer for a projection and for every column with no conversion.
+    /// </summary>
+    private static KeysetBinding Unbound<T>(KeysetDefinition<T> keys) => keys.ValidateAgainst(null);
 
     private static string Token(string payload)
         => System.Buffers.Text.Base64Url.EncodeToString(Encoding.UTF8.GetBytes(payload));
