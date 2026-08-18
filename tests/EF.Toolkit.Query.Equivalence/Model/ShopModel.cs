@@ -65,3 +65,29 @@ public class Shipment
 
     public string Carrier { get; set; } = "";
 }
+
+/// <summary>
+///     A strongly typed id stored as <c>text</c> through a value converter, which is the ordinary
+///     shape of a domain key and the one a cursor cannot read off the CLR type.
+/// </summary>
+/// <remarks>
+///     Deliberately bare: no comparison operators, no <see cref="IComparable{T}" />, which is what a
+///     record struct over a string gives you and what every strongly typed id in the wild looks like.
+///     The ordering being walked is the one the engine applies to the <c>text</c> column, and these
+///     suites are here to check that the engine and the cursor agree about it.
+/// </remarks>
+public readonly record struct EmployeeId(string Value)
+{
+    public override string ToString() => Value;
+}
+
+/// <summary>Keyed by a converted id, so a keyset can end at the primary key and nowhere else.</summary>
+public class Employee
+{
+    public EmployeeId Id { get; set; }
+
+    public string Name { get; set; } = "";
+
+    /// <summary>Coarse, so the trailing converted key is what breaks the ties.</summary>
+    public DateTime HiredOn { get; set; }
+}

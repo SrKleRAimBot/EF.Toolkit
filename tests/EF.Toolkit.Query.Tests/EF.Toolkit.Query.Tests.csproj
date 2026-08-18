@@ -22,6 +22,14 @@
     -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+
+    <!--
+      A provider that maps a type EF has no value converter for. NodaTime's Instant and LocalDate go
+      to timestamptz and date natively, which is the half of the cursor question the CLR type alone
+      cannot answer.
+    -->
+    <PackageReference Include="NodaTime" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL.NodaTime" />
   </ItemGroup>
 
 </Project>

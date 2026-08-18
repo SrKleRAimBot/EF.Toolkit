@@ -26,7 +26,8 @@ work the same way everywhere.
 ## Contents
 
 [Install](#install) · [Setup](#setup) · [Offset pagination](#offset-pagination) ·
-[Keyset pagination](#keyset-pagination) — [cursors](#cursors), [what it refuses](#what-keyset-paging-refuses) ·
+[Keyset pagination](#keyset-pagination) — [cursors](#cursors), [what it refuses](#what-keyset-paging-refuses),
+[what a cursor carries](#what-a-cursor-carries) ·
 [Sorting](#sorting) · [Filtering and search](#filtering-and-search) · [Streaming](#streaming) ·
 [Tracking scopes](#tracking-scopes) · [Options](#options) · [Diagnostics](#diagnostics) ·
 [How it works](#how-it-works) · [Limitations](#limitations) · [Sample](#sample)
@@ -142,7 +143,28 @@ page that is wrong without saying so.
 | A value-converted column | `ORDER BY` and the page comparison both run against the *stored* value. An enum written as text sorts alphabetically, not by its numbering. Opt out with `AllowConvertedKey()` where the conversion preserves order. An enum stored as its own underlying number is allowed automatically. |
 | An ordering that cannot break every tie | Checked against the keys and unique indexes of the model. Without one, the boundary falls in an arbitrary place among tied rows. Opt out with `AllowNonUniqueKey()` where uniqueness is guaranteed outside the model. |
 | A computed expression | The value has to be readable back off a materialised row to build the next cursor, so each component must be a plain property. |
-| A type a cursor cannot carry | Anything without a round-trippable text form. |
+| A type a cursor cannot carry | Anything whose **stored** form has no round-trippable text form. Checked against the model, not the CLR type — see below. |
+
+### What a cursor carries
+
+A cursor carries the value as the database stores it, which is the value both `ORDER BY` and the page
+comparison run against. So the question is what the *column* is, not what the property is:
+
+- **A column stored through a value converter** puts the converted value in the cursor. A strongly
+  typed id over `string` pages fine — the cursor carries the text — and the type needs no comparison
+  operators of its own: the ordering walked is the one the engine applies to the column. Still pair it
+  with `AllowConvertedKey()`: that the conversion preserves order is a separate claim, and only the
+  caller can make it.
+- **A column the provider maps natively** — NodaTime's `Instant` and `LocalDate` under the Npgsql
+  plugin, for instance — is carried through the type's `TypeConverter`, which for those types is the
+  full-precision ISO-8601 form. A converter that does not read its own output back is refused when the
+  cursor is built rather than left to shift the boundary.
+- **Anything else** needs a `[TypeConverter]` that round-trips, or a value converter to a type on the
+  built-in list: primitives, `string`, `Guid`, `DateTime`, `DateTimeOffset`, `DateOnly`, `TimeOnly`,
+  `TimeSpan`, `byte[]`, and enums.
+
+Because this depends on the model, it is reported at the first page rather than at
+`KeysetDefinition.For` — as the nullable and uniqueness refusals already are.
 
 ## Sorting
 
@@ -309,8 +331,17 @@ cache holds one entry rather than one per cursor.
 SQL's row-value form `(a, b) > (a0, b0)` says the same thing in one comparison, but SQL Server does not
 support it and EF translates it on neither engine. Types without comparison operators — `string`,
 `Guid` — go through `IComparable<T>.CompareTo`, which EF turns back into a plain SQL comparison
-against the column. That the resulting order may not be .NET's own does not matter: both sides of the
+against the column. A type with neither, such as a `readonly record struct` id, gets a comparison node
+of the right kind carrying a `Comparer<T>.Default` method: EF translates a binary node by its kind and
+its operands, so the SQL is the same `col > @p`, and the method itself only runs if the expression is
+compiled rather than translated. That the resulting order may not be .NET's own does not matter: both sides of the
 comparison and the `ORDER BY` are evaluated by the same database, so they agree with each other.
+
+The boundary is always a **CLR** value of the property's own type, even where the column is stored
+through a value converter — EF applies the conversion as it translates, and provider-typed access
+(`EF.Property<string>` over a converted property, say) does not translate at all. The cursor is the
+other way round: it holds the *stored* value, which is the one the comparison ends up running against.
+Decoding walks the converter back to get from one to the other.
 
 **Tracking scopes** replace EF's `IQueryContextFactory` and apply the ambient preference to
 `ChangeTracker.QueryTrackingBehavior` before each query. That seam is chosen deliberately.
@@ -344,7 +375,8 @@ never touches the database.
   matters.
 - **Keyset paging over a projection cannot be model-checked.** Paging a DTO is supported, but the
   nullable, value-converter and uniqueness refusals need a mapped entity type to check against and are
-  skipped when there is none.
+  skipped when there is none. Each component is then taken to be stored as its own CLR type, which is
+  what a projection of unconverted columns amounts to.
 - **Tracking scopes do not cross work that outlives the `using`**, do not affect `SaveChanges`, and
   apply only to contexts configured with `UseQueryHelpers()`. If something else in the application
   also replaces `IQueryContextFactory`, the last `ReplaceService` wins — call `WithoutTrackingScopes()`

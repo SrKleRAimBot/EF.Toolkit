@@ -13,6 +13,7 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="[10.0.0,11.0.0)" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="[10.0.0,11.0.0)" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="[10.0.0,11.0.0)" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL.NodaTime" Version="[10.0.0,11.0.0)" />
   </ItemGroup>
 
   <ItemGroup Label="Testing">
@@ -32,6 +33,12 @@
     -->
     <PackageVersion Include="SSH.NET" Version="2026.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="[10.0.0,11.0.0)" />
+
+    <!--
+      Test-only. A keyset cursor has to carry the types a provider maps natively, and NodaTime
+      through the Npgsql plugin is the case that has no value converter to read the answer off.
+    -->
+    <PackageVersion Include="NodaTime" Version="3.3.3" />
   </ItemGroup>
 
   <ItemGroup Label="Benchmarks">
