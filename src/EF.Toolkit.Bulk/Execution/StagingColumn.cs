@@ -37,6 +37,15 @@ internal readonly record struct StagingColumn(int Index, bool UseOriginal, strin
     }
 
     /// <summary>
+    ///     Reads this column's model value for <paramref name="row" />, before any value converter.
+    /// </summary>
+    /// <remarks>
+    ///     For a writer that hands the value to the column's type mapping, which converts it itself.
+    /// </remarks>
+    public object? ModelValueFor(IBulkRowSet rows, int row)
+        => UseOriginal ? rows.GetOriginalValue(row, Index) : rows.GetValue(row, Index);
+
+    /// <summary>
     ///     Builds the staging layout for an update: every condition column, plus every written
     ///     column, aliasing the new value where a column is both.
     /// </summary>

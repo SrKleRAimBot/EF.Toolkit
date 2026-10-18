@@ -18,6 +18,9 @@ public abstract class ThroughputSmokeTests(DatabaseFixture fixture, ITestOutputH
 {
     private const int Rows = 5_000;
 
+    /// <summary>Enough rows to cross the default bulk threshold, so a warm-up warms the fast path.</summary>
+    private const int WarmUpRows = Configuration.BulkOptions.DefaultThreshold * 2;
+
     [Fact]
     public async Task Bulk_insert_is_faster_than_stock_ef()
     {
@@ -25,9 +28,10 @@ public abstract class ThroughputSmokeTests(DatabaseFixture fixture, ITestOutputH
         await fixture.ResetAsync();
 
         // Warm both sides: first-call costs (model building, sequence discovery, connection
-        // establishment) would otherwise dominate a run this short.
-        await InsertAsync(() => fixture.CreateStockContext(), 50, 0);
-        await InsertAsync(() => fixture.CreateBulkContext(), 50, 0);
+        // establishment, JIT) would otherwise dominate a run this short. Above the bulk threshold,
+        // or the warm-up runs through stock EF and leaves the fast path cold for the measurement.
+        await InsertAsync(() => fixture.CreateStockContext(), WarmUpRows, 0);
+        await InsertAsync(() => fixture.CreateBulkContext(), WarmUpRows, 0);
         await fixture.ResetAsync();
 
         var stock = await InsertAsync(() => fixture.CreateStockContext(), Rows, 0);
@@ -97,8 +101,8 @@ public abstract class ThroughputSmokeTests(DatabaseFixture fixture, ITestOutputH
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
         await fixture.ResetAsync();
 
-        await InsertAsync(() => fixture.CreateStockContext(), 50, 0);
-        await ExplicitInsertAsync(() => fixture.CreateBulkContext(), 50, 0);
+        await InsertAsync(() => fixture.CreateStockContext(), WarmUpRows, 0);
+        await ExplicitInsertAsync(() => fixture.CreateBulkContext(), WarmUpRows, 0);
         await fixture.ResetAsync();
 
         var stock = await InsertAsync(() => fixture.CreateStockContext(), Rows, 0);
@@ -134,7 +138,11 @@ public abstract class ThroughputSmokeTests(DatabaseFixture fixture, ITestOutputH
         // a rerun of the same build, twice, at two different bounds. The claim this test exists to
         // defend — that the fast path is engaging at all — is the one above, against stock EF, and
         // it holds strictly on every engine.
-        if (fixture.Engine == "sqlserver")
+        //
+        // MySQL and SQLite are in the same position for a different reason: both paths end in the
+        // same multi-row INSERT or the same prepared statement, so there is nothing for the explicit
+        // path to skip beyond EF's pipeline either.
+        if (!fixture.Engine.StartsWith("postgres", StringComparison.Ordinal))
         {
             return;
         }

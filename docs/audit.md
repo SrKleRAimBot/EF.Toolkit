@@ -36,13 +36,15 @@ queryable JSON.
 ## Install
 
 ```bash
-dotnet add package EF.Toolkit.Audit.PostgreSQL   # or EF.Toolkit.Audit.SqlServer
+dotnet add package EF.Toolkit.Audit.PostgreSQL   # or .SqlServer, .MySql, .Sqlite
 ```
 
 The provider package brings this one with it. For the audit table's column types on each engine, and
 how the payload is indexed, see the notes for
-[PostgreSQL](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit-postgresql.md) and
-[SQL Server](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit-sqlserver.md).
+[PostgreSQL](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit-postgresql.md),
+[SQL Server](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit-sqlserver.md),
+[MySQL](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit-mysql.md) and
+[SQLite](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/audit-sqlite.md).
 
 ## Setup
 
@@ -60,7 +62,8 @@ services.AddDbContext<AppDb>(o => o
 That is the whole integration. The audit table is added to the model, so `dotnet ef migrations add`
 picks it up, and the capture pipeline is registered.
 
-If you reference both provider packages, use `UseNpgsqlAuditing()` or `UseSqlServerAuditing()`.
+If you reference more than one provider package, use `UseNpgsqlAuditing()`,
+`UseSqlServerAuditing()`, `UseMySqlAuditing()` or `UseSqliteAuditing()`.
 
 ---
 
@@ -199,20 +202,21 @@ services.AddScoped<IAuditTenantProvider, FinbuckleAuditTenantProvider>();
 
 ## The audit table
 
-One table for every audited type, in its own schema by default.
+One table for every audited type, in its own schema by default — except on MySQL, where a schema is
+a separate database and the table stays in the context's own, and SQLite, which has no schemas.
 
-| Column | PostgreSQL | SQL Server |
-| --- | --- | --- |
-| `Id` | per key type | per key type |
-| `EntityType` | `text` | `nvarchar(256)` |
-| `EntityKey` | `text` | `nvarchar(256)` |
-| `Operation` | `integer` | `int` |
-| `ActorId`, `ActorName`, `ActorType` | `text` | `nvarchar(256)` |
-| `TenantId` | `text` | `nvarchar(256)` |
-| `OccurredAt` | `timestamptz` | `datetimeoffset(7)` |
-| `CorrelationId` | `uuid` | `uniqueidentifier` |
-| `Source` | `text` | `nvarchar(256)` |
-| `Changes` | **`jsonb`** | `nvarchar(max)` + `CHECK (ISJSON(…) = 1)` |
+| Column | PostgreSQL | SQL Server | MySQL | SQLite |
+| --- | --- | --- | --- | --- |
+| `Id` | per key type | per key type | per key type | per key type |
+| `EntityType` | `text` | `nvarchar(256)` | `varchar(256)` | `TEXT` |
+| `EntityKey` | `text` | `nvarchar(256)` | `varchar(256)` | `TEXT` |
+| `Operation` | `integer` | `int` | `int` | `INTEGER` |
+| `ActorId`, `ActorName`, `ActorType` | `text` | `nvarchar(256)` | `varchar(256)` | `TEXT` |
+| `TenantId` | `text` | `nvarchar(256)` | `varchar(256)` | `TEXT` |
+| `OccurredAt` | `timestamptz` | `datetimeoffset(7)` | `datetime(6)` | `TEXT` |
+| `CorrelationId` | `uuid` | `uniqueidentifier` | `char(36)` | `TEXT` |
+| `Source` | `text` | `nvarchar(256)` | `varchar(256)` | `TEXT` |
+| `Changes` | **`jsonb`** | `nvarchar(max)` + `CHECK (ISJSON(…) = 1)` | `json` | `TEXT` + `CHECK (json_valid(…))` |
 
 Indexed by default on `(EntityType, EntityKey, OccurredAt DESC)` — the history of one row —
 plus actor, correlation, tenant (when multi-tenancy is configured), and the payload.
@@ -271,11 +275,13 @@ SELECT * FROM audit."AuditEntries"
 WHERE "Changes" -> 'changed' ? 'Status';
 ```
 
-SQL Server has no index over a JSON document. Make one path searchable with a persisted computed
-column instead:
+SQL Server, MySQL and SQLite have no index over a JSON document. Make one path searchable with a
+persisted computed column instead:
 
 ```csharp
 .UseSqlServerAuditing(a => a.IndexJsonPath("$.new.Status"))
+.UseMySqlAuditing(a => a.IndexJsonPath("$.new.Status"))
+.UseSqliteAuditing(a => a.IndexJsonPath("$.new.Status"))
 ```
 
 ---
@@ -469,9 +475,12 @@ asserts by requiring the two to be byte-identical.
   their owner's table are folded.
 - A custom redactor is a delegate held on a model annotation, so an entity type configured that way
   cannot be part of a compiled model. The mask-token form has no such restriction.
-- SQL Server has no index over a JSON document. `IndexJsonPath(...)` makes one path searchable
-  through a persisted computed column; there is no equivalent of PostgreSQL's GIN index over the
-  whole payload.
+- SQL Server, MySQL and SQLite have no index over a JSON document. `IndexJsonPath(...)` makes one
+  path searchable through a persisted computed column; there is no equivalent of PostgreSQL's GIN
+  index over the whole payload.
+- On SQLite, EF Core cannot order by a `DateTimeOffset`, so a query ordering entries by
+  `OccurredAt` orders on the client; and SQLite's provider takes no part in `TransactionScope`, so
+  neither do its audit entries.
 - Native table partitioning for retention is not modelled — EF migrations do not describe it. Add it
   in a migration with raw SQL against the audit table.
 

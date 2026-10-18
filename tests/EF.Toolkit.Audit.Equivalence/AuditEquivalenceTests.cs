@@ -107,8 +107,7 @@ public abstract class AuditEquivalenceTests(AuditDatabaseFixture fixture)
 
     private async Task ClearAuditAsync()
     {
-        var table = $"{fixture.Quote(Audit.Configuration.AuditOptions.DefaultSchema)}."
-            + $"{fixture.Quote(Audit.Configuration.AuditOptions.DefaultTableName)}";
+        var table = fixture.AuditTable;
 
         await using var connection = fixture.OpenConnection();
         await using var command = connection.CreateCommand();

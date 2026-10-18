@@ -1,6 +1,7 @@
 using EFToolkit.Query.Configuration;
 using EFToolkit.Query.Equivalence.Model;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace EFToolkit.Query.Equivalence.Infrastructure;
 
@@ -15,6 +16,13 @@ public abstract class QueryDatabaseFixture : IAsyncLifetime
 {
     /// <summary>Value of the <c>Engine</c> trait, used to shard the suite in CI.</summary>
     public abstract string Engine { get; }
+
+    /// <summary>Whether the EF Core provider can order by a <see cref="DateTimeOffset" /> column.</summary>
+    /// <remarks>
+    ///     SQLite's cannot: it stores the value as text, and refuses to translate an ordering that text
+    ///     comparison would get wrong across offsets. There is no keyset to walk without an ordering.
+    /// </remarks>
+    public virtual bool OrdersByDateTimeOffset => true;
 
     /// <summary>Set when the engine cannot run here; the suite skips rather than fails.</summary>
     public string? SkipReason { get; protected set; }
@@ -60,7 +68,11 @@ public abstract class QueryDatabaseFixture : IAsyncLifetime
         Action<QueryOptionsBuilder>? configure = null,
         bool queryHelpers = true)
     {
-        var builder = new DbContextOptionsBuilder<ShopContext>();
+        // Every engine and every configuration a scenario varies gets an internal service provider
+        // of its own, and with five engines in one process that passes the twenty at which EF
+        // starts treating the count as a mistake. It is not one here: each is cached and reused.
+        var builder = new DbContextOptionsBuilder<ShopContext>()
+            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));
 
         ConfigureProvider(builder, ConnectionString);
 

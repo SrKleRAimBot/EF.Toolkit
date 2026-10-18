@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Audit.MySql</PackageId>
+    <PackageTags>entity-framework-core;efcore;audit;auditing;audit-trail;change-tracking;history;compliance;mysql;mariadb</PackageTags>
+    <Description>
+      MySQL provider for EF.Toolkit.Audit. Stores the audit payload in MySQL's native, validated JSON
+      type, with optional stored generated columns so a hot JSON path can be indexed. References no
+      MySQL provider of its own.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      No MySQL provider is referenced: the audit table is described in store-type names and EF's
+      relational API, which any MySQL provider understands, so the package does not pull a provider
+      into an application that chose a different one. It is tested under Oracle's
+      MySql.EntityFrameworkCore, the provider that ships for EF Core 10.
+    -->
+    <ProjectReference Include="../EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../docs/audit-mysql.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Equivalence" />
+  </ItemGroup>
+
+</Project>

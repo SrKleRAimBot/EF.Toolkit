@@ -14,6 +14,34 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="[10.0.0,11.0.0)" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="[10.0.0,11.0.0)" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL.NodaTime" Version="[10.0.0,11.0.0)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite.Core" Version="[10.0.0,11.0.0)" />
+
+    <!--
+      Test-only. EF.Toolkit.Bulk.MySql and EF.Toolkit.Audit.MySql reference no MySQL provider, so
+      they work under whichever one the application already uses. The equivalence suites need a
+      concrete one, and Oracle's is the provider that ships for EF Core 10. The bundled SQLite
+      package is likewise only for the tests: the library takes the native-library-free Core
+      package and leaves the choice of SQLite build to the application.
+    -->
+    <PackageVersion Include="MySql.EntityFrameworkCore" Version="[10.0.1,11.0.0)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="[10.0.0,11.0.0)" />
+
+    <!--
+      The bundled native SQLite above resolves to SQLitePCLRaw.lib.e_sqlite3 2.1.11, which ships a
+      SQLite carrying GHSA-2m69-gcr7-jv3q. Test-only, like the bundle that pulls it in.
+    -->
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.14" />
+  </ItemGroup>
+
+  <!--
+    Microsoft.Data.SqlClient, under both SQL Server packages, pins System.Security.Cryptography.Pkcs
+    9.0.4, which carries CVE-2026-84008 (GHSA-846f-f764-76mx, first patched in 10.0.13 for this
+    major). NuGet audit is an error in this repo, so every project downstream of SqlClient failed to
+    restore on it. Transitive pinning is on, so naming the fixed version here lifts it — and makes it
+    a direct dependency of the SQL Server packages, so applications get the fix too.
+  -->
+  <ItemGroup Label="Security">
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup Label="Testing">
@@ -23,6 +51,7 @@
     <PackageVersion Include="Shouldly" Version="4.3.0" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.13.0" />
     <PackageVersion Include="Testcontainers.MsSql" Version="4.13.0" />
+    <PackageVersion Include="Testcontainers.MySql" Version="4.13.0" />
 
     <!--
       Testcontainers pulls SSH.NET for its port-forwarding support, which nothing here uses, and

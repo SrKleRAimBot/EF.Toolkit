@@ -1,9 +1,11 @@
 using System.Globalization;
-using DotNet.Testcontainers.Containers;
 using Microsoft.Data.SqlClient;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using MySql.Data.MySqlClient;
 using Npgsql;
 using Testcontainers.MsSql;
+using Testcontainers.MySql;
 using Testcontainers.PostgreSql;
 
 namespace EFToolkit.Bulk.Benchmarks;
@@ -14,15 +16,16 @@ namespace EFToolkit.Bulk.Benchmarks;
 /// </summary>
 /// <remarks>
 ///     Benchmarks run against a real engine rather than an in-memory stand-in: the whole subject is
-///     the wire protocol, and <c>COPY</c> against a fake would measure nothing.
+///     the wire protocol, and <c>COPY</c> against a fake would measure nothing. SQLite is the
+///     exception that proves it — it is in-process, so there is no container, just two files.
 /// </remarks>
 internal sealed class BenchmarkDatabase : IAsyncDisposable
 {
-    private readonly IContainer _container;
+    private readonly IAsyncDisposable _resource;
 
-    private BenchmarkDatabase(IContainer container, string stock, string bulk)
+    private BenchmarkDatabase(IAsyncDisposable resource, string stock, string bulk)
     {
-        _container = container;
+        _resource = resource;
         StockConnectionString = stock;
         BulkConnectionString = bulk;
     }
@@ -33,7 +36,13 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
     public string BulkConnectionString { get; }
 
     public static BenchmarkDatabase Start()
-        => Engine == BenchmarkEngine.SqlServer ? StartSqlServer() : StartPostgreSql();
+        => Engine switch
+        {
+            BenchmarkEngine.SqlServer => StartSqlServer(),
+            BenchmarkEngine.MySql => StartMySql(),
+            BenchmarkEngine.Sqlite => StartSqlite(),
+            _ => StartPostgreSql(),
+        };
 
     public BenchmarkContext StockContext() => new(Options(StockConnectionString, bulk: false));
 
@@ -76,27 +85,49 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
         bulk.BulkInsert(Data.WideCustomers(rows));
     }
 
-    public async ValueTask DisposeAsync() => await _container.DisposeAsync();
+    public async ValueTask DisposeAsync() => await _resource.DisposeAsync();
 
     private static DbContextOptions<BenchmarkContext> Options(string connectionString, bool bulk)
     {
         var builder = new DbContextOptionsBuilder<BenchmarkContext>();
 
-        if (Engine == BenchmarkEngine.SqlServer)
+        switch (Engine)
         {
-            builder.UseSqlServer(connectionString);
-            if (bulk)
-            {
-                builder.UseSqlServerBulk();
-            }
-        }
-        else
-        {
-            builder.UseNpgsql(connectionString);
-            if (bulk)
-            {
-                builder.UseNpgsqlBulk();
-            }
+            case BenchmarkEngine.SqlServer:
+                builder.UseSqlServer(connectionString);
+                if (bulk)
+                {
+                    builder.UseSqlServerBulk();
+                }
+
+                break;
+
+            case BenchmarkEngine.MySql:
+                builder.UseMySQL(connectionString);
+                if (bulk)
+                {
+                    builder.UseMySqlBulk();
+                }
+
+                break;
+
+            case BenchmarkEngine.Sqlite:
+                builder.UseSqlite(connectionString);
+                if (bulk)
+                {
+                    builder.UseSqliteBulk();
+                }
+
+                break;
+
+            default:
+                builder.UseNpgsql(connectionString);
+                if (bulk)
+                {
+                    builder.UseNpgsqlBulk();
+                }
+
+                break;
         }
 
         return builder.Options;
@@ -133,7 +164,40 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
             name => CreateSqlServerDatabase(admin, name));
     }
 
-    private static BenchmarkDatabase Create(IContainer container, Func<string, string> createDatabase)
+    private static BenchmarkDatabase StartMySql()
+    {
+        // Lock mode 1, under which a multi-row insert's generated keys are consecutive and come back
+        // from one statement. MySQL 8's default of 2 inserts row by row to learn them instead, which
+        // is the configuration worth benchmarking separately rather than by accident.
+        var container = new MySqlBuilder("mysql:8.4")
+            .WithUsername("root")
+            .WithPassword("mysql")
+            .WithCommand("--innodb-autoinc-lock-mode=1")
+            .Build();
+
+        container.StartAsync().GetAwaiter().GetResult();
+
+        var admin = new MySqlConnectionStringBuilder(container.GetConnectionString())
+        {
+            AllowPublicKeyRetrieval = true,
+        }.ConnectionString;
+
+        return Create(container, name => CreateMySqlDatabase(admin, name));
+    }
+
+    private static BenchmarkDatabase StartSqlite()
+    {
+        var directory = new TemporaryDirectory();
+
+        return Create(
+            directory,
+            name => new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(directory.Path, name + ".db"),
+            }.ConnectionString);
+    }
+
+    private static BenchmarkDatabase Create(IAsyncDisposable container, Func<string, string> createDatabase)
     {
         var database = new BenchmarkDatabase(
             container,
@@ -177,12 +241,34 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
         return new SqlConnectionStringBuilder(admin) { InitialCatalog = name }.ConnectionString;
     }
 
+    private static string CreateMySqlDatabase(string admin, string name)
+    {
+        using (var connection = new MySqlConnection(admin))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"CREATE DATABASE `{name}`";
+            command.ExecuteNonQuery();
+        }
+
+        return new MySqlConnectionStringBuilder(admin) { Database = name }.ConnectionString;
+    }
+
     private static void Truncate(string connectionString)
     {
-        if (Engine == BenchmarkEngine.SqlServer)
+        switch (Engine)
         {
-            TruncateSqlServer(connectionString);
-            return;
+            case BenchmarkEngine.SqlServer:
+                TruncateSqlServer(connectionString);
+                return;
+
+            case BenchmarkEngine.MySql:
+                TruncateMySql(connectionString);
+                return;
+
+            case BenchmarkEngine.Sqlite:
+                TruncateSqlite(connectionString);
+                return;
         }
 
         using var connection = new NpgsqlConnection(connectionString);
@@ -207,6 +293,43 @@ internal sealed class BenchmarkDatabase : IAsyncDisposable
             command.CommandText = string.Create(
                 CultureInfo.InvariantCulture, $"TRUNCATE TABLE [{table}]");
             command.ExecuteNonQuery();
+        }
+    }
+
+    private static void TruncateMySql(string connectionString)
+    {
+        using var connection = new MySqlConnection(connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+
+        // TRUNCATE resets AUTO_INCREMENT, keeping generated keys identical between the databases.
+        command.CommandText = "TRUNCATE TABLE `Customers`; TRUNCATE TABLE `WideCustomers`;";
+        command.ExecuteNonQuery();
+    }
+
+    private static void TruncateSqlite(string connectionString)
+    {
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+
+        // sqlite_sequence is the AUTOINCREMENT high-water mark, so clearing it resets the keys.
+        command.CommandText =
+            "DELETE FROM \"Customers\"; DELETE FROM \"WideCustomers\"; DELETE FROM sqlite_sequence;";
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>A directory of database files, deleted with the benchmark run.</summary>
+    private sealed class TemporaryDirectory : IAsyncDisposable
+    {
+        public string Path { get; } = Directory.CreateDirectory(
+            System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"efbulk-bench-{Guid.NewGuid():N}")).FullName;
+
+        public ValueTask DisposeAsync()
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(Path, recursive: true);
+            return ValueTask.CompletedTask;
         }
     }
 }

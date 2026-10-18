@@ -8,9 +8,13 @@
     <ProjectReference Include="../../src/EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
     <ProjectReference Include="../../src/EF.Toolkit.Audit.PostgreSQL/EF.Toolkit.Audit.PostgreSQL.csproj" />
     <ProjectReference Include="../../src/EF.Toolkit.Audit.SqlServer/EF.Toolkit.Audit.SqlServer.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Audit.MySql/EF.Toolkit.Audit.MySql.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Audit.Sqlite/EF.Toolkit.Audit.Sqlite.csproj" />
     <ProjectReference Include="../../src/EF.Toolkit.Audit.Bulk/EF.Toolkit.Audit.Bulk.csproj" />
     <ProjectReference Include="../../src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
     <ProjectReference Include="../../src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.MySql/EF.Toolkit.Bulk.MySql.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.Sqlite/EF.Toolkit.Bulk.Sqlite.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,6 +24,15 @@
     <PackageReference Include="Shouldly" />
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Testcontainers.MySql" />
+    <PackageReference Include="MySql.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+
+    <!--
+      MySql.EntityFrameworkCore needs at least 10.0.1 of the relational layer, above the floor the
+      libraries themselves declare, so the floor is lifted here rather than for every consumer.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="[10.0.1,11.0.0)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
   </ItemGroup>
 

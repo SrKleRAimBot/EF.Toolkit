@@ -144,6 +144,20 @@ public sealed class BulkColumnInfo
             return value;
         }
 
+        // Older drivers predate DateOnly and TimeOnly and will not produce them even when asked —
+        // MySql.Data reads a date as a DateTime at midnight and a time as a TimeSpan, whatever type
+        // is requested. Both pairs convert without loss where the value is in range, which is
+        // exactly when the column could have held it, and Convert.ChangeType knows neither.
+        switch (value)
+        {
+            case DateTime { TimeOfDay.Ticks: 0 } date when underlying == typeof(DateOnly):
+                return DateOnly.FromDateTime(date);
+
+            case TimeSpan { Ticks: >= 0 and < TimeSpan.TicksPerDay } time
+                when underlying == typeof(TimeOnly):
+                return TimeOnly.FromTimeSpan(time);
+        }
+
         // Providers widen freely -- a bigint from a sequence, a decimal from an identity -- so the
         // value is narrowed back to what the target actually declares.
         try

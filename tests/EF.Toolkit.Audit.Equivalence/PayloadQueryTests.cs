@@ -109,7 +109,7 @@ public abstract class PayloadQueryTests(PostgreSqlAuditFixture fixture)
     }
 
     private string Table()
-        => $"{fixture.Quote(AuditOptions.DefaultSchema)}.{fixture.Quote(AuditOptions.DefaultTableName)}";
+        => fixture.AuditTable;
 
     private string Changes() => fixture.Quote("Changes");
 

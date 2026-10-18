@@ -15,11 +15,20 @@
     <PackageReference Include="Shouldly" />
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Testcontainers.MySql" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
 
     <!-- Provider-neutral core, so the providers come in directly rather than through a shim. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="MySql.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+
+    <!--
+      MySql.EntityFrameworkCore needs at least 10.0.1 of the relational layer, above the floor the
+      libraries themselves declare, so the floor is lifted here rather than for every consumer.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="[10.0.1,11.0.0)" />
   </ItemGroup>
 
 </Project>

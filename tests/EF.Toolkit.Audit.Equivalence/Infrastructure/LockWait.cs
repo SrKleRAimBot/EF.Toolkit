@@ -1,5 +1,7 @@
 using System.Data.Common;
 using Microsoft.Data.SqlClient;
+using Microsoft.Data.Sqlite;
+using MySql.Data.MySqlClient;
 using Npgsql;
 
 namespace EFToolkit.Audit.Equivalence.Infrastructure;
@@ -29,9 +31,13 @@ internal static class LockWait
     {
         await using var command = connection.CreateCommand();
 
-        command.CommandText = engine == "sqlserver"
-            ? $"SET LOCK_TIMEOUT {seconds * 1000}"
-            : $"SET lock_timeout = '{seconds}s'";
+        command.CommandText = engine switch
+        {
+            "sqlserver" => $"SET LOCK_TIMEOUT {seconds * 1000}",
+            "mysql" => $"SET SESSION innodb_lock_wait_timeout = {seconds}",
+            "sqlite" => $"PRAGMA busy_timeout = {seconds * 1000}",
+            _ => $"SET lock_timeout = '{seconds}s'",
+        };
 
         await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
     }
@@ -48,6 +54,12 @@ internal static class LockWait
         // "Lock request time out period exceeded."
         SqlException sqlServer => sqlServer.Number == 1222,
         PostgresException postgres => postgres.SqlState == PostgresErrorCodes.LockNotAvailable,
+
+        // ER_LOCK_WAIT_TIMEOUT: "Lock wait timeout exceeded; try restarting transaction".
+        MySqlException mySql => mySql.Number == 1205,
+
+        // SQLITE_BUSY: the database file is locked by another connection's write.
+        SqliteException sqlite => sqlite.SqliteErrorCode == 5,
         _ => false
     };
 }

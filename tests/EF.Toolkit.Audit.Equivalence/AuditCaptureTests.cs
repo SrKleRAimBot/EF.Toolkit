@@ -355,8 +355,7 @@ public abstract class AuditCaptureTests(AuditDatabaseFixture fixture)
     /// <summary>Removes the entries a seeding step produced, so a scenario starts clean.</summary>
     protected async Task ClearAuditAsync()
     {
-        var table = $"{fixture.Quote(Audit.Configuration.AuditOptions.DefaultSchema)}."
-            + $"{fixture.Quote(Audit.Configuration.AuditOptions.DefaultTableName)}";
+        var table = fixture.AuditTable;
 
         await using var connection = fixture.OpenConnection();
         await using var command = connection.CreateCommand();

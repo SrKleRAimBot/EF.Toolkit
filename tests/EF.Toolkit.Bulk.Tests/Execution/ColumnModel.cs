@@ -46,6 +46,9 @@ internal static class ColumnModel
         /// <summary>Declared as a date; SQL Server reads <c>date</c> as a <see cref="DateTime" />.</summary>
         public DateOnly Date { get; set; }
 
+        /// <summary>Declared as a time; MySql.Data reads <c>time</c> as a <see cref="TimeSpan" />.</summary>
+        public TimeOnly StartsAt { get; set; }
+
         /// <summary>An enum over an integer column, which no driver produces directly.</summary>
         public Grade Grade { get; set; }
 

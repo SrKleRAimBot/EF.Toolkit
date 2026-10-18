@@ -8,6 +8,8 @@
     <ProjectReference Include="../../src/EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
     <ProjectReference Include="../../src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
     <ProjectReference Include="../../src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.MySql/EF.Toolkit.Bulk.MySql.csproj" />
+    <ProjectReference Include="../../src/EF.Toolkit.Bulk.Sqlite/EF.Toolkit.Bulk.Sqlite.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -15,6 +17,14 @@
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Shouldly" />
+    <PackageReference Include="MySql.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+
+    <!--
+      MySql.EntityFrameworkCore needs at least 10.0.1 of the relational layer, above the floor the
+      libraries themselves declare, so the floor is lifted here rather than for every consumer.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="[10.0.1,11.0.0)" />
   </ItemGroup>
 
 </Project>

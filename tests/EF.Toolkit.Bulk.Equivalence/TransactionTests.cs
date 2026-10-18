@@ -136,6 +136,8 @@ public abstract class TransactionTests(DatabaseFixture fixture)
     public async Task Bulk_insert_inside_a_transaction_scope_is_discarded_without_complete()
     {
         await ResetAsync();
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
 
         using (new TransactionScope(
             TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
@@ -155,6 +157,8 @@ public abstract class TransactionTests(DatabaseFixture fixture)
     public async Task Bulk_insert_inside_a_transaction_scope_survives_complete()
     {
         await ResetAsync();
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
 
         using (var scope = new TransactionScope(
             TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
@@ -273,11 +277,11 @@ public abstract class TransactionTests(DatabaseFixture fixture)
         // The reported count and the committed rows have to agree, whichever path ran.
         (await CountAsync("AuditEntries")).ShouldBe(200);
 
-        // SQL Server correlates a generated non-key column back through MERGE ... OUTPUT, so it
-        // accelerates this and there is no fallback to observe. PostgreSQL cannot, so it must fall
-        // back — and if it ever stops doing so, this test has quietly stopped covering the path it
-        // exists for.
-        if (fixture.Engine != "sqlserver")
+        // SQL Server correlates a generated non-key column back through MERGE ... OUTPUT, and
+        // SQLite through RETURNING, so they accelerate this and there is no fallback to observe.
+        // PostgreSQL and MySQL cannot, so they must fall back — and if they ever stop doing so,
+        // this test has quietly stopped covering the path it exists for.
+        if (!fixture.ReadsBackGeneratedNonKeyColumns)
         {
             recorder.ExplicitFallbacks.ShouldNotBeEmpty(
                 "this scenario is supposed to exercise the fall-back-to-stock-EF path");
@@ -764,6 +768,8 @@ public abstract class TransactionTests(DatabaseFixture fixture)
     public async Task Several_operations_in_one_transaction_scope_are_discarded_together()
     {
         await ResetAsync();
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
 
         using (new TransactionScope(
             TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
@@ -802,6 +808,8 @@ public abstract class TransactionTests(DatabaseFixture fixture)
     public async Task Several_operations_in_one_transaction_scope_survive_complete()
     {
         await ResetAsync();
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
 
         using (var scope = new TransactionScope(
             TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
@@ -833,6 +841,8 @@ public abstract class TransactionTests(DatabaseFixture fixture)
     public async Task A_graph_insert_inside_a_transaction_scope_is_discarded_without_complete()
     {
         await ResetAsync();
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
 
         using (new TransactionScope(
             TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
@@ -946,10 +956,18 @@ public abstract class TransactionTests(DatabaseFixture fixture)
         await using var command = connection.CreateCommand();
 
         // SQL Server stages in tempdb under a # name; PostgreSQL stages in a per-session temp
-        // schema. Both are reachable from the session that would have leaked one.
-        command.CommandText = fixture.Engine == "sqlserver"
-            ? "SELECT COUNT(*) FROM tempdb.sys.tables WHERE name LIKE '#efbulk[_]%'"
-            : "SELECT COUNT(*) FROM pg_tables WHERE tablename LIKE 'efbulk[_]%'";
+        // schema. Both are reachable from the session that would have leaked one. MySQL lists every
+        // session's temporary tables in INNODB_TEMP_TABLE_INFO, though under an internal name, so
+        // what is counted there is any InnoDB temporary table at all. SQLite's temporary tables
+        // belong to one connection and die with it, which is the strongest guarantee of the four,
+        // and sqlite_temp_master is where a leak on this one would show.
+        command.CommandText = fixture.Engine switch
+        {
+            "sqlserver" => "SELECT COUNT(*) FROM tempdb.sys.tables WHERE name LIKE '#efbulk[_]%'",
+            "mysql" => "SELECT COUNT(*) FROM information_schema.INNODB_TEMP_TABLE_INFO",
+            "sqlite" => "SELECT COUNT(*) FROM sqlite_temp_master WHERE name LIKE 'efbulk%'",
+            _ => "SELECT COUNT(*) FROM pg_tables WHERE tablename LIKE 'efbulk[_]%'",
+        };
 
         var count = await command.ExecuteScalarAsync(TestContext.Current.CancellationToken);
         return Convert.ToInt32(count, System.Globalization.CultureInfo.InvariantCulture);

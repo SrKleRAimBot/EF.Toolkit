@@ -179,6 +179,9 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
     [Fact]
     public async Task Entries_are_discarded_with_a_transaction_scope()
     {
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
+
         await ResetAsync();
 
         using (new TransactionScope(
@@ -199,6 +202,9 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
     [Fact]
     public async Task Entries_survive_a_completed_transaction_scope()
     {
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
+
         await ResetAsync();
 
         using (var scope = new TransactionScope(
@@ -309,6 +315,9 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
     [Fact]
     public async Task Same_transaction_atomicity_refuses_a_retrying_execution_strategy()
     {
+        Assert.SkipUnless(
+            fixture.SupportsRetryingExecutionStrategy, "the provider has no retrying execution strategy");
+
         await ResetAsync();
 
         await using var context = fixture.CreateContext(retryOnFailure: true);
@@ -580,6 +589,9 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
     [Fact]
     public async Task Bulk_entries_are_discarded_with_a_transaction_scope()
     {
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
+
         await ResetAsync();
 
         using (new TransactionScope(
@@ -600,6 +612,9 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
     [Fact]
     public async Task Bulk_entries_survive_a_completed_transaction_scope()
     {
+        Assert.SkipUnless(
+            fixture.SupportsAmbientTransactions, "the provider does not support ambient transactions");
+
         await ResetAsync();
 
         using (var scope = new TransactionScope(
@@ -759,8 +774,7 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
         await using var command = connection.CreateCommand();
 
         command.CommandText =
-            $"SELECT COUNT(*) FROM {fixture.Quote(AuditOptions.DefaultSchema)}."
-            + $"{fixture.Quote(AuditOptions.DefaultTableName)}";
+            $"SELECT COUNT(*) FROM {fixture.AuditTable}";
 
         // Comfortably longer than the lock wait, so the engine's lock timeout is what ends a blocked
         // read. Reaching this one means something other than a lock is wrong, and it should say so.
@@ -786,8 +800,7 @@ public abstract class AuditTransactionTests(AuditDatabaseFixture fixture)
         await using var command = connection.CreateCommand();
 
         command.CommandText =
-            $"DELETE FROM {fixture.Quote(AuditOptions.DefaultSchema)}."
-            + $"{fixture.Quote(AuditOptions.DefaultTableName)}";
+            $"DELETE FROM {fixture.AuditTable}";
 
         await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
     }
