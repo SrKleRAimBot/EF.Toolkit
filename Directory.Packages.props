@@ -16,6 +16,17 @@
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL.NodaTime" Version="[10.0.0,11.0.0)" />
   </ItemGroup>
 
+  <!--
+    Microsoft.Data.SqlClient, under both SQL Server packages, pins System.Security.Cryptography.Pkcs
+    9.0.4, which carries CVE-2026-84008 (GHSA-846f-f764-76mx, first patched in 10.0.13 for this
+    major). NuGet audit is an error in this repo, so every project downstream of SqlClient failed to
+    restore on it. Transitive pinning is on, so naming the fixed version here lifts it — and makes it
+    a direct dependency of the SQL Server packages, so applications get the fix too.
+  -->
+  <ItemGroup Label="Security">
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+  </ItemGroup>
+
   <ItemGroup Label="Testing">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
