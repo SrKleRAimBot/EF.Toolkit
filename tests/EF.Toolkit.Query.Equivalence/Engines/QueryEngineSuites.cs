@@ -14,6 +14,12 @@ public sealed class PostgreSql17Collection : ICollectionFixture<PostgreSql17Quer
 [CollectionDefinition("query-sqlserver")]
 public sealed class SqlServerCollection : ICollectionFixture<SqlServerQueryFixture>;
 
+[CollectionDefinition("query-mysql")]
+public sealed class MySqlCollection : ICollectionFixture<MySqlQueryFixture>;
+
+[CollectionDefinition("query-sqlite")]
+public sealed class SqliteCollection : ICollectionFixture<SqliteQueryFixture>;
+
 [Trait("Engine", "postgres16")]
 [Collection("query-postgres16")]
 public sealed class PostgreSql16KeysetPagingTests(PostgreSql16QueryFixture fixture)
@@ -102,4 +108,64 @@ public sealed class PostgreSql17HarnessSelfTests(PostgreSql17QueryFixture fixtur
 [Trait("Engine", "sqlserver")]
 [Collection("query-sqlserver")]
 public sealed class SqlServerHarnessSelfTests(SqlServerQueryFixture fixture)
+    : HarnessSelfTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("query-mysql")]
+public sealed class MySqlKeysetPagingTests(MySqlQueryFixture fixture)
+    : KeysetPagingTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("query-sqlite")]
+public sealed class SqliteKeysetPagingTests(SqliteQueryFixture fixture)
+    : KeysetPagingTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("query-mysql")]
+public sealed class MySqlOffsetPagingTests(MySqlQueryFixture fixture)
+    : OffsetPagingTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("query-sqlite")]
+public sealed class SqliteOffsetPagingTests(SqliteQueryFixture fixture)
+    : OffsetPagingTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("query-mysql")]
+public sealed class MySqlSortingAndFilteringTests(MySqlQueryFixture fixture)
+    : SortingAndFilteringTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("query-sqlite")]
+public sealed class SqliteSortingAndFilteringTests(SqliteQueryFixture fixture)
+    : SortingAndFilteringTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("query-mysql")]
+public sealed class MySqlStreamingTests(MySqlQueryFixture fixture)
+    : StreamingTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("query-sqlite")]
+public sealed class SqliteStreamingTests(SqliteQueryFixture fixture)
+    : StreamingTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("query-mysql")]
+public sealed class MySqlTrackingScopeTests(MySqlQueryFixture fixture)
+    : TrackingScopeTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("query-sqlite")]
+public sealed class SqliteTrackingScopeTests(SqliteQueryFixture fixture)
+    : TrackingScopeTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("query-mysql")]
+public sealed class MySqlHarnessSelfTests(MySqlQueryFixture fixture)
+    : HarnessSelfTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("query-sqlite")]
+public sealed class SqliteHarnessSelfTests(SqliteQueryFixture fixture)
     : HarnessSelfTests(fixture);

@@ -103,7 +103,15 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
         modelBuilder.Entity<Reading>(b =>
         {
             // A CHECK constraint and a foreign key, both of which SqlBulkCopy skips unless asked.
-            b.ToTable(t => t.HasCheckConstraint("CK_Reading_Value", "\"Value\" >= 0"));
+            //
+            // Delimited the way the provider delimits, because MySQL reads a double-quoted name as
+            // a string literal: "Value" >= 0 there compares the text 'Value' with zero, and is
+            // always true.
+            var value = Database.ProviderName?.Contains("MySql", StringComparison.OrdinalIgnoreCase) == true
+                ? "`Value`"
+                : "\"Value\"";
+
+            b.ToTable(t => t.HasCheckConstraint("CK_Reading_Value", $"{value} >= 0"));
 
             b.HasOne(x => x.Sensor)
                 .WithMany()

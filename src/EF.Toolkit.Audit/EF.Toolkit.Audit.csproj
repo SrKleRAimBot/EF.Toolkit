@@ -7,7 +7,8 @@
       Entity auditing for EF Core. Records who changed what and when, with old and new values for
       every changed column, into a single audit table whose payload is queryable JSON. Fluent or
       attribute registration, pluggable actor, tenant and identifier providers. Provider-neutral
-      core; install EF.Toolkit.Audit.SqlServer or EF.Toolkit.Audit.PostgreSQL.
+      core; install EF.Toolkit.Audit.SqlServer, EF.Toolkit.Audit.PostgreSQL, EF.Toolkit.Audit.MySql or
+      EF.Toolkit.Audit.Sqlite.
     </Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
@@ -23,6 +24,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="EF.Toolkit.Audit.SqlServer" />
     <InternalsVisibleTo Include="EF.Toolkit.Audit.PostgreSQL" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.MySql" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Sqlite" />
     <InternalsVisibleTo Include="EF.Toolkit.Audit.Bulk" />
     <InternalsVisibleTo Include="EF.Toolkit.Audit.Tests" />
     <InternalsVisibleTo Include="EF.Toolkit.Audit.Equivalence" />

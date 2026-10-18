@@ -6,10 +6,14 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/EF.Toolkit.Audit.Bulk/EF.Toolkit.Audit.Bulk.csproj" />
+    <Project Path="src/EF.Toolkit.Audit.MySql/EF.Toolkit.Audit.MySql.csproj" />
     <Project Path="src/EF.Toolkit.Audit.PostgreSQL/EF.Toolkit.Audit.PostgreSQL.csproj" />
+    <Project Path="src/EF.Toolkit.Audit.Sqlite/EF.Toolkit.Audit.Sqlite.csproj" />
     <Project Path="src/EF.Toolkit.Audit.SqlServer/EF.Toolkit.Audit.SqlServer.csproj" />
     <Project Path="src/EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
+    <Project Path="src/EF.Toolkit.Bulk.MySql/EF.Toolkit.Bulk.MySql.csproj" />
     <Project Path="src/EF.Toolkit.Bulk.PostgreSQL/EF.Toolkit.Bulk.PostgreSQL.csproj" />
+    <Project Path="src/EF.Toolkit.Bulk.Sqlite/EF.Toolkit.Bulk.Sqlite.csproj" />
     <Project Path="src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
     <Project Path="src/EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
     <Project Path="src/EF.Toolkit.Query/EF.Toolkit.Query.csproj" />

@@ -306,7 +306,14 @@ public abstract class SaveChangesEquivalenceTests(DatabaseFixture fixture)
 
             context.Customers.AddRange(customers);
             await context.SaveChangesAsync();
-        });
+        },
+        // Oracle's MySQL provider replaces EF Core's own "An error occurred while saving the entity
+        // changes" with a message of its own. EF.Toolkit.Bulk wraps store errors in EF's standard
+        // wording, which is what every other provider — Pomelo's included — uses. The exception
+        // types, and the inner MySqlException, still have to match.
+        failureMessagesDifferBecause: fixture.Engine == "mysql"
+            ? "Oracle's MySQL provider words its DbUpdateException differently from EF Core"
+            : null);
 
     /// <summary>
     ///     A deterministic Guid for <paramref name="seed" />.

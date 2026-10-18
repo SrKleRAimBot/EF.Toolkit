@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Audit.Sqlite</PackageId>
+    <PackageTags>entity-framework-core;efcore;audit;auditing;audit-trail;change-tracking;history;compliance;sqlite</PackageTags>
+    <Description>
+      SQLite provider for EF.Toolkit.Audit. Stores the audit payload as JSON text validated by
+      json_valid(), with optional stored generated columns so a hot JSON path can be indexed.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EF.Toolkit.Audit/EF.Toolkit.Audit.csproj" />
+
+    <!--
+      The Core package, not Microsoft.EntityFrameworkCore.Sqlite: that one also brings a bundled
+      native SQLite build, and which SQLite an application ships is the application's decision.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../docs/audit-sqlite.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Audit.Equivalence" />
+  </ItemGroup>
+
+</Project>

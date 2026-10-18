@@ -41,13 +41,15 @@ jobs:
     # and change-tracker state match; the audit suite runs the same change through SaveChanges and
     # through the explicit bulk API and asserts the audit entries are identical; the query suite
     # walks a result set by keyset and by offset and asserts both cover every row exactly once. All
-    # three need Docker, so they are a separate job.
+    # three need Docker for every engine but SQLite, so they are a separate job.
     name: Equivalence (${{ matrix.engine }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        engine: [sqlserver, postgres16, postgres17]
+        # mysql covers both InnoDB AUTO_INCREMENT lock modes, each in a container of its own;
+        # sqlite needs no container at all.
+        engine: [sqlserver, postgres16, postgres17, mysql, sqlite]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5

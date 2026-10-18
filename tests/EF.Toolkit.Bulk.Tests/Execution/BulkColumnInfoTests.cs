@@ -40,6 +40,25 @@ public class BulkColumnInfoTests
         => ColumnModel.Column("Grade").FromProviderValue(1).ShouldBe(ColumnModel.Grade.Premium);
 
     [Fact]
+    public void Turns_a_driver_midnight_into_the_date_the_property_declares()
+        // MySql.Data reads a date column as a DateTime however it is asked, and Convert.ChangeType
+        // knows nothing of DateOnly.
+        => ColumnModel.Column("Date").FromProviderValue(new DateTime(2026, 3, 2))
+            .ShouldBe(new DateOnly(2026, 3, 2));
+
+    [Fact]
+    public void Turns_a_driver_time_span_into_the_time_the_property_declares()
+        => ColumnModel.Column("StartsAt").FromProviderValue(new TimeSpan(8, 30, 0))
+            .ShouldBe(new TimeOnly(8, 30));
+
+    [Fact]
+    public void Refuses_a_date_time_that_a_date_could_not_have_held()
+        // A time of day that is not midnight means the column was not a date, and dropping it would
+        // be inventing a value rather than converting one.
+        => Should.Throw<BulkNotSupportedException>(
+            () => ColumnModel.Column("Date").FromProviderValue(new DateTime(2026, 3, 2, 8, 0, 0)));
+
+    [Fact]
     public void Leaves_a_null_null()
         => ColumnModel.Column("Note").FromProviderValue(null).ShouldBeNull();
 

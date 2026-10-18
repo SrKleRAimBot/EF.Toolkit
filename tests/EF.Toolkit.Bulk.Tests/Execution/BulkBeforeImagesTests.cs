@@ -16,7 +16,7 @@ public class BulkBeforeImagesTests
         // A delete is the case that settles it: the operation itself knows only the key, and an
         // observer told only the key learns nothing about what was lost.
         columns.Select(c => c.Property!.Name).Order(StringComparer.Ordinal).ShouldBe(
-            ["Code", "Date", "Grade", "Id", "Note", "RecordedAt"]);
+            ["Code", "Date", "Grade", "Id", "Note", "RecordedAt", "StartsAt"]);
     }
 
     [Fact]

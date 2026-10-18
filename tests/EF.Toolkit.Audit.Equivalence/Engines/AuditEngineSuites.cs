@@ -17,6 +17,14 @@ public sealed class PostgreSql17Collection : ICollectionFixture<PostgreSql17Audi
 [CollectionDefinition("audit-sqlserver")]
 public sealed class SqlServerCollection : ICollectionFixture<SqlServerAuditFixture>;
 
+/// <summary>Fixture collection for MySQL 8.4.</summary>
+[CollectionDefinition("audit-mysql")]
+public sealed class MySqlCollection : ICollectionFixture<MySqlAuditFixture>;
+
+/// <summary>Fixture collection for SQLite.</summary>
+[CollectionDefinition("audit-sqlite")]
+public sealed class SqliteCollection : ICollectionFixture<SqliteAuditFixture>;
+
 [Trait("Engine", "postgres16")]
 [Collection("audit-postgres16")]
 public sealed class PostgreSql16CaptureTests(PostgreSql16AuditFixture fixture)
@@ -116,3 +124,63 @@ public sealed class PostgreSql16PayloadQueryTests(PostgreSql16AuditFixture fixtu
 [Collection("audit-postgres17")]
 public sealed class PostgreSql17PayloadQueryTests(PostgreSql17AuditFixture fixture)
     : PayloadQueryTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("audit-mysql")]
+public sealed class MySqlCaptureTests(MySqlAuditFixture fixture)
+    : AuditCaptureTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("audit-sqlite")]
+public sealed class SqliteCaptureTests(SqliteAuditFixture fixture)
+    : AuditCaptureTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("audit-mysql")]
+public sealed class MySqlBulkAuditTests(MySqlAuditFixture fixture)
+    : BulkAuditTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("audit-sqlite")]
+public sealed class SqliteBulkAuditTests(SqliteAuditFixture fixture)
+    : BulkAuditTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("audit-mysql")]
+public sealed class MySqlEquivalenceTests(MySqlAuditFixture fixture)
+    : AuditEquivalenceTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("audit-sqlite")]
+public sealed class SqliteEquivalenceTests(SqliteAuditFixture fixture)
+    : AuditEquivalenceTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("audit-mysql")]
+public sealed class MySqlAtomicityTests(MySqlAuditFixture fixture)
+    : AuditAtomicityTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("audit-sqlite")]
+public sealed class SqliteAtomicityTests(SqliteAuditFixture fixture)
+    : AuditAtomicityTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("audit-mysql")]
+public sealed class MySqlTransactionTests(MySqlAuditFixture fixture)
+    : AuditTransactionTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("audit-sqlite")]
+public sealed class SqliteTransactionTests(SqliteAuditFixture fixture)
+    : AuditTransactionTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("audit-mysql")]
+public sealed class MySqlHarnessSelfTests(MySqlAuditFixture fixture)
+    : HarnessSelfTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("audit-sqlite")]
+public sealed class SqliteHarnessSelfTests(SqliteAuditFixture fixture)
+    : HarnessSelfTests(fixture);

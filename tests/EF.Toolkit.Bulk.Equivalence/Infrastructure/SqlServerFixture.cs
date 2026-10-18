@@ -14,6 +14,8 @@ public sealed class SqlServerFixture : DatabaseFixture
 
     public override string Engine => "sqlserver";
 
+    public override bool ReadsBackGeneratedNonKeyColumns => true;
+
     /// <summary>
     ///     Starts SQL Server, skipping the suite only if the container genuinely will not run.
     /// </summary>

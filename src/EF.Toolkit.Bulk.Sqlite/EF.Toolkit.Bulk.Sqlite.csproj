@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Bulk.Sqlite</PackageId>
+    <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;bulkupdate;bulkdelete;bulkmerge;performance;sqlite</PackageTags>
+    <Description>
+      SQLite provider for EF.Toolkit.Bulk. Writes through one prepared statement per operation,
+      reused for every row inside a single transaction, with RETURNING carrying generated values
+      back exactly — none of EF Core's per-row command building.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
+
+    <!--
+      The Core package, not Microsoft.EntityFrameworkCore.Sqlite: that one also brings a bundled
+      native SQLite build, and which SQLite an application ships is the application's decision.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../docs/bulk-sqlite.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.Equivalence" />
+  </ItemGroup>
+
+</Project>

@@ -35,13 +35,15 @@ install it alongside whatever EF Core version your app already uses.
 ## Install
 
 ```bash
-dotnet add package EF.Toolkit.Bulk.PostgreSQL   # or EF.Toolkit.Bulk.SqlServer
+dotnet add package EF.Toolkit.Bulk.PostgreSQL   # or .SqlServer, .MySql, .Sqlite
 ```
 
 The provider package brings this one with it. For how each engine executes a batch, and what differs
 between them, see the notes for
-[PostgreSQL](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/bulk-postgresql.md) and
-[SQL Server](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/bulk-sqlserver.md).
+[PostgreSQL](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/bulk-postgresql.md),
+[SQL Server](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/bulk-sqlserver.md),
+[MySQL](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/bulk-mysql.md) and
+[SQLite](https://github.com/SrKleRAimBot/EF.Toolkit/blob/master/docs/bulk-sqlite.md).
 
 | Package | EF Core | TFM |
 | --- | --- | --- |
@@ -63,8 +65,8 @@ services.AddDbContext<AppDb>(o => o
 
 That is the whole integration. Everything below is available from that point.
 
-If you reference *both* provider packages, `UseBulkOperations` is ambiguous — use the explicit
-aliases `UseNpgsqlBulk()` or `UseSqlServerBulk()` instead.
+If you reference more than one provider package, `UseBulkOperations` is ambiguous — use the explicit
+aliases `UseNpgsqlBulk()`, `UseSqlServerBulk()`, `UseMySqlBulk()` or `UseSqliteBulk()` instead.
 
 ---
 
@@ -170,6 +172,10 @@ Console.WriteLine($"{result.Inserted} new, {result.Updated} existing");
 
 The database decides insert-versus-update per row — `INSERT … ON CONFLICT` on PostgreSQL, `MERGE`
 on SQL Server — so unlike a read-then-write loop there is no window for another writer to slip in.
+MySQL and SQLite have no statement that matches on columns you choose, so there the existing rows
+are found first under the locks the write will hold — a `SELECT … FOR UPDATE` on MySQL, SQLite's
+single writer — which closes the same window. A source holding two rows with the same match values
+is refused on every engine.
 
 `MatchOn` defaults to the primary key and accepts a composite:
 
@@ -329,7 +335,8 @@ nobody notices.
 <summary><strong>How the merge insert/update split is counted</strong></summary>
 
 `BulkResult.Inserted` and `.Updated` are exact by default. SQL Server reports this for free through
-`MERGE`'s `$action`; PostgreSQL has no equivalent, so EF.Toolkit.Bulk counts the rows that already exist
+`MERGE`'s `$action`, and MySQL and SQLite learn it per row before they write; PostgreSQL has no
+equivalent, so EF.Toolkit.Bulk counts the rows that already exist
 immediately before the merge, inside the same transaction.
 
 That count is an indexed existence check and costs almost nothing — 116 ms versus 119 ms on the
@@ -343,7 +350,7 @@ o.MatchOn(c => c.Email).MergeCounts(MergeCounts.Approximate)
 `Approximate` reads each returned row's `xmax`, which PostgreSQL leaves at zero on a freshly
 inserted tuple. That is a widely-used convention rather than a documented guarantee and can
 misreport under concurrent access — but it is free. **Both settings write identical data**, and the
-setting is ignored on SQL Server, which is exact either way.
+setting is ignored on SQL Server, MySQL and SQLite, which are exact either way.
 
 On **PostgreSQL 17 and later the setting does nothing either**: `MERGE … RETURNING merge_action()`
 reports the split exactly, per row, at no cost, so neither the pre-merge count nor the `xmax`
@@ -385,6 +392,8 @@ baseline. Reproduce with:
 ```bash
 dotnet run --project tests/EF.Toolkit.Bulk.Benchmarks -c Release -- --filter "*"
 EFBULK_BENCH_ENGINE=sqlserver dotnet run --project tests/EF.Toolkit.Bulk.Benchmarks -c Release -- --filter "*"
+EFBULK_BENCH_ENGINE=mysql dotnet run --project tests/EF.Toolkit.Bulk.Benchmarks -c Release -- --filter "*"
+EFBULK_BENCH_ENGINE=sqlite dotnet run --project tests/EF.Toolkit.Bulk.Benchmarks -c Release -- --filter "*"
 ```
 
 **Insert**, five columns, server-generated keys:
@@ -459,7 +468,9 @@ at scale the remaining cost is work the database genuinely has to do.
 `ReplaceService`. That places EF.Toolkit.Bulk *downstream* of `ICommandBatchPreparer`, which has already
 built a dependency multigraph over the modification commands, topologically sorted it, and filled
 each batch from a single dependency-independent set. Ordering correctness is therefore inherited
-rather than re-derived — regrouping commands within a batch cannot violate a foreign key.
+rather than re-derived — regrouping commands within a batch cannot violate a foreign key. (On MySQL
+the provider's factory is decorated rather than replaced, because Oracle's is internal; the effect
+is the same.)
 
 Each batch is grouped by `(table, state, column shape)` and dispatched to a provider executor:
 
@@ -470,6 +481,14 @@ Each batch is grouped by `(table, state, column shape)` and dispatched to a prov
 | Update / delete | staging + `UPDATE … FROM` / `DELETE … USING`, `RETURNING` | staging + `UPDATE/DELETE … FROM`, `OUTPUT` |
 | Upsert | `MERGE … RETURNING merge_action()` on 17+, else `INSERT … ON CONFLICT … DO UPDATE` | `MERGE` with `$action` |
 | Synchronize | `WHEN NOT MATCHED BY SOURCE` on 17+, else a second `DELETE … WHERE NOT EXISTS` | `WHEN NOT MATCHED BY SOURCE THEN DELETE` |
+
+| | MySQL | SQLite |
+| --- | --- | --- |
+| Insert | multi-row `INSERT … VALUES`, 1,000 rows a statement | one prepared `INSERT`, stepped per row |
+| Generated keys | `LAST_INSERT_ID()` plus the statement's consecutive `AUTO_INCREMENT` run | `RETURNING`, per row |
+| Update / delete | staging + `UPDATE/DELETE … JOIN`, located first by `SELECT … FOR UPDATE` | one prepared `UPDATE` / `DELETE`, affected rows checked per row |
+| Upsert | staging, `SELECT … FOR UPDATE`, `UPDATE … JOIN`, then `INSERT` for the rest | prepared `UPDATE` by the match columns, then `INSERT` where it found nothing |
+| Synchronize | a further `DELETE … WHERE NOT EXISTS` against the staging table | a further `DELETE … WHERE NOT EXISTS` against a temporary table |
 
 Update, delete and merge all carry a **source ordinal** through the staging table, so a returned row
 maps back to the row that produced it by position rather than by matching key values. SQL Server's
@@ -482,6 +501,18 @@ version 17 — a staged insert has no documented way to map them back otherwise.
 `MERGE … RETURNING` *can* see the source, so on 17 and later neither the reservation nor the
 insert-versus-update counting workarounds are needed. SQL Server has no sequence behind an
 `IDENTITY` column, so it stages with an ordinal on every version.
+
+MySQL has neither `OUTPUT` nor `RETURNING`, so it asks before it writes: a `SELECT … FOR UPDATE`
+joining the staging table to the target returns the ordinal of every source row that will match, and
+locks what it found so the answer still holds when the write runs. A concurrency conflict is
+therefore known — and reported — before anything is written. Generated keys come from
+`LAST_INSERT_ID()`, which MySQL guarantees is the first of a consecutive run under the
+`AUTO_INCREMENT` lock modes that promise one, and is read per row under the one that does not.
+
+SQLite is in-process, so a statement costs a function call rather than a round trip, and there is
+nothing for a bulk protocol to save. What it removes instead is EF Core's per-row work around each
+statement — one prepared statement is bound and stepped for every row — and per-row execution makes
+`RETURNING` and every affected-row count exact without staging or ordinals.
 
 A staging table is analysed before it is joined, and indexed on its join columns above
 `StagingIndexThreshold` rows. A freshly loaded temporary table has no statistics — autovacuum never
@@ -533,14 +564,18 @@ ADO, not through EF, so a self-consistently wrong conversion cannot hide), full 
 including original values, and failure behaviour. Four negative controls prove the harness detects
 divergence rather than silently comparing nothing.
 
-289 tests run against PostgreSQL 16, PostgreSQL 17 and SQL Server 2022.
+120 scenarios run against PostgreSQL 16, PostgreSQL 17, SQL Server 2022, MySQL 8.4 — under both the
+consecutive and the interleaved `AUTO_INCREMENT` lock modes — and SQLite: 632 cases in all, alongside
+157 unit tests. A further suite asserts that the shapes each engine claims to accelerate are in fact
+accelerated, because every differential result would match just as well if they quietly fell back.
 
 ---
 
 ## Limitations
 
-- `IDbCommandInterceptor` does not fire for `COPY` / `SqlBulkCopy` paths — these are not
-  `DbCommand`s. EF.Toolkit.Bulk emits [its own events](#diagnostics) instead. `ISaveChangesInterceptor` is
+- `IDbCommandInterceptor` does not fire for the bulk paths. `COPY` and `SqlBulkCopy` are not
+  `DbCommand`s, and the MySQL and SQLite executors issue theirs on the connection directly rather
+  than through EF's command pipeline. EF.Toolkit.Bulk emits [its own events](#diagnostics) instead. `ISaveChangesInterceptor` is
   unaffected.
 - `ISaveChangesInterceptor` does not fire for the explicit API either, which is not a save.
   [`IBulkWriteObserver`](#observing-a-write) is the seam for anything that needs to react to those

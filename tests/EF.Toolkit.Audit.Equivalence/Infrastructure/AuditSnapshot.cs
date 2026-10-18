@@ -19,8 +19,7 @@ public static class AuditSnapshot
     {
         ArgumentNullException.ThrowIfNull(fixture);
 
-        var table = $"{fixture.Quote(AuditOptions.DefaultSchema)}."
-            + $"{fixture.Quote(AuditOptions.DefaultTableName)}";
+        var table = fixture.AuditTable;
 
         var columns = string.Join(
             ", ",

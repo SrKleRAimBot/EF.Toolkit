@@ -11,7 +11,9 @@ namespace EFToolkit.Bulk.Benchmarks;
 internal enum BenchmarkEngine
 {
     PostgreSql,
-    SqlServer
+    SqlServer,
+    MySql,
+    Sqlite
 }
 
 internal static class BenchmarkEngineSelection
@@ -23,6 +25,8 @@ internal static class BenchmarkEngineSelection
         Environment.GetEnvironmentVariable(Variable)?.Trim().ToLowerInvariant() switch
         {
             "sqlserver" or "mssql" => BenchmarkEngine.SqlServer,
+            "mysql" => BenchmarkEngine.MySql,
+            "sqlite" => BenchmarkEngine.Sqlite,
             _ => BenchmarkEngine.PostgreSql
         };
 }

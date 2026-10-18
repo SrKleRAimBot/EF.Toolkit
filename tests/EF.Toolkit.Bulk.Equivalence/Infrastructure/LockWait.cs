@@ -1,5 +1,7 @@
 using System.Data.Common;
 using Microsoft.Data.SqlClient;
+using Microsoft.Data.Sqlite;
+using MySql.Data.MySqlClient;
 using Npgsql;
 
 namespace EFToolkit.Bulk.Equivalence.Infrastructure;
@@ -14,8 +16,8 @@ namespace EFToolkit.Bulk.Equivalence.Infrastructure;
 ///     to fail in a way that is distinguishable from every other reason a query can fail. A command
 ///     timeout is not — it fires just as readily for a missing table, a broken connection, or a
 ///     query that is merely slow, and treating that as "no rows visible" would let those failures
-///     pass as proof of the very thing under test. An engine-level lock timeout is specific: both
-///     engines raise a dedicated error for it and for nothing else.
+///     pass as proof of the very thing under test. An engine-level lock timeout is specific: every
+///     engine raises a dedicated error for it and for nothing else.
 /// </remarks>
 internal static class LockWait
 {
@@ -29,9 +31,13 @@ internal static class LockWait
     {
         await using var command = connection.CreateCommand();
 
-        command.CommandText = engine == "sqlserver"
-            ? $"SET LOCK_TIMEOUT {seconds * 1000}"
-            : $"SET lock_timeout = '{seconds}s'";
+        command.CommandText = engine switch
+        {
+            "sqlserver" => $"SET LOCK_TIMEOUT {seconds * 1000}",
+            "mysql" => $"SET SESSION innodb_lock_wait_timeout = {seconds}",
+            "sqlite" => $"PRAGMA busy_timeout = {seconds * 1000}",
+            _ => $"SET lock_timeout = '{seconds}s'",
+        };
 
         await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
     }
@@ -48,6 +54,12 @@ internal static class LockWait
         // "Lock request time out period exceeded."
         SqlException sqlServer => sqlServer.Number == 1222,
         PostgresException postgres => postgres.SqlState == PostgresErrorCodes.LockNotAvailable,
+
+        // ER_LOCK_WAIT_TIMEOUT: "Lock wait timeout exceeded; try restarting transaction".
+        MySqlException mySql => mySql.Number == 1205,
+
+        // SQLITE_BUSY: the database file is locked by another connection's write.
+        SqliteException sqlite => sqlite.SqliteErrorCode == 5,
         _ => false
     };
 }

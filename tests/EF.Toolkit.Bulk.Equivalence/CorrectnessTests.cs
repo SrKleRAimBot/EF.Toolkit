@@ -155,8 +155,12 @@ public abstract class CorrectnessTests(DatabaseFixture fixture)
             o => o.Timeout(TimeSpan.FromMinutes(5)),
             TestContext.Current.CancellationToken);
 
-        var renamed = await context.Customers.AsNoTracking()
-            .CountAsync(c => c.Name.StartsWith("Renamed"), TestContext.Current.CancellationToken);
+        // Counted here rather than in SQL: Oracle's MySQL provider cannot translate StartsWith, and
+        // what is under test is the update, not the query.
+        var renamed = (await context.Customers.AsNoTracking()
+                .Select(c => c.Name)
+                .ToListAsync(TestContext.Current.CancellationToken))
+            .Count(name => name.StartsWith("Renamed", StringComparison.Ordinal));
 
         renamed.ShouldBe(400);
     }

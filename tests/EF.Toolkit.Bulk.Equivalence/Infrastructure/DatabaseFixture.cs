@@ -1,6 +1,7 @@
 using EFToolkit.Bulk.Configuration;
 using EFToolkit.Bulk.Equivalence.Model;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace EFToolkit.Bulk.Equivalence.Infrastructure;
 
@@ -23,6 +24,24 @@ public abstract class DatabaseFixture : IAsyncLifetime
 
     /// <summary>Connection string for the database written through EF.Toolkit.Bulk.</summary>
     protected string BulkConnectionString { get; private set; } = "";
+
+    /// <summary>
+    ///     Whether this engine's bulk insert can read back a store-generated column that is not a
+    ///     key — a default, a computed column.
+    /// </summary>
+    /// <remarks>
+    ///     SQL Server can, through <c>MERGE ... OUTPUT</c>, and SQLite can, through a per-row
+    ///     <c>RETURNING</c>. PostgreSQL's <c>COPY</c> and MySQL's multi-row <c>INSERT</c> return
+    ///     nothing, so on those engines the shape falls back to stock EF.
+    /// </remarks>
+    public virtual bool ReadsBackGeneratedNonKeyColumns => false;
+
+    /// <summary>Whether the EF Core provider takes part in a <c>System.Transactions</c> scope.</summary>
+    /// <remarks>
+    ///     SQLite's provider does not, and stock EF refuses to save inside one there — so there is
+    ///     no stock behaviour for the bulk path to be compared against, and the scenario is skipped.
+    /// </remarks>
+    public virtual bool SupportsAmbientTransactions => true;
 
     /// <summary>Set when the engine cannot run here; the suite skips rather than fails.</summary>
     public string? SkipReason { get; protected set; }
@@ -91,7 +110,7 @@ public abstract class DatabaseFixture : IAsyncLifetime
     /// <summary>A context that writes through stock EF Core, with no EF.Toolkit.Bulk services.</summary>
     public ShopContext CreateStockContext()
     {
-        var builder = new DbContextOptionsBuilder<ShopContext>();
+        var builder = Options();
         ConfigureProvider(builder, StockConnectionString, retryOnFailure: false);
         return new ShopContext(builder.Options);
     }
@@ -107,11 +126,19 @@ public abstract class DatabaseFixture : IAsyncLifetime
         Action<BulkOptionsBuilder>? configure = null,
         bool retryOnFailure = false)
     {
-        var builder = new DbContextOptionsBuilder<ShopContext>();
+        var builder = Options();
         ConfigureProvider(builder, BulkConnectionString, retryOnFailure);
         ConfigureBulk(builder, configure);
         return new ShopContext(builder.Options);
     }
+
+    /// <summary>A fresh options builder carrying what every context in the suite shares.</summary>
+    private static DbContextOptionsBuilder<ShopContext> Options()
+        // Every engine and every configuration a scenario varies gets an internal service provider
+        // of its own, and with five engines in one process that passes the twenty at which EF
+        // starts treating the count as a mistake. It is not one here: each is cached and reused.
+        => new DbContextOptionsBuilder<ShopContext>()
+            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));
 
     /// <summary>Returns a skip reason when this engine cannot run in the current environment.</summary>
     protected virtual ValueTask<string?> CheckPrerequisitesAsync()

@@ -130,6 +130,9 @@ public abstract class KeysetPagingTests(QueryDatabaseFixture fixture)
     [Fact]
     public async Task A_DateTimeOffset_column_survives_the_cursor_round_trip()
     {
+        Assert.SkipUnless(
+            fixture.OrdersByDateTimeOffset, "the provider cannot order by a DateTimeOffset");
+
         var (context, token) = await SeededShipmentsAsync(25);
         await using var _ = context;
 

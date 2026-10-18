@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Bulk.MySql</PackageId>
+    <PackageTags>entity-framework-core;efcore;bulk;bulkinsert;bulkupdate;bulkdelete;bulkmerge;performance;mysql;mariadb</PackageTags>
+    <Description>
+      MySQL provider for EF.Toolkit.Bulk. Uses multi-row INSERT, AUTO_INCREMENT block correlation
+      and staging-table joins to make EF Core writes dramatically faster. References no MySQL
+      provider or driver of its own.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      No MySQL provider or driver is referenced, deliberately. Everything here is plain ADO.NET and
+      EF's relational layer, and the provider's batch factory is decorated rather than derived from,
+      so the package does not pull a provider into an application that chose a different one. It is
+      tested under Oracle's MySql.EntityFrameworkCore, the provider that ships for EF Core 10.
+    -->
+    <ProjectReference Include="../EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../docs/bulk-mysql.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Bulk.Equivalence" />
+  </ItemGroup>
+
+</Project>

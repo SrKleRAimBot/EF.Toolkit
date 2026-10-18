@@ -1,6 +1,7 @@
 using EFToolkit.Audit.Configuration;
 using EFToolkit.Audit.Equivalence.Model;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace EFToolkit.Audit.Equivalence.Infrastructure;
 
@@ -17,6 +18,17 @@ public abstract class AuditDatabaseFixture : IAsyncLifetime
 {
     /// <summary>Value of the <c>Engine</c> trait, used to shard the suite in CI.</summary>
     public abstract string Engine { get; }
+
+    /// <summary>Whether the EF Core provider takes part in a <c>System.Transactions</c> scope.</summary>
+    /// <remarks>
+    ///     SQLite's provider does not, and stock EF refuses to save inside one there, so the
+    ///     scenarios built on one have nothing to observe.
+    /// </remarks>
+    public virtual bool SupportsAmbientTransactions => true;
+
+    /// <summary>Whether the EF Core provider has a retrying execution strategy to configure.</summary>
+    /// <remarks>SQLite's has none: an in-process engine has no transient network failures to retry.</remarks>
+    public virtual bool SupportsRetryingExecutionStrategy => true;
 
     /// <summary>Set when the engine cannot run here; the suite skips rather than fails.</summary>
     public string? SkipReason { get; protected set; }
@@ -73,7 +85,11 @@ public abstract class AuditDatabaseFixture : IAsyncLifetime
         IServiceProvider? applicationServices = null,
         bool retryOnFailure = false)
     {
+        // Every engine and every configuration a scenario varies gets an internal service provider
+        // of its own, and with five engines in one process that passes the twenty at which EF
+        // starts treating the count as a mistake. It is not one here: each is cached and reused.
         var builder = new DbContextOptionsBuilder<ShopContext>()
+            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning))
             .UseApplicationServiceProvider(applicationServices);
 
         ConfigureProvider(builder, ConnectionString, retryOnFailure);
@@ -152,4 +168,12 @@ public abstract class AuditDatabaseFixture : IAsyncLifetime
     ///     converter, say — cannot hide behind itself.
     /// </remarks>
     public abstract string Quote(string identifier);
+
+    /// <summary>The audit table's qualified name, quoted, as the engine places it.</summary>
+    /// <remarks>
+    ///     In the <c>audit</c> schema where the engine has schemas to put it in. MySQL's provider
+    ///     package keeps it in the context's own database instead, and SQLite has no schemas.
+    /// </remarks>
+    public virtual string AuditTable
+        => $"{Quote(AuditOptions.DefaultSchema)}.{Quote(AuditOptions.DefaultTableName)}";
 }

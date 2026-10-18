@@ -139,7 +139,7 @@ page that is wrong without saying so.
 
 | Refused | Why |
 | --- | --- |
-| A nullable column | Engines disagree about where `NULL` sorts — SQL Server puts it first ascending, PostgreSQL last — and a comparison against `NULL` is neither true nor false, so every row with one is skipped by every page. |
+| A nullable column | Engines disagree about where `NULL` sorts — SQL Server, MySQL and SQLite put it first ascending, PostgreSQL last — and a comparison against `NULL` is neither true nor false, so every row with one is skipped by every page. |
 | A value-converted column | `ORDER BY` and the page comparison both run against the *stored* value. An enum written as text sorts alphabetically, not by its numbering. Opt out with `AllowConvertedKey()` where the conversion preserves order. An enum stored as its own underlying number is allowed automatically. |
 | An ordering that cannot break every tie | Checked against the keys and unique indexes of the model. Without one, the boundary falls in an arbitrary place among tied rows. Opt out with `AllowNonUniqueKey()` where uniqueness is guaranteed outside the model. |
 | A computed expression | The value has to be readable back off a materialised row to build the next cursor, so each component must be a plain property. |
@@ -329,7 +329,7 @@ cache holds one entry rather than one per cursor.
 ```
 
 SQL's row-value form `(a, b) > (a0, b0)` says the same thing in one comparison, but SQL Server does not
-support it and EF translates it on neither engine. Types without comparison operators — `string`,
+support it and EF translates it on none of the engines. Types without comparison operators — `string`,
 `Guid` — go through `IComparable<T>.CompareTo`, which EF turns back into a plain SQL comparison
 against the column. A type with neither, such as a `readonly record struct` id, gets a comparison node
 of the right kind carrying a `Comparer<T>.Default` method: EF translates a binary node by its kind and
@@ -350,8 +350,8 @@ includes the tracking behaviour — so a scope applied there is seen by both the
 compilation, and a tracked and an untracked execution of the same LINQ occupy different cache entries.
 An `IQueryExpressionInterceptor` runs only on a cache miss, so a scope expressed there would be baked
 into the first compilation and silently served to every later execution. `IQueryContextFactory` is also
-the only candidate service that neither the SQL Server nor the Npgsql provider overrides, which is why
-this package has no provider variants.
+the only candidate service that none of the SQL Server, Npgsql, MySQL or SQLite providers overrides,
+which is why this package has no provider variants.
 
 **The advisor** answers everything from `IEntityType` metadata and the query's own expression tree. It
 never touches the database.
