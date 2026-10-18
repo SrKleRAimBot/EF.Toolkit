@@ -71,8 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          packed=$(ls artifacts/EF.Toolkit.Bulk.*.nupkg \
-            | grep -v -E '\.(SqlServer|PostgreSQL)\.' \
+          packed=$(ls artifacts/EF.Toolkit.Bulk.[0-9]*.nupkg \
             | sed -E 's|.*/EF\.Toolkit\.Bulk\.(.+)\.nupkg|\1|')
           echo "tag=$tag packed=$packed"
           if [ "$tag" != "$packed" ]; then
@@ -111,9 +110,13 @@ jobs:
             artifacts/EF.Toolkit.Bulk.[0-9]*.nupkg \
             artifacts/EF.Toolkit.Bulk.SqlServer.*.nupkg \
             artifacts/EF.Toolkit.Bulk.PostgreSQL.*.nupkg \
+            artifacts/EF.Toolkit.Bulk.MySql.*.nupkg \
+            artifacts/EF.Toolkit.Bulk.Sqlite.*.nupkg \
             artifacts/EF.Toolkit.Audit.[0-9]*.nupkg \
             artifacts/EF.Toolkit.Audit.SqlServer.*.nupkg \
             artifacts/EF.Toolkit.Audit.PostgreSQL.*.nupkg \
+            artifacts/EF.Toolkit.Audit.MySql.*.nupkg \
+            artifacts/EF.Toolkit.Audit.Sqlite.*.nupkg \
             artifacts/EF.Toolkit.Audit.Bulk.*.nupkg \
             artifacts/EF.Toolkit.Query.[0-9]*.nupkg
           do
