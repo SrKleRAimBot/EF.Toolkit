@@ -367,6 +367,32 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
             inTransaction);
 
     [Fact]
+    public async Task A_re_check_that_fails_rolls_back_the_deletes_and_the_suspended_constraints()
+    {
+        // A trigger puts back a category whose parent does not exist, which NOCHECK lets through: the
+        // re-check of Categories then fails. Run after the commit, that left every table emptied and
+        // the constraints off.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER LeaveOrphan ON Categories AFTER DELETE AS INSERT INTO Categories (Name, ParentId) VALUES (N'orphan', 2147483647);",
+            Ct);
+        try
+        {
+            await Should.ThrowAsync<DbException>(() => context.Database.ResetDataAsync(cancellationToken: Ct));
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            await AssertConstraintsRestoredAsync(context);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS LeaveOrphan", Ct);
+        }
+    }
+
+    [Fact]
     public async Task Under_a_non_dbo_default_schema_the_check_follows_the_table_the_delete_resolves_to()
     {
         // For a user whose default schema is app, unqualified Customers is app.Customers. Checking

@@ -71,12 +71,21 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
-    public void SqlServer_suspends_constraints_only_on_cyclic_tables()
+    public void SqlServer_suspends_and_rechecks_constraints_only_on_cyclic_tables_inside_the_unit()
     {
-        var script = Generate(DatabaseEngine.SqlServer, ResetPlan.Create([Lines, Orders], cyclicTables: [Orders]));
+        var script = Generate(
+            DatabaseEngine.SqlServer, ResetPlan.Create([Lines, Orders], cyclicTables: [Orders]), Default with { RestartIdentity = false });
 
-        script.Prologue.ShouldBe(["ALTER TABLE [sales].[Orders] NOCHECK CONSTRAINT ALL;"]);
-        script.Epilogue.ShouldBe(["ALTER TABLE [sales].[Orders] WITH CHECK CHECK CONSTRAINT ALL;"]);
+        // Both inside the body, so a failed re-check is rolled back with the deletes.
+        script.Prologue.ShouldBeEmpty();
+        script.Epilogue.ShouldBeEmpty();
+        script.Body.ShouldBe(
+        [
+            "ALTER TABLE [sales].[Orders] NOCHECK CONSTRAINT ALL;",
+            "DELETE FROM [Lines];",
+            "DELETE FROM [sales].[Orders];",
+            "ALTER TABLE [sales].[Orders] WITH CHECK CHECK CONSTRAINT ALL;",
+        ]);
     }
 
     [Fact]
@@ -257,7 +266,7 @@ public sealed class ResetSqlGeneratorTests
 
         plan.Tables.ShouldBe([new ResetTable("app", "Lines"), new ResetTable("sales", "Orders")]);
         plan.CyclicTables.ShouldBe([new ResetTable("app", "Lines")]);
-        Generate(DatabaseEngine.SqlServer, plan).Body[0].ShouldBe("DELETE FROM [app].[Lines];");
+        Generate(DatabaseEngine.SqlServer, plan).Body[0].ShouldBe("ALTER TABLE [app].[Lines] NOCHECK CONSTRAINT ALL;");
     }
 
     [Fact]
@@ -309,7 +318,7 @@ public sealed class ResetSqlGeneratorTests
 
         deletes.IndexOf("DELETE FROM [OrderLines];").ShouldBeLessThan(deletes.IndexOf("DELETE FROM [Orders];"));
         deletes.IndexOf("DELETE FROM [Orders];").ShouldBeLessThan(deletes.IndexOf("DELETE FROM [Customers];"));
-        script.Prologue.Order().ShouldBe(
+        script.Body.Where(s => s.Contains("NOCHECK", StringComparison.Ordinal)).Order().ShouldBe(
         [
             "ALTER TABLE [Categories] NOCHECK CONSTRAINT ALL;",
             "ALTER TABLE [Players] NOCHECK CONSTRAINT ALL;",

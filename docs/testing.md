@@ -194,7 +194,7 @@ What each engine is sent:
 | Engine | Statements |
 | --- | --- |
 | PostgreSQL | One `TRUNCATE TABLE a, b, ... RESTART IDENTITY`, without `CASCADE`. `TRUNCATE` checks the foreign keys between the listed tables as a set, so no order is needed. |
-| SQL Server | `DELETE` in dependency order, then `DBCC CHECKIDENT ... RESEED` for each table with an identity column. Tables on a foreign-key cycle — self-references included — have `NOCHECK CONSTRAINT ALL` for the delete and `WITH CHECK CHECK CONSTRAINT ALL` after, so the constraints come back trusted. |
+| SQL Server | `DELETE` in dependency order, then `DBCC CHECKIDENT ... RESEED` for each table with an identity column. Tables on a foreign-key cycle — self-references included — have `NOCHECK CONSTRAINT ALL` for the delete and `WITH CHECK CHECK CONSTRAINT ALL` after, so the constraints come back trusted. Both run inside the reset's transaction, so a re-check that fails rolls back the deletes and the suspension together. |
 | MySQL | `SET FOREIGN_KEY_CHECKS = 0`, `TRUNCATE TABLE` each, then checks back on. |
 | SQLite | `PRAGMA foreign_keys = OFF`, `DELETE` each, clear `sqlite_sequence` for those tables, then back on. |
 

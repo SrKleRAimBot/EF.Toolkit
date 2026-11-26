@@ -147,13 +147,15 @@ internal static class ResetSqlGenerator
     {
         var cyclic = plan.Tables.Where(plan.CyclicTables.Contains).ToList();
 
-        var prologue = cyclic
+        // Constraint changes are transactional on SQL Server, so suspending and re-checking them both
+        // sit inside the unit with the deletes. A re-check that fails — a trigger left a row behind —
+        // then rolls back the deletes and the NOCHECK together, instead of failing after a commit with
+        // the rows gone and the constraint left off.
+        var body = cyclic
             .Select(t => $"ALTER TABLE {Quote(t, '[', ']')} NOCHECK CONSTRAINT ALL;")
             .ToList();
 
-        var body = plan.Tables
-            .Select(t => $"DELETE FROM {Quote(t, '[', ']')};")
-            .ToList();
+        body.AddRange(plan.Tables.Select(t => $"DELETE FROM {Quote(t, '[', ']')};"));
 
         if (state.RestartIdentity)
         {
@@ -172,14 +174,10 @@ internal static class ResetSqlGenerator
             }));
         }
 
-        var epilogue = cyclic
-            .Select(t => $"ALTER TABLE {Quote(t, '[', ']')} WITH CHECK CHECK CONSTRAINT ALL;")
-            .ToList();
+        body.AddRange(cyclic.Select(t => $"ALTER TABLE {Quote(t, '[', ']')} WITH CHECK CHECK CONSTRAINT ALL;"));
 
-        return new ResetScript(prologue, body, epilogue) with
+        return new ResetScript([], body, [])
         {
-            // NOCHECK sits outside the unit, so a rollback restores the rows first and the epilogue
-            // then re-checks constraints against data that is whole again.
             Begin = [state.InTransaction ? $"SAVE TRANSACTION {Savepoint};" : "BEGIN TRANSACTION;"],
             Commit = state.InTransaction ? [] : ["COMMIT TRANSACTION;"],
             // An error can end the caller's transaction outright (a trigger's THROW rolls it all back) or
