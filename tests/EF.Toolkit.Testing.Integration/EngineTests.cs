@@ -292,6 +292,61 @@ public sealed class MySqlCollectionDefinition : ICollectionFixture<MySqlFixture>
 public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture)
 {
     [Fact]
+    public async Task A_partition_named_in_ExcludeTable_is_refused_while_other_partitions_are_allowed()
+    {
+        // TRUNCATE Events empties every partition. That is the reset's job — unless one of them was
+        // named in ExcludeTable, which a model that does not map the partition never saw.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await context.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE "Events" ("Id" int NOT NULL, "Year" int NOT NULL) PARTITION BY RANGE ("Year");
+            CREATE TABLE "EventsArchive" PARTITION OF "Events" FOR VALUES FROM (2000) TO (2020);
+            CREATE TABLE "EventsCurrent" PARTITION OF "Events" FOR VALUES FROM (2020) TO (2100);
+            """,
+            Ct);
+        try
+        {
+            var events = new ResetTable(null, "Events");
+
+            (await DescendantsAsync(context, ResetPlan.Create([events]))).ShouldBeEmpty();
+
+            var excluded = await DescendantsAsync(context, ResetPlan.Create([events], excludedNames: [("EventsArchive", null)]));
+            excluded.Select(d => d.Table).ShouldBe(["\"EventsArchive\""]);
+            Should.Throw<InvalidOperationException>(() => ResetPlan.RefuseTruncatedDescendants(excluded));
+
+            (await DescendantsAsync(context, ResetPlan.Create([events], excludedNames: [("EventsArchive", "public")]))).Count.ShouldBe(1);
+            (await DescendantsAsync(context, ResetPlan.Create([events], excludedNames: [("EventsArchive", "other")]))).ShouldBeEmpty();
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE \"Events\"", Ct);
+        }
+    }
+
+    private static async Task<List<DatabaseReference>> DescendantsAsync(DbContext context, ResetPlan plan)
+    {
+        await context.Database.OpenConnectionAsync(Ct);
+        try
+        {
+            await using DbCommand command = context.Database.GetDbConnection().CreateCommand();
+            command.CommandText = DatabaseForeignKeys.PostgreSqlDescendants(plan);
+            await using var reader = await command.ExecuteReaderAsync(Ct);
+            var rows = new List<DatabaseReference>();
+            while (await reader.ReadAsync(Ct))
+            {
+                rows.Add(DatabaseForeignKeys.Read(reader));
+            }
+
+            return rows;
+        }
+        finally
+        {
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task An_unmapped_table_inheriting_from_a_reset_one_stops_the_reset()
     {
         // TRUNCATE without ONLY empties every descendant: the archive would go with Customers.

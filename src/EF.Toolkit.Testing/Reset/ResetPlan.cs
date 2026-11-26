@@ -23,13 +23,22 @@ internal sealed class ResetPlan
         IReadOnlyList<ResetTable> tables,
         IReadOnlySet<ResetTable> cyclicTables,
         bool hasExclusions,
-        IReadOnlyList<ResetTable>? retained = null)
+        IReadOnlyList<ResetTable>? retained = null,
+        IReadOnlyList<(string Name, string? Schema)>? excludedNames = null)
     {
         Tables = tables;
         CyclicTables = cyclicTables;
         HasExclusions = hasExclusions;
         Retained = retained ?? [];
+        ExcludedNames = excludedNames ?? [];
     }
+
+    /// <summary>
+    ///     The names passed to <c>ExcludeTable</c>, as given — a null schema matching any. Kept apart from
+    ///     <see cref="Retained" /> because they need not be in the model: a migration-created partition
+    ///     the caller wants left alone is exactly that.
+    /// </summary>
+    public IReadOnlyList<(string Name, string? Schema)> ExcludedNames { get; }
 
     /// <summary>Tables the model maps that this reset leaves alone — the excluded ones.</summary>
     public IReadOnlyList<ResetTable> Retained { get; }
@@ -75,7 +84,7 @@ internal sealed class ResetPlan
             .Where(t => !included.ContainsKey(t))
             .ToList();
 
-        return new ResetPlan(ordered, cyclic, options.HasExclusions, retained);
+        return new ResetPlan(ordered, cyclic, options.HasExclusions, retained, options.ExcludedTables);
     }
 
     /// <summary>
@@ -129,8 +138,9 @@ internal sealed class ResetPlan
         IReadOnlyList<ResetTable> tables,
         IEnumerable<ResetTable>? cyclicTables = null,
         bool hasExclusions = false,
-        IReadOnlyList<ResetTable>? retained = null)
-        => new(tables, new HashSet<ResetTable>(cyclicTables ?? []), hasExclusions, retained);
+        IReadOnlyList<ResetTable>? retained = null,
+        IReadOnlyList<(string Name, string? Schema)>? excludedNames = null)
+        => new(tables, new HashSet<ResetTable>(cyclicTables ?? []), hasExclusions, retained, excludedNames);
 
     /// <summary>
     ///     Refuses a PostgreSQL reset whose <c>TRUNCATE</c> would reach a table it was not asked to
@@ -164,7 +174,7 @@ internal sealed class ResetPlan
             => table.Schema is null && schemas.TryGetValue(table.Name, out var schema) ? table with { Schema = schema } : table;
 
         return new ResetPlan(
-            [.. Tables.Select(Qualify)], new HashSet<ResetTable>(CyclicTables.Select(Qualify)), HasExclusions, Retained);
+            [.. Tables.Select(Qualify)], new HashSet<ResetTable>(CyclicTables.Select(Qualify)), HasExclusions, Retained, ExcludedNames);
     }
 
     /// <summary>

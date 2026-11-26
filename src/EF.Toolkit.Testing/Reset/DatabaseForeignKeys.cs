@@ -85,7 +85,8 @@ internal static class DatabaseForeignKeys
     /// <remarks>
     ///     <c>TRUNCATE</c> without <c>ONLY</c> empties every descendant. For a partitioned table that is
     ///     the point — its partitions hold its rows — unless a partition is one the reset was told to
-    ///     keep. For ordinary inheritance it is not: an <c>INHERITS</c> child is a table of its own. Names
+    ///     keep — whether the model maps it or it was only named in <c>ExcludeTable</c>. For ordinary
+    ///     inheritance it is not: an <c>INHERITS</c> child is a table of its own. Names
     ///     go through <c>to_regclass</c>, resolving exactly as the <c>TRUNCATE</c> will; a table that does
     ///     not exist resolves to nothing rather than failing here.
     /// </remarks>
@@ -100,19 +101,35 @@ internal static class DatabaseForeignKeys
 
         static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
+        static string Literal(string? value)
+            => value is null ? "NULL::text" : "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'::text";
+
+        // ExcludeTable names, matched the way the reset matches them: name exactly, schema exactly
+        // unless none was given.
+        var excludedNames = plan.ExcludedNames.Count == 0
+            ? "SELECT NULL::text, NULL::text WHERE false"
+            : "VALUES " + string.Join(", ", plan.ExcludedNames.Select(e => $"({Literal(e.Name)}, {Literal(e.Schema)})"));
+
         return $"""
             WITH RECURSIVE
                 reset(oid) AS (SELECT r FROM unnest(ARRAY[{RegClasses(plan.Tables)}]::regclass[]) AS r WHERE r IS NOT NULL),
                 kept(oid) AS (SELECT k FROM unnest(ARRAY[{RegClasses(plan.Retained)}]::regclass[]) AS k WHERE k IS NOT NULL),
+                excluded(name, schema) AS ({excludedNames}),
                 tree(root, rel) AS (
                     SELECT oid, oid FROM reset
                     UNION ALL
                     SELECT tree.root, i.inhrelid::regclass FROM tree JOIN pg_catalog.pg_inherits AS i ON i.inhparent = tree.rel)
             SELECT tree.rel::text, tree.root::text, 0
-            FROM tree JOIN pg_catalog.pg_class AS root ON root.oid = tree.root
+            FROM tree
+            JOIN pg_catalog.pg_class AS root ON root.oid = tree.root
+            JOIN pg_catalog.pg_class AS rel ON rel.oid = tree.rel
+            JOIN pg_catalog.pg_namespace AS ns ON ns.oid = rel.relnamespace
             WHERE tree.rel <> tree.root
               AND tree.rel NOT IN (SELECT oid FROM reset)
-              AND (root.relkind <> 'p' OR tree.rel IN (SELECT oid FROM kept));
+              AND (root.relkind <> 'p'
+                   OR tree.rel IN (SELECT oid FROM kept)
+                   OR EXISTS (SELECT 1 FROM excluded AS e
+                              WHERE e.name = rel.relname AND (e.schema IS NULL OR e.schema = ns.nspname)));
             """;
     }
 

@@ -165,6 +165,10 @@ public sealed class ResetPlanTests
 
         plan.Retained.Select(t => t.Name).ShouldBe(["Tags"]);
         Plan(context).Retained.ShouldBeEmpty();
+
+        // Names the model does not map are carried too, for the engine to match against its catalog.
+        Plan(context, o => o.ExcludeTable("EventsArchive").ExcludeTable("Log", "audit")).ExcludedNames
+            .ShouldBe([("EventsArchive", null), ("Log", "audit")]);
     }
 
     [Fact]

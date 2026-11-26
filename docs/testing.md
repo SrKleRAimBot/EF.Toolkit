@@ -419,8 +419,8 @@ backing field EF maps.
   `TRUNCATE` fails as a whole. Map the table, or drop the foreign key.
 - **PostgreSQL inheritance is checked too.** `TRUNCATE` empties every table that inherits from the ones
   it names. Partitions of a mapped partitioned table are that table's rows and are emptied with it,
-  but an unmapped `INHERITS` child — an archive, say — or a partition the reset was told to keep makes
-  the reset refuse instead.
+  but an unmapped `INHERITS` child — an archive, say — or a partition the reset was told to keep,
+  whether the model maps it or it was only named in `ExcludeTable`, makes the reset refuse instead.
 - **Excluding a table that references a reset one is refused** before anything runs, on every engine:
   the reset would either delete the kept rows with their principals or orphan them. Exclude the
   principal too, or stop excluding the dependent.
