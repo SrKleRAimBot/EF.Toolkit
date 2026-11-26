@@ -51,10 +51,6 @@ internal sealed record ResetConnectionState(
 ///     The referencing table's database when it is not the connection's — a trigger can write to
 ///     another database just as well.
 /// </param>
-/// <param name="Before">
-///     For a table outside the reset: how many of its rows violated the key just before the reset,
-///     which the reset must not add to. A reset table ends empty, so for one of those it is zero.
-/// </param>
 internal sealed record MySqlForeignKey(
     string Table,
     IReadOnlyList<string> Columns,
@@ -62,7 +58,6 @@ internal sealed record MySqlForeignKey(
     string ReferencedTable,
     IReadOnlyList<string> ReferencedColumns,
     bool InPlan = true,
-    long Before = 0,
     string? TableSchema = null);
 
 /// <summary>The statements a reset runs, in three parts.</summary>
@@ -329,18 +324,12 @@ internal static class ResetSqlGenerator
     // Every reset table is empty once the deletes are done, so any row there that violates a foreign key
     // was written during the reset — by a trigger — and none is acceptable. Elsewhere only a DELETE
     // trigger on a reset table can write while checks are off (the catalog preflight already refuses a
-    // foreign key from outside into a reset table), so the count of violations of each other key must
-    // not have grown. A key with a NULL column is not enforced, as MySQL treats it.
+    // foreign key from outside into a reset table), and a key there must have had no violations before
+    // the reset (the preflight refuses one that did): a count that merely did not grow could hide a
+    // trigger replacing one orphan with another. So every key must have none. A key with a NULL column
+    // is not enforced, as MySQL treats it.
     private static string[] MySqlOrphans(IReadOnlyList<MySqlForeignKey> foreignKeys)
-    {
-        if (foreignKeys.Count == 0)
-        {
-            return [];
-        }
-
-        var counts = foreignKeys.Select(fk => fk.InPlan ? MySqlViolations(fk) : $"({MySqlViolations(fk)} > {fk.Before})");
-        return ["SELECT " + string.Join(" + ", counts) + ";"];
-    }
+        => foreignKeys.Count == 0 ? [] : ["SELECT " + string.Join(" + ", foreignKeys.Select(MySqlViolations)) + ";"];
 
     /// <summary>A query counting the rows that violate <paramref name="fk" />, parenthesised.</summary>
     internal static string MySqlViolations(MySqlForeignKey fk)

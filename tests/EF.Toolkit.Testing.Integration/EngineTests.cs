@@ -513,6 +513,30 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
     }
 
     [Fact]
+    public async Task A_view_under_a_mapped_table_s_name_is_refused_and_its_base_table_keeps_its_rows()
+    {
+        // DELETE through an updatable view deletes from its base table.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var tags = await context.Tags.CountAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("EXEC sp_rename 'dbo.Tags', 'TagsBase'", Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE VIEW dbo.Tags AS SELECT * FROM dbo.TagsBase", Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("in the database it is a view");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM dbo.TagsBase")).ShouldBe(tags);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP VIEW IF EXISTS dbo.Tags", Ct);
+            await context.Database.ExecuteSqlRawAsync("EXEC sp_rename 'dbo.TagsBase', 'Tags'", Ct);
+        }
+    }
+
+    [Fact]
     public async Task A_table_under_an_enabled_row_level_security_filter_is_refused()
     {
         // A filter predicate applies to DELETE too: a reset under one tenant's session context removed
@@ -1000,12 +1024,14 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
     }
 
     [Fact]
-    public async Task An_orphan_that_was_there_before_the_reset_is_not_held_against_it()
+    public async Task With_checks_off_a_key_that_already_has_violations_is_refused_before_anything_is_deleted()
     {
-        // The trigger writes a valid row; the one orphan in OutChild predates the reset.
+        // A trigger could delete the old orphan and write a new one: the count stays one and verification
+        // passed. With an orphan already there, nothing tells the two apart, so such a reset is refused.
         Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
         await using var context = Fixture.CreateContext();
         await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
         await CreateOutsideTablesAsync(context);
         await context.Database.OpenConnectionAsync(Ct);
         await context.Database.ExecuteSqlRawAsync("SET FOREIGN_KEY_CHECKS = 0", Ct);
@@ -1013,17 +1039,144 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
         await context.Database.ExecuteSqlRawAsync("SET FOREIGN_KEY_CHECKS = 1", Ct);
         await context.Database.CloseConnectionAsync();
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE TRIGGER WriteOutside AFTER DELETE ON Categories FOR EACH ROW INSERT INTO OutChild VALUES (OLD.Id + 1000, 1)", Ct);
+            "CREATE TRIGGER WriteOutside AFTER DELETE ON Categories FOR EACH ROW "
+                + "BEGIN DELETE FROM OutChild WHERE Id = 1; INSERT IGNORE INTO OutChild VALUES (2, 2147483646); END", Ct);
         try
         {
-            await context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct);
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct)))
+                .Message.ShouldContain(".OutChild' already has rows that violate its foreign key");
 
-            (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v == 0);
-            (await ScalarAsync(context, "SELECT COUNT(*) FROM OutChild WHERE ParentId = 1")).ShouldBeGreaterThan(0);
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT Id FROM OutChild")).ShouldBe(1);
+
+            // Without a cycle the checks stay on, so the same reset runs: MySQL refuses any new orphan itself.
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER WriteOutside", Ct);
+            await context.Database.ResetDataAsync(
+                o => o.ExcludeEntity<Category>().ExcludeEntity<Team>().ExcludeEntity<Player>().RestartIdentity = false, Ct);
+            (await context.Customers.CountAsync(Ct)).ShouldBe(0);
         }
         finally
         {
             await DropOutsideTablesAsync(context);
+        }
+    }
+
+    private async Task<ShopContext> LimitedUserAsync(ShopContext admin, string user, params string[] grants)
+    {
+        var drop = "DROP USER IF EXISTS '" + user + "'@'%'";
+        var create = "CREATE USER '" + user + "'@'%' IDENTIFIED BY '" + user + "'";
+        await admin.Database.ExecuteSqlRawAsync(drop, Ct);
+        await admin.Database.ExecuteSqlRawAsync(create, Ct);
+        foreach (var grant in grants)
+        {
+            var sql = grant.Replace("{db}", DatabaseName, StringComparison.Ordinal) + " TO '" + user + "'@'%'";
+            await admin.Database.ExecuteSqlRawAsync(sql, Ct);
+        }
+
+        return LimitedContext(user);
+    }
+
+    [Theory]
+    [InlineData("process")]
+    [InlineData("partial-revoke")]
+    public async Task A_global_privilege_that_does_not_show_every_table_does_not_pass_for_one(string kind)
+    {
+        // A global PROCESS shows no table; a global SELECT revoked for this database shows none of it either,
+        // though information_schema still lists the global grant. Either way the cascade child stays hidden.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        var customer = await context.Customers.Select(c => c.Id).FirstAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE HiddenChild (Id int PRIMARY KEY, CustomerId int NOT NULL, FOREIGN KEY (CustomerId) REFERENCES Customers (Id) ON DELETE CASCADE)", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO HiddenChild VALUES (1, {0})", [customer], Ct);
+        var tables = await context.Database.SqlQueryRaw<string>(
+                "SELECT TABLE_NAME AS Value FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME <> 'HiddenChild'")
+            .ToListAsync(Ct);
+        var tableGrants = tables.Select(t => "GRANT SELECT, INSERT, UPDATE, DELETE, ALTER ON `{db}`.`" + t + "`").ToList();
+        if (kind == "partial-revoke")
+        {
+            await context.Database.ExecuteSqlRawAsync("SET GLOBAL partial_revokes = ON", Ct);
+        }
+
+        try
+        {
+            string[] grants = kind == "process"
+                ? ["GRANT PROCESS ON *.*", .. tableGrants]
+                : ["GRANT SELECT ON *.*", .. tableGrants];
+            await using var limited = await LimitedUserAsync(context, "seeing_less", grants);
+            if (kind == "partial-revoke")
+            {
+                var revoke = "REVOKE SELECT ON `" + DatabaseName + "`.* FROM 'seeing_less'@'%'";
+                await context.Database.ExecuteSqlRawAsync(revoke, Ct);
+            }
+
+            (await ScalarAsync(limited, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_NAME = 'HiddenChild'")).ShouldBe(0);
+            (await Should.ThrowAsync<InvalidOperationException>(() => limited.Database.ResetDataAsync(
+                    o => o.ExcludeEntity<Category>().ExcludeEntity<Team>().ExcludeEntity<Player>(), Ct)))
+                .Message.ShouldContain("holds no privilege on the whole database");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM HiddenChild")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'seeing_less'@'%'", Ct);
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS HiddenChild", Ct);
+            if (kind == "partial-revoke")
+            {
+                await context.Database.ExecuteSqlRawAsync("SET GLOBAL partial_revokes = OFF", Ct);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_view_under_a_mapped_table_s_name_is_refused_and_its_base_table_keeps_its_rows()
+    {
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var tags = await context.Tags.CountAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("RENAME TABLE Tags TO TagsBase", Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE VIEW Tags AS SELECT * FROM TagsBase", Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("'Tags': the model maps it as a table, but in the database it is a view");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM TagsBase")).ShouldBe(tags);
+            (await context.Customers.CountAsync(Ct)).ShouldBeGreaterThan(0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP VIEW IF EXISTS Tags", Ct);
+            await context.Database.ExecuteSqlRawAsync("RENAME TABLE TagsBase TO Tags", Ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_counter_restart_that_fails_after_the_commit_says_the_rows_are_gone()
+    {
+        // Without ALTER, the deletes committed and only "ALTER command denied" came back.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        try
+        {
+            await using var limited = await LimitedUserAsync(context, "no_alter", "GRANT SELECT, INSERT, UPDATE, DELETE ON `{db}`.*");
+
+            var failure = await Should.ThrowAsync<InvalidOperationException>(() => limited.Database.ResetDataAsync(cancellationToken: Ct));
+            failure.Message.ShouldContain("deleted the rows and committed");
+            failure.InnerException.ShouldBeAssignableTo<DbException>();
+
+            (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v == 0);
+            await AssertConstraintsRestoredAsync(limited);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'no_alter'@'%'", Ct);
         }
     }
 

@@ -199,7 +199,7 @@ What each engine is sent:
 | --- | --- |
 | PostgreSQL | One `TRUNCATE TABLE a, b, ... RESTART IDENTITY`, without `CASCADE`. `TRUNCATE` checks the foreign keys between the listed tables as a set, so no order is needed. |
 | SQL Server | `DELETE` in dependency order, then `DBCC CHECKIDENT ... RESEED` for each table with an identity column. Tables on a foreign-key cycle — self-references included — have `NOCHECK CONSTRAINT ALL` for the delete and `WITH CHECK CHECK CONSTRAINT ALL` after, so the constraints come back trusted. Both run inside the reset's transaction, so a re-check that fails rolls back the deletes and the suspension together. |
-| MySQL | `DELETE` in dependency order with foreign-key checks left on, so the engine itself refuses a delete that would orphan a row — even in a table the login cannot see — then `ALTER TABLE ... AUTO_INCREMENT = 1` for each table after the commit. Only a plan with a foreign-key cycle switches the checks off (`SET FOREIGN_KEY_CHECKS = 0`, then back on). Then every foreign key in every database the login can see is checked before the commit, because MySQL never re-checks a row written while checks were off and a `DELETE` trigger could write anywhere: reset tables must have no violations, and other tables no more than they had before. Every MySQL reset needs a login with a privilege on the whole database, or it is refused: a login granted only some tables cannot see the others or their foreign keys, so an `ON DELETE CASCADE` there would empty rows it never checked. Tables that ignore transactions (MyISAM, MEMORY) are refused too, since a rollback could not restore them. |
+| MySQL | `DELETE` in dependency order with foreign-key checks left on, so the engine itself refuses a delete that would orphan a row — even in a table the login cannot see — then `ALTER TABLE ... AUTO_INCREMENT = 1` for each table after the commit. Only a plan with a foreign-key cycle switches the checks off (`SET FOREIGN_KEY_CHECKS = 0`, then back on). Then every foreign key in every database the login can see is checked before the commit, because MySQL never re-checks a row written while checks were off and a `DELETE` trigger could write anywhere: no table may have any violation afterwards, and a table outside the reset that already has violations makes the reset refuse before it starts, since a new orphan could not be told from an old one. Every MySQL reset needs a login with a table privilege on the whole database — granted on the database, or globally without `partial_revokes` — or it is refused: a login granted only some tables cannot see the others or their foreign keys, so an `ON DELETE CASCADE` there would empty rows it never checked. Tables that ignore transactions (MyISAM, MEMORY) are refused too, since a rollback could not restore them. |
 | SQLite | `PRAGMA foreign_keys = OFF`, `DELETE` each, clear `sqlite_sequence` for those tables, then back on. |
 
 The deletes run as **one unit**: a transaction, or a savepoint inside yours when one is open. A
@@ -441,6 +441,12 @@ backing field EF maps.
   same way; on MySQL a reset would commit it. Start transactions through EF.
 - **MySQL cannot restart identity inside a transaction.** `ALTER TABLE` commits implicitly, so inside
   an isolated scope the counters carry on.
+- **A mapped table that is a view in the database is refused** on MySQL, SQL Server and SQLite. Deleting
+  from an updatable view deletes from its base table, and on SQLite an `INSTEAD OF` trigger runs in its
+  place; either way the reset would touch a table it was never asked to. (PostgreSQL's `TRUNCATE`
+  refuses a view itself.)
+- **A trigger's writes are only as transactional as the tables they land in.** A `DELETE` trigger on a
+  reset table that writes to a MyISAM log keeps that write when the reset rolls back.
 - **A MySQL temporary table named like a mapped one is refused** — or like any table the foreign-key
   check reads. MySQL resolves the name to the session's temporary table first, even qualified with the
   database, so the reset would empty it, or check it, instead. Drop it, or reset on another connection.

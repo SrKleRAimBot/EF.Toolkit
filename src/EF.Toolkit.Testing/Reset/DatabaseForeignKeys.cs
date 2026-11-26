@@ -154,39 +154,69 @@ internal static class DatabaseForeignKeys
             .ToList();
 
     /// <summary>
-    ///     MySQL: 1 when the login holds a privilege on the connection's whole database (or a global
-    ///     one), and so sees every table in it in information_schema; 0 otherwise.
+    ///     MySQL: 1 when the login holds a table privilege on the connection's whole database, and so sees
+    ///     every table in it in information_schema; 0 otherwise.
     /// </summary>
     /// <remarks>
-    ///     A login granted only some tables does not see the others, nor their foreign keys: a reset that
-    ///     switches checks off could orphan rows there, and nothing could check them. Database grants may
-    ///     use wildcards, matched here by <c>LIKE</c> as MySQL matches them. Privileges held through a
-    ///     role are not listed in these views, so such a login is refused too, which is the safe way to
-    ///     be wrong.
+    ///     <para>
+    ///         A login granted only some tables does not see the others, nor their foreign keys: an
+    ///         <c>ON DELETE CASCADE</c> from one would act on the reset unseen, and while checks are off
+    ///         for a cycle rows there could be orphaned with nothing able to check them.
+    ///     </para>
+    ///     <para>
+    ///         Only table privileges count. A global <c>PROCESS</c> or <c>RELOAD</c> makes no table
+    ///         visible. A global table privilege counts only without <c>partial_revokes</c>: with it, a
+    ///         global grant can be revoked for this one database, and that restriction is not visible
+    ///         here. A database grant may use wildcards, matched by <c>LIKE</c> as MySQL matches them.
+    ///         Privileges held through a role are not listed in these views either, so such a login is
+    ///         refused too, which is the safe way to be wrong.
+    ///     </para>
     /// </remarks>
     internal static string MySqlSeesEveryTable(bool noBackslashEscapes)
     {
         const string grantee = "CONCAT('''', LEFT(CURRENT_USER(), LENGTH(CURRENT_USER()) - LOCATE('@', REVERSE(CURRENT_USER()))), "
             + "'''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')";
+        const string tablePrivileges = "('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'REFERENCES', 'INDEX', "
+            + "'ALTER', 'CREATE VIEW', 'SHOW VIEW', 'TRIGGER')";
         var escape = noBackslashEscapes ? @"'\'" : @"'\\'";
-        return "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES AS u "
-            + $"WHERE u.GRANTEE = {grantee} AND u.PRIVILEGE_TYPE <> 'USAGE') "
-            + "OR EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES AS d "
-            + $"WHERE d.GRANTEE = {grantee} AND DATABASE() LIKE d.TABLE_SCHEMA ESCAPE {escape}) THEN 1 ELSE 0 END;";
+        return "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES AS d "
+            + $"WHERE d.GRANTEE = {grantee} AND d.PRIVILEGE_TYPE IN {tablePrivileges} AND DATABASE() LIKE d.TABLE_SCHEMA ESCAPE {escape}) "
+            + "OR (@@GLOBAL.partial_revokes = 0 AND EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES AS u "
+            + $"WHERE u.GRANTEE = {grantee} AND u.PRIVILEGE_TYPE IN {tablePrivileges})) THEN 1 ELSE 0 END;";
     }
 
     /// <summary>
-    ///     MySQL: the tables in <paramref name="plan" /> whose storage engine does not support
-    ///     transactions — rows of (table, engine).
+    ///     MySQL: the tables in <paramref name="plan" /> that are not transactional base tables — rows of
+    ///     (name, what it is: <c>VIEW</c> or the storage engine).
     /// </summary>
-    internal static string MySqlNonTransactional(ResetPlan plan, bool noBackslashEscapes) => $"""
-        SELECT t.TABLE_NAME, COALESCE(t.ENGINE, '')
+    /// <remarks>
+    ///     A view under a mapped name would be deleted through — into whatever base table it reads — and
+    ///     an engine without transactions (MyISAM, MEMORY) ignores the rollback.
+    /// </remarks>
+    internal static string MySqlNotTransactionalTables(ResetPlan plan, bool noBackslashEscapes) => $"""
+        SELECT t.TABLE_NAME, CASE WHEN t.TABLE_TYPE = 'BASE TABLE' THEN COALESCE(t.ENGINE, '') ELSE 'VIEW' END
         FROM information_schema.TABLES AS t
         LEFT JOIN information_schema.ENGINES AS e ON e.ENGINE = t.ENGINE
         WHERE t.TABLE_SCHEMA = DATABASE()
-          AND t.TABLE_TYPE = 'BASE TABLE'
           AND t.TABLE_NAME IN ({MySqlNames(plan, noBackslashEscapes)})
-          AND COALESCE(e.TRANSACTIONS, 'NO') <> 'YES';
+          AND (t.TABLE_TYPE <> 'BASE TABLE' OR COALESCE(e.TRANSACTIONS, 'NO') <> 'YES');
+        """;
+
+    /// <summary>
+    ///     SQL Server: the names in <paramref name="plan" /> that resolve to something other than a user
+    ///     table — a view, say — as rows of (name, its type).
+    /// </summary>
+    internal static string SqlServerNotTables(ResetPlan plan) => $"""
+        SELECT p.n, o.type_desc
+        FROM (VALUES {string.Join(", ", plan.Tables.Select(t => $"({SqlServerName(t)})"))}) AS p(n)
+        JOIN sys.objects AS o ON o.object_id = OBJECT_ID(p.n)
+        WHERE o.type <> 'U';
+        """;
+
+    /// <summary>SQLite: the names in <paramref name="plan" /> that are views in <c>main</c>, as rows of (name, 'VIEW').</summary>
+    internal static string SqliteViews(ResetPlan plan) => $"""
+        SELECT m."name", 'VIEW' FROM "main"."sqlite_master" AS m
+        WHERE m."type" = 'view' AND m."name" COLLATE NOCASE IN ({string.Join(", ", plan.Tables.Select(t => SqlLiteral(t.Name)))});
         """;
 
     // A backslash escapes in a MySQL string literal unless the session's sql_mode has

@@ -75,6 +75,18 @@ public static class DatabaseResetExtensions
                         canSee);
                 }
 
+                if (engine == DatabaseEngine.SqlServer)
+                {
+                    RefuseNotTables(
+                        await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.SqlServerNotTables(plan), cancellationToken).ConfigureAwait(false));
+                }
+
+                if (engine == DatabaseEngine.Sqlite)
+                {
+                    RefuseNotTables(
+                        await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.SqliteViews(plan), cancellationToken).ConfigureAwait(false));
+                }
+
                 if (engine == DatabaseEngine.PostgreSql)
                 {
                     ResetPlan.RefuseTruncatedDescendants(await GuardedAsync(
@@ -92,9 +104,9 @@ public static class DatabaseResetExtensions
                         await ScalarAsync(connection, transaction, DatabaseForeignKeys.MySqlSeesEveryTable(state.MySqlNoBackslashEscapes), cancellationToken)
                             .ConfigureAwait(false),
                         System.Globalization.CultureInfo.InvariantCulture));
-                    RefuseMySqlNonTransactional(
-                        await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlNonTransactional(plan, state.MySqlNoBackslashEscapes), cancellationToken)
-                            .ConfigureAwait(false));
+                    RefuseNotTables(
+                        await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlNotTransactionalTables(plan, state.MySqlNoBackslashEscapes), cancellationToken)
+                            .ConfigureAwait(false), storageEngines: true);
                     await RefuseMySqlTemporaryAsync(connection, transaction, plan.Tables, cancellationToken).ConfigureAwait(false);
 
                     if (ResetSqlGenerator.MySqlVerifies(plan, state))
@@ -164,6 +176,16 @@ public static class DatabaseResetExtensions
                         ReadReferences(connection, transaction, DatabaseForeignKeys.SqlServerFilteredTables(plan)), canSee);
                 }
 
+                if (engine == DatabaseEngine.SqlServer)
+                {
+                    RefuseNotTables(ReadRows(connection, transaction, DatabaseForeignKeys.SqlServerNotTables(plan)));
+                }
+
+                if (engine == DatabaseEngine.Sqlite)
+                {
+                    RefuseNotTables(ReadRows(connection, transaction, DatabaseForeignKeys.SqliteViews(plan)));
+                }
+
                 if (engine == DatabaseEngine.PostgreSql)
                 {
                     ResetPlan.RefuseTruncatedDescendants(Guarded(
@@ -178,8 +200,8 @@ public static class DatabaseResetExtensions
                     RefuseMySqlPartialVisibility(Convert.ToInt64(
                         Scalar(connection, transaction, DatabaseForeignKeys.MySqlSeesEveryTable(state.MySqlNoBackslashEscapes)),
                         System.Globalization.CultureInfo.InvariantCulture));
-                    RefuseMySqlNonTransactional(
-                        ReadRows(connection, transaction, DatabaseForeignKeys.MySqlNonTransactional(plan, state.MySqlNoBackslashEscapes)));
+                    RefuseNotTables(
+                        ReadRows(connection, transaction, DatabaseForeignKeys.MySqlNotTransactionalTables(plan, state.MySqlNoBackslashEscapes)), storageEngines: true);
                     RefuseMySqlTemporary(connection, transaction, plan.Tables);
 
                     if (ResetSqlGenerator.MySqlVerifies(plan, state))
@@ -410,17 +432,29 @@ public static class DatabaseResetExtensions
             .SelectMany(k => new[] { new ResetTable(k.TableSchema, k.Table), new ResetTable(k.ReferencedSchema, k.ReferencedTable) })
             .Distinct();
 
-    // MyISAM and MEMORY tables ignore transactions: a reset that failed later would roll back every other
-    // table and leave these emptied for good, the half-done state the unit exists to rule out.
-    private static void RefuseMySqlNonTransactional(List<string[]> tables)
+    // A view under a name the model maps as a table would be deleted through, into whatever base table it
+    // reads — one the reset was never asked to touch — and on SQLite an INSTEAD OF trigger would run in its
+    // place. MyISAM and MEMORY tables ignore transactions: a reset that failed later would roll back every
+    // other table and leave these emptied for good, the half-done state the unit exists to rule out.
+    private static void RefuseNotTables(List<string[]> rows, bool storageEngines = false)
     {
-        if (tables.FirstOrDefault() is { } table)
+        if (rows.FirstOrDefault() is not { } row)
+        {
+            return;
+        }
+
+        if (storageEngines && row[1] != "VIEW")
         {
             throw new InvalidOperationException(
-                $"Cannot reset '{table[0]}': it uses the {table[1]} storage engine, which does not support transactions, "
+                $"Cannot reset '{row[0]}': it uses the {row[1]} storage engine, which does not support transactions, "
                 + "so a reset that failed part way could not put its rows back. Convert it to InnoDB "
                 + "(ALTER TABLE ... ENGINE = InnoDB), or exclude it from the reset.");
         }
+
+        throw new InvalidOperationException(
+            $"Cannot reset '{row[0]}': the model maps it as a table, but in the database it is a "
+            + $"{row[1].ToLowerInvariant().Replace('_', ' ')}, and deleting from it would delete from whatever it "
+            + "stands for instead. Exclude it from the reset, or map it with ToView.");
     }
 
     private static void RefuseMySqlTemporary(ResetTable table, List<string[]> showCreate)
@@ -454,7 +488,7 @@ public static class DatabaseResetExtensions
     // could write to any table. Whether there is such a trigger cannot be asked — information_schema
     // shows a trigger only to a user with the TRIGGER privilege on its table, while the trigger fires
     // regardless, as its definer. Keys from tables outside the reset are counted now, before anything is
-    // deleted: a violation that was already there is not the reset's to refuse over.
+    // deleted, and must have no violations yet.
     private static async Task<ResetConnectionState> WithMySqlForeignKeysAsync(
         DbConnection connection, DbTransaction? transaction, ResetPlan plan, ResetConnectionState state, CancellationToken cancellationToken)
     {
@@ -463,10 +497,12 @@ public static class DatabaseResetExtensions
                 .ConfigureAwait(false));
         await RefuseMySqlTemporaryAsync(connection, transaction, TablesOf(keys), cancellationToken).ConfigureAwait(false);
         var outside = keys.Where(k => !k.InPlan).ToList();
-        var before = outside.Count == 0
-            ? []
-            : (await ReadRowsAsync(connection, transaction, MySqlCounts(outside), cancellationToken).ConfigureAwait(false))[0];
-        return state with { MySqlForeignKeys = WithCounts(keys, outside, before) };
+        if (outside.Count > 0)
+        {
+            RefuseExistingViolations(outside, (await ReadRowsAsync(connection, transaction, MySqlCounts(outside), cancellationToken).ConfigureAwait(false))[0]);
+        }
+
+        return state with { MySqlForeignKeys = keys };
     }
 
     private static ResetConnectionState WithMySqlForeignKeys(
@@ -476,17 +512,36 @@ public static class DatabaseResetExtensions
             ReadRows(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, state.MySqlNoBackslashEscapes)));
         RefuseMySqlTemporary(connection, transaction, TablesOf(keys));
         var outside = keys.Where(k => !k.InPlan).ToList();
-        var before = outside.Count == 0 ? [] : ReadRows(connection, transaction, MySqlCounts(outside))[0];
-        return state with { MySqlForeignKeys = WithCounts(keys, outside, before) };
+        if (outside.Count > 0)
+        {
+            RefuseExistingViolations(outside, ReadRows(connection, transaction, MySqlCounts(outside))[0]);
+        }
+
+        return state with { MySqlForeignKeys = keys };
     }
 
     private static string MySqlCounts(IEnumerable<MySqlForeignKey> keys)
         => "SELECT " + string.Join(", ", keys.Select(ResetSqlGenerator.MySqlViolations)) + ";";
 
-    private static List<MySqlForeignKey> WithCounts(List<MySqlForeignKey> keys, List<MySqlForeignKey> outside, string[] before)
-        => [.. keys.Select(k => k.InPlan
-            ? k
-            : k with { Before = long.Parse(before[outside.IndexOf(k)], System.Globalization.CultureInfo.InvariantCulture) })];
+    // With checks off, a trigger could replace one orphan of a key with another and leave the count as it
+    // was; no count tells those apart, and rows need not have a key to compare. So a key outside the reset
+    // must start with no violations, and then any violation after it is the reset's.
+    private static void RefuseExistingViolations(List<MySqlForeignKey> outside, string[] counts)
+    {
+        for (var i = 0; i < outside.Count; i++)
+        {
+            if (long.Parse(counts[i], System.Globalization.CultureInfo.InvariantCulture) != 0)
+            {
+                var key = outside[i];
+                var table = key.TableSchema is null ? key.Table : $"{key.TableSchema}.{key.Table}";
+                throw new InvalidOperationException(
+                    $"Cannot reset: '{table}' already has rows that violate its foreign key to "
+                    + $"'{key.ReferencedSchema}.{key.ReferencedTable}', and this reset must switch MySQL's foreign-key "
+                    + "checks off for a foreign-key cycle. With violations already there, one written during the reset "
+                    + "could not be told apart from them. Fix or remove those rows first.");
+            }
+        }
+    }
 
     private static async Task<List<string[]>> ReadRowsAsync(
         DbConnection connection,

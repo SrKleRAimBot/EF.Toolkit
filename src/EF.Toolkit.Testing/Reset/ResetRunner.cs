@@ -24,6 +24,10 @@ internal static class ResetRunner
         "The reset left rows that violate a foreign key — a trigger on a reset table wrote them while checks "
         + "were suspended. It has been rolled back.";
 
+    internal const string AfterCommitFailed =
+        "The reset deleted the rows and committed, but restarting the identity counters afterwards failed, "
+        + "so new rows will not start at 1 — see the inner exception. On MySQL that needs the ALTER privilege.";
+
     internal static async Task RunAsync(
         ResetScript script,
         Func<string, CancellationToken, Task> execute,
@@ -69,9 +73,16 @@ internal static class ResetRunner
 
             committed = true;
 
-            foreach (var sql in script.AfterCommit)
+            try
             {
-                await execute(sql, cancellationToken).ConfigureAwait(false);
+                foreach (var sql in script.AfterCommit)
+                {
+                    await execute(sql, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception e)
+            {
+                throw new InvalidOperationException(AfterCommitFailed, e);
             }
         }
 #pragma warning disable CA1031 // Captured and rethrown below, after cleanup.
@@ -140,9 +151,16 @@ internal static class ResetRunner
 
             committed = true;
 
-            foreach (var sql in script.AfterCommit)
+            try
             {
-                execute(sql);
+                foreach (var sql in script.AfterCommit)
+                {
+                    execute(sql);
+                }
+            }
+            catch (Exception e)
+            {
+                throw new InvalidOperationException(AfterCommitFailed, e);
             }
         }
 #pragma warning disable CA1031 // Captured and rethrown below, after cleanup.

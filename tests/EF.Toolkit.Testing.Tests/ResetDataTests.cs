@@ -318,6 +318,26 @@ public sealed class ResetDataTests
     }
 
     [Fact]
+    public async Task A_view_under_a_mapped_table_s_name_is_refused_rather_than_running_its_trigger()
+    {
+        // An INSTEAD OF DELETE trigger on the view would run in the table's place, and could do anything.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync("ALTER TABLE \"Tags\" RENAME TO \"TagsBase\"", Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE VIEW \"Tags\" AS SELECT * FROM \"TagsBase\"", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER \"EmptyBase\" INSTEAD OF DELETE ON \"Tags\" BEGIN DELETE FROM \"TagsBase\"; END", Ct);
+        var tags = await ScalarAsync(context, "SELECT COUNT(*) FROM \"TagsBase\"");
+
+        (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+            .Message.ShouldContain("in the database it is a view");
+
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"TagsBase\"")).ShouldBe(tags);
+        (await context.Customers.CountAsync(Ct)).ShouldBeGreaterThan(0);
+    }
+
+    [Fact]
     public async Task A_temporary_table_of_the_caller_s_keeps_its_rows_whatever_it_is_called()
     {
         // The snapshot used one fixed name and dropped any table already called that before creating its own.
