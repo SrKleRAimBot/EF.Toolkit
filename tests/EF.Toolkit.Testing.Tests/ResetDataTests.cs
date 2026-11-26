@@ -239,6 +239,41 @@ public sealed class ResetDataTests
     }
 
     [Fact]
+    public async Task A_table_whose_name_differs_from_a_reset_one_only_beyond_ASCII_case_is_outside_the_reset()
+    {
+        // SQLite folds only ASCII in identifiers: "ärzte" is a different table from "Ärzte". A .NET
+        // comparer that folded both took the unmapped one for the reset one and orphaned its rows.
+        await using var db = await SqliteTestDatabase<UnicodeContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        context.Doctors.Add(new Doctor { Id = 1 });
+        await context.SaveChangesAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"ärzte\" (\"Id\" INTEGER PRIMARY KEY, \"DoctorId\" INTEGER NOT NULL REFERENCES \"Ärzte\" (\"Id\"))", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO \"ärzte\" VALUES (1, 1)", Ct);
+
+        (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+            .Message.ShouldContain("'ärzte', which the reset does not empty");
+        (await context.Doctors.CountAsync(Ct)).ShouldBe(1);
+    }
+
+    public sealed class Doctor
+    {
+        public int Id { get; set; }
+    }
+
+    public sealed class UnicodeContext(DbContextOptions<UnicodeContext> options) : DbContext(options)
+    {
+        public DbSet<Doctor> Doctors => Set<Doctor>();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Doctor>(b =>
+            {
+                b.ToTable("Ärzte");
+                b.Property(d => d.Id).ValueGeneratedNever();
+            });
+    }
+
+    [Fact]
     public async Task A_table_outside_the_model_with_no_foreign_key_into_it_does_not_stop_the_reset()
     {
         await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);

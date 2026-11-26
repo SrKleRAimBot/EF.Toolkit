@@ -178,44 +178,19 @@ internal sealed class ResetPlan
     }
 
     /// <summary>
-    ///     Refuses the reset if the database has a foreign key, from a table outside the reset, into one
-    ///     the reset empties — the catalog's view, covering tables the model does not map.
+    ///     Refuses the reset if the catalog reported any foreign key from a table outside it into one it
+    ///     empties — rows from <see cref="DatabaseForeignKeys.Query" />, which has already decided, by the
+    ///     database's own rules, which tables are outside.
     /// </summary>
-    /// <remarks>
-    ///     Names are compared the way the server compares table names, which the caller reads from it:
-    ///     a server where <c>Orders</c> and <c>orders</c> are two tables must not take one for the other.
-    /// </remarks>
-    /// <param name="references">The catalog's foreign keys.</param>
-    /// <param name="defaultSchema">
-    ///     The schema a model table without one lives in, for engines whose catalog reports schemas
-    ///     (SQL Server's <c>dbo</c>); <see langword="null" /> to compare names alone.
-    /// </param>
-    /// <param name="names">How the server compares table names. Case-insensitive if omitted.</param>
-    internal void RefuseUnplannedReferences(
-        IEnumerable<DatabaseReference> references,
-        string? defaultSchema = null,
-        StringComparer? names = null)
+    internal static void RefuseUnplannedReferences(IEnumerable<DatabaseReference> references)
     {
-        string Key(string? schema, string name)
-            => defaultSchema is null ? name : (schema ?? defaultSchema) + "." + name;
-
-        var reset = new HashSet<string>(Tables.Select(t => Key(t.Schema, t.Name)), names ?? StringComparer.OrdinalIgnoreCase);
-
-        foreach (var reference in references)
+        if (references.FirstOrDefault() is { } reference)
         {
-            if (!reset.Contains(Key(reference.ReferencedSchema, reference.ReferencedTable)))
-            {
-                continue;
-            }
-
-            if (reference.OutsideDatabase || !reset.Contains(Key(reference.TableSchema, reference.Table)))
-            {
-                throw new InvalidOperationException(
-                    $"Cannot reset '{reference.ReferencedTable}': '{reference.Table}', which the reset does not "
-                    + "empty, references it, and the reset suspends foreign-key checks while it deletes — its "
-                    + "rows would be deleted with it or left pointing at rows that no longer exist. Map the "
-                    + "table in the model so the reset empties it too, or remove the foreign key.");
-            }
+            throw new InvalidOperationException(
+                $"Cannot reset '{reference.ReferencedTable}': '{reference.Table}', which the reset does not "
+                + "empty, references it, and the reset suspends foreign-key checks while it deletes — its "
+                + "rows would be deleted with it or left pointing at rows that no longer exist. Map the "
+                + "table in the model so the reset empties it too, or remove the foreign key.");
         }
     }
 

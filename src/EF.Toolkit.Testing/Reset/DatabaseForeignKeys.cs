@@ -30,28 +30,61 @@ internal sealed record DatabaseReference(
 /// </remarks>
 internal static class DatabaseForeignKeys
 {
-    /// <summary>The catalog query for <paramref name="engine" />, or <see langword="null" /> if it needs none.</summary>
-    internal static string? Query(DatabaseEngine engine)
+    /// <summary>
+    ///     The catalog query for <paramref name="engine" /> returning every foreign key from a table
+    ///     outside <paramref name="plan" /> into one inside it, or <see langword="null" /> if the engine
+    ///     needs no such check.
+    /// </summary>
+    /// <remarks>
+    ///     The database decides which names are the same table, by its own rules, rather than a .NET
+    ///     comparer approximating them: SQL Server compares object identities, SQLite compares with
+    ///     <c>NOCASE</c> — ASCII-only, exactly how it matches identifiers — and MySQL compares under the
+    ///     collation <c>information_schema</c> gives table names, which follows
+    ///     <c>lower_case_table_names</c>. A comparer that folds more, or less, than the engine would take
+    ///     an unmapped dependent for a reset table, or miss one.
+    /// </remarks>
+    internal static string? Query(DatabaseEngine engine, ResetPlan plan)
         => engine switch
         {
-            DatabaseEngine.Sqlite => """
+            DatabaseEngine.Sqlite => $"""
+                WITH "plan"("name") AS (VALUES {string.Join(", ", plan.Tables.Select(t => "(" + SqlLiteral(t.Name) + ")"))})
                 SELECT m."name", f."table", 0
                 FROM "main"."sqlite_master" AS m
                 JOIN pragma_foreign_key_list(m."name", 'main') AS f
-                WHERE m."type" = 'table';
+                WHERE m."type" = 'table'
+                  AND EXISTS (SELECT 1 FROM "plan" AS p WHERE p."name" = f."table" COLLATE NOCASE)
+                  AND NOT EXISTS (SELECT 1 FROM "plan" AS p WHERE p."name" = m."name" COLLATE NOCASE);
                 """,
-            DatabaseEngine.SqlServer => """
+            DatabaseEngine.SqlServer => $"""
+                WITH [plan](id) AS ({string.Join(" UNION ALL ", plan.Tables.Select(t => $"SELECT OBJECT_ID({SqlServerName(t)})"))})
                 SELECT OBJECT_NAME(fk.parent_object_id), OBJECT_NAME(fk.referenced_object_id), 0,
                        OBJECT_SCHEMA_NAME(fk.parent_object_id), OBJECT_SCHEMA_NAME(fk.referenced_object_id)
-                FROM sys.foreign_keys AS fk;
+                FROM sys.foreign_keys AS fk
+                WHERE fk.referenced_object_id IN (SELECT id FROM [plan] WHERE id IS NOT NULL)
+                  AND fk.parent_object_id NOT IN (SELECT id FROM [plan] WHERE id IS NOT NULL);
                 """,
-            DatabaseEngine.MySql => """
-                SELECT TABLE_NAME, REFERENCED_TABLE_NAME, CONSTRAINT_SCHEMA <> DATABASE()
-                FROM information_schema.REFERENTIAL_CONSTRAINTS
-                WHERE UNIQUE_CONSTRAINT_SCHEMA = DATABASE();
+            DatabaseEngine.MySql => $"""
+                SELECT rc.TABLE_NAME, rc.REFERENCED_TABLE_NAME, rc.CONSTRAINT_SCHEMA <> DATABASE()
+                FROM information_schema.REFERENTIAL_CONSTRAINTS AS rc
+                WHERE rc.UNIQUE_CONSTRAINT_SCHEMA = DATABASE()
+                  AND rc.REFERENCED_TABLE_NAME IN ({MySqlNames(plan)})
+                  AND NOT (rc.CONSTRAINT_SCHEMA = DATABASE() AND rc.TABLE_NAME IN ({MySqlNames(plan)}));
                 """,
             _ => null,
         };
+
+    private static string SqlLiteral(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+
+    private static string SqlServerName(ResetTable table)
+    {
+        static string Bracket(string identifier) => "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
+
+        var name = table.Schema is null ? Bracket(table.Name) : Bracket(table.Schema) + "." + Bracket(table.Name);
+        return "N" + SqlLiteral(name);
+    }
+
+    private static string MySqlNames(ResetPlan plan)
+        => string.Join(", ", plan.Tables.Select(t => SqlLiteral(t.Name.Replace("\\", "\\\\", StringComparison.Ordinal))));
 
     /// <summary>
     ///     SQL Server: the schema each unqualified table in <paramref name="plan" /> resolves to, as rows
@@ -132,31 +165,6 @@ internal static class DatabaseForeignKeys
                               WHERE e.name = rel.relname AND (e.schema IS NULL OR e.schema = ns.nspname)));
             """;
     }
-
-    /// <summary>
-    ///     A query returning 1 when the server compares table names case-sensitively, or
-    ///     <see langword="null" /> when the engine's rule is fixed.
-    /// </summary>
-    /// <remarks>
-    ///     MySQL decides by <c>lower_case_table_names</c>: 0 — the Linux default — keeps names as given and
-    ///     compares them exactly. SQL Server compares names under the database's collation. SQLite folds
-    ///     ASCII case in identifiers always.
-    /// </remarks>
-    internal static string? CaseSensitivityQuery(DatabaseEngine engine)
-        => engine switch
-        {
-            DatabaseEngine.MySql => "SELECT CASE WHEN @@lower_case_table_names = 0 THEN 1 ELSE 0 END;",
-            DatabaseEngine.SqlServer => "SELECT CASE WHEN N'a' = N'A' THEN 0 ELSE 1 END;",
-            _ => null,
-        };
-
-    /// <summary>The schema of a model table that names none, where the catalog reports schemas.</summary>
-    /// <remarks>
-    ///     <c>dbo</c> is SQL Server's default for the login EF connects as unless the model says
-    ///     otherwise — and a model with <c>HasDefaultSchema</c> gives every table an explicit schema.
-    /// </remarks>
-    internal static string? DefaultSchema(DatabaseEngine engine)
-        => engine == DatabaseEngine.SqlServer ? "dbo" : null;
 
     internal static DatabaseReference Read(DbDataReader reader)
         => new(

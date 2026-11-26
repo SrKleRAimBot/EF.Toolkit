@@ -112,48 +112,35 @@ public sealed class ResetPlanTests
     }
 
     [Fact]
-    public void Catalog_references_from_outside_the_reset_are_refused_and_from_inside_allowed()
+    public void Any_reference_the_catalog_reports_refuses_the_reset_and_none_allows_it()
     {
-        var plan = ResetPlan.Create([new ResetTable(null, "Orders"), new ResetTable(null, "Customers")]);
+        // The catalog query has already decided which tables are outside the reset.
+        ResetPlan.RefuseUnplannedReferences([]);
 
-        // Inside the reset, or into a table the reset keeps: nothing at risk.
-        plan.RefuseUnplannedReferences([new DatabaseReference("Orders", "Customers"), new DatabaseReference("Notes", "Archive")]);
-
-        Should.Throw<InvalidOperationException>(() => plan.RefuseUnplannedReferences([new DatabaseReference("audit", "CUSTOMERS")]))
+        Should.Throw<InvalidOperationException>(() => ResetPlan.RefuseUnplannedReferences([new DatabaseReference("audit", "Customers")]))
             .Message.ShouldContain("'audit', which the reset does not empty");
-
-        // A table of the same name in another MySQL database is still outside the reset.
-        Should.Throw<InvalidOperationException>(() => plan.RefuseUnplannedReferences([new DatabaseReference("Orders", "Customers", OutsideDatabase: true)]));
     }
 
     [Fact]
-    public void On_a_case_sensitive_server_a_table_differing_only_in_case_is_outside_the_reset()
+    public void The_catalog_queries_compare_names_by_the_engines_own_rules()
     {
-        var plan = ResetPlan.Create([new ResetTable(null, "Orders"), new ResetTable(null, "Customers")]);
-        DatabaseReference[] lowercase = [new DatabaseReference("orders", "Customers")];
+        var plan = ResetPlan.Create([new ResetTable(null, "O'Brien"), new ResetTable("sales", "Orders")]);
 
-        // Where the server folds case, orders is Orders and is being reset with its principal.
-        plan.RefuseUnplannedReferences(lowercase, names: StringComparer.OrdinalIgnoreCase);
+        // SQLite: NOCASE, ASCII-only like its identifiers.
+        var sqlite = DatabaseForeignKeys.Query(DatabaseEngine.Sqlite, plan)!;
+        sqlite.ShouldContain("VALUES ('O''Brien'), ('Orders')");
+        sqlite.ShouldContain("COLLATE NOCASE");
 
-        // Where it does not, orders is a table of its own, left pointing at customers that are gone.
-        Should.Throw<InvalidOperationException>(() => plan.RefuseUnplannedReferences(lowercase, names: StringComparer.Ordinal))
-            .Message.ShouldContain("'orders', which the reset does not empty");
-    }
+        // SQL Server: object identities, schema-qualified where the plan knows the schema.
+        var sqlServer = DatabaseForeignKeys.Query(DatabaseEngine.SqlServer, plan)!;
+        sqlServer.ShouldContain("OBJECT_ID(N'[O''Brien]')");
+        sqlServer.ShouldContain("OBJECT_ID(N'[sales].[Orders]')");
+        sqlServer.ShouldContain("fk.parent_object_id NOT IN");
 
-    [Fact]
-    public void With_schemas_a_same_named_table_in_another_schema_is_outside_the_reset()
-    {
-        var plan = ResetPlan.Create([new ResetTable(null, "Orders"), new ResetTable("sales", "Customers")]);
+        // MySQL: in SQL, under information_schema's collation.
+        DatabaseForeignKeys.Query(DatabaseEngine.MySql, plan)!.ShouldContain("IN ('O''Brien', 'Orders')");
 
-        // dbo.Orders -> sales.Customers is inside the reset.
-        plan.RefuseUnplannedReferences([new DatabaseReference("Orders", "Customers", TableSchema: "dbo", ReferencedSchema: "sales")], "dbo");
-
-        // audit.Orders is not dbo.Orders.
-        Should.Throw<InvalidOperationException>(() => plan.RefuseUnplannedReferences(
-            [new DatabaseReference("Orders", "Customers", TableSchema: "audit", ReferencedSchema: "sales")], "dbo"));
-
-        // And a key into dbo.Customers — not a table this reset empties — is no concern of it.
-        plan.RefuseUnplannedReferences([new DatabaseReference("X", "Customers", TableSchema: "dbo", ReferencedSchema: "dbo")], "dbo");
+        DatabaseForeignKeys.Query(DatabaseEngine.PostgreSql, plan).ShouldBeNull();
     }
 
     [Fact]
