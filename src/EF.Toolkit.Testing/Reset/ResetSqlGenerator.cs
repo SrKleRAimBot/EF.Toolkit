@@ -21,9 +21,9 @@ namespace EFToolkit.Testing;
 ///     <c>@name</c> as an undefined parameter unless the connection string opts in to user variables.
 /// </param>
 /// <param name="MySqlForeignKeys">
-///     MySQL: the catalog's foreign keys to verify, read only when the reset deletes with checks off —
-///     those from the reset tables, and every other one in the database too when a reset table has a
-///     <c>DELETE</c> trigger, which could write anywhere. <see langword="null" /> when not read.
+///     MySQL: every foreign key in the database, to verify — read only when the reset deletes with checks
+///     off, since a <c>DELETE</c> trigger on a reset table could write anywhere. <see langword="null" />
+///     when not read.
 /// </param>
 /// <param name="MySqlNoBackslashEscapes">
 ///     Whether the session's <c>sql_mode</c> has <c>NO_BACKSLASH_ESCAPES</c>, under which a backslash
@@ -305,8 +305,8 @@ internal static class ResetSqlGenerator
     // Every reset table is empty once the deletes are done, so any row there that violates a foreign key
     // was written during the reset — by a trigger — and none is acceptable. Elsewhere only a DELETE
     // trigger on a reset table can write while checks are off (the catalog preflight already refuses a
-    // foreign key from outside into a reset table), and where one exists the count of violations of
-    // each other key must not have grown. A key with a NULL column is not enforced, as MySQL treats it.
+    // foreign key from outside into a reset table), so the count of violations of each other key must
+    // not have grown. A key with a NULL column is not enforced, as MySQL treats it.
     private static string[] MySqlOrphans(IReadOnlyList<MySqlForeignKey> foreignKeys)
     {
         if (foreignKeys.Count == 0)
@@ -343,7 +343,10 @@ internal static class ResetSqlGenerator
         // never looked at.
         // The snapshot of existing violations comes first, inside the unit: the verify step then fails
         // only on violations the reset itself caused, wherever in the database they are.
-        List<string> body = [.. SqliteViolationSnapshot];
+        // The snapshot's name is new for every reset, so it can never be a table the caller already has —
+        // with a fixed name, dropping "ours" first would have destroyed theirs.
+        var snapshot = $"ef_toolkit_fk_before_{Guid.NewGuid():N}";
+        List<string> body = [SqliteViolationSnapshot(snapshot)];
         body.AddRange(plan.Tables.Select(t => $"DELETE FROM \"main\".{Quote(t.Name, '"', '"')};"));
 
         if (state.RestartIdentity && state.SqliteHasSequenceTable)
@@ -360,8 +363,8 @@ internal static class ResetSqlGenerator
                 state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = OFF;"])
             {
                 Begin = [$"SAVEPOINT {Savepoint};"],
-                Verify = [SqliteNewViolations],
-                Commit = [SqliteDropSnapshot, $"RELEASE SAVEPOINT {Savepoint};"],
+                Verify = [SqliteNewViolations(snapshot)],
+                Commit = [SqliteDropSnapshot(snapshot), $"RELEASE SAVEPOINT {Savepoint};"],
                 Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};", $"RELEASE SAVEPOINT {Savepoint};"],
             };
         }
@@ -373,8 +376,8 @@ internal static class ResetSqlGenerator
         return script with
         {
             Begin = ["BEGIN;"],
-            Verify = [SqliteNewViolations],
-            Commit = [SqliteDropSnapshot, "COMMIT;"],
+            Verify = [SqliteNewViolations(snapshot)],
+            Commit = [SqliteDropSnapshot(snapshot), "COMMIT;"],
             Rollback = ["ROLLBACK;"],
         };
     }
@@ -386,27 +389,25 @@ internal static class ResetSqlGenerator
     // snapshot taken at the start of the unit: violations that were already there are not the reset's
     // to refuse over. The snapshot is a temporary table, created inside the unit, so a rollback removes
     // it; the commit drops it.
-    private const string SqliteSnapshot = "\"temp\".\"ef_toolkit_fk_before\"";
-
-    private static readonly string[] SqliteViolationSnapshot =
-    [
-        $"DROP TABLE IF EXISTS {SqliteSnapshot};",
-        $"CREATE TEMP TABLE \"ef_toolkit_fk_before\" AS SELECT \"table\" AS t, \"rowid\" AS r, \"fkid\" AS f FROM pragma_foreign_key_check;",
-    ];
+    private static string SqliteViolationSnapshot(string name)
+        => $"CREATE TEMP TABLE \"{name}\" AS SELECT \"table\" AS t, \"rowid\" AS r, \"fkid\" AS f FROM pragma_foreign_key_check;";
 
     // Rows with a rowid are compared one by one. A WITHOUT ROWID table reports no rowid, so its
     // violations cannot be told apart; for those the count per table and foreign key must not grow —
     // one old orphan must not hide any number of new ones.
-    private const string SqliteNewViolations =
-        "SELECT "
-        + "(SELECT COUNT(*) FROM pragma_foreign_key_check AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS ("
-        + $"SELECT 1 FROM {SqliteSnapshot} AS b WHERE b.t = c.\"table\" AND b.r = c.\"rowid\" AND b.f = c.\"fkid\"))"
-        + " + (SELECT COUNT(*) FROM ("
-        + "SELECT c.\"table\" AS t, c.\"fkid\" AS f, COUNT(*) AS n FROM pragma_foreign_key_check AS c "
-        + "WHERE c.\"rowid\" IS NULL GROUP BY c.\"table\", c.\"fkid\") AS a "
-        + $"WHERE a.n > (SELECT COUNT(*) FROM {SqliteSnapshot} AS b WHERE b.t = a.t AND b.f = a.f AND b.r IS NULL));";
+    private static string SqliteNewViolations(string name)
+    {
+        var snapshot = $"\"temp\".\"{name}\"";
+        return "SELECT "
+            + "(SELECT COUNT(*) FROM pragma_foreign_key_check AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS ("
+            + $"SELECT 1 FROM {snapshot} AS b WHERE b.t = c.\"table\" AND b.r = c.\"rowid\" AND b.f = c.\"fkid\"))"
+            + " + (SELECT COUNT(*) FROM ("
+            + "SELECT c.\"table\" AS t, c.\"fkid\" AS f, COUNT(*) AS n FROM pragma_foreign_key_check AS c "
+            + "WHERE c.\"rowid\" IS NULL GROUP BY c.\"table\", c.\"fkid\") AS a "
+            + $"WHERE a.n > (SELECT COUNT(*) FROM {snapshot} AS b WHERE b.t = a.t AND b.f = a.f AND b.r IS NULL));";
+    }
 
-    private const string SqliteDropSnapshot = $"DROP TABLE {SqliteSnapshot};";
+    private static string SqliteDropSnapshot(string name) => $"DROP TABLE \"temp\".\"{name}\";";
 
     private static string Quote(ResetTable table, char open, char close)
     {

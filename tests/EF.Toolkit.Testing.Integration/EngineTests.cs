@@ -766,6 +766,44 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
     }
 
     [Fact]
+    public async Task A_trigger_the_resetting_user_cannot_see_is_covered_all_the_same()
+    {
+        // information_schema.TRIGGERS shows a trigger only to a user with TRIGGER on its table, but the
+        // trigger fires for everyone, as its definer: asking whether there is one let this orphan through.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await CreateOutsideTablesAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER WriteOutside AFTER DELETE ON Categories FOR EACH ROW INSERT INTO OutChild VALUES (OLD.Id + 1000, 2147483647)", Ct);
+        var builder = new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(Fixture.ConnectionString);
+        await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'limited'@'%'", Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE USER 'limited'@'%' IDENTIFIED BY 'limited'", Ct);
+        var grant = "GRANT SELECT, INSERT, UPDATE, DELETE ON `" + builder.Database + "`.* TO 'limited'@'%'";
+        await context.Database.ExecuteSqlRawAsync(grant, Ct);
+        builder.UserID = "limited";
+        builder.Password = "limited";
+        try
+        {
+            await using var limited = new ShopContext(new DbContextOptionsBuilder<ShopContext>().UseMySQL(builder.ConnectionString).Options);
+            (await ScalarAsync(limited, "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_NAME = 'WriteOutside'")).ShouldBe(0);
+
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => limited.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct)))
+                .Message.ShouldContain("violate a foreign key");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM OutChild")).ShouldBe(0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'limited'@'%'", Ct);
+            await DropOutsideTablesAsync(context);
+        }
+    }
+
+    [Fact]
     public async Task An_orphan_that_was_there_before_the_reset_is_not_held_against_it()
     {
         // The trigger writes a valid row; the one orphan in OutChild predates the reset.

@@ -361,18 +361,16 @@ public static class DatabaseResetExtensions
 
     private const string MySqlNoBackslashEscapes = "SELECT FIND_IN_SET('NO_BACKSLASH_ESCAPES', @@SESSION.sql_mode) > 0;";
 
-    // The keys the verify step checks. A DELETE trigger on a reset table could write to any table, so
-    // when there is one every key in the database is read, and those outside the reset are counted now,
-    // before anything is deleted: a violation that was already there is not the reset's to refuse over.
+    // The keys the verify step checks: every one in the database, since a DELETE trigger on a reset table
+    // could write to any table. Whether there is such a trigger cannot be asked — information_schema
+    // shows a trigger only to a user with the TRIGGER privilege on its table, while the trigger fires
+    // regardless, as its definer. Keys from tables outside the reset are counted now, before anything is
+    // deleted: a violation that was already there is not the reset's to refuse over.
     private static async Task<ResetConnectionState> WithMySqlForeignKeysAsync(
         DbConnection connection, DbTransaction? transaction, ResetPlan plan, ResetConnectionState state, CancellationToken cancellationToken)
     {
-        var nbe = state.MySqlNoBackslashEscapes;
-        var triggers = Convert.ToInt64(
-            await ScalarAsync(connection, transaction, DatabaseForeignKeys.MySqlDeleteTriggers(plan, nbe), cancellationToken).ConfigureAwait(false),
-            System.Globalization.CultureInfo.InvariantCulture) != 0;
         var keys = DatabaseForeignKeys.GroupMySqlForeignKeys(
-            await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, nbe, everyTable: triggers), cancellationToken)
+            await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, state.MySqlNoBackslashEscapes), cancellationToken)
                 .ConfigureAwait(false));
         var outside = keys.Where(k => !k.InPlan).ToList();
         var before = outside.Count == 0
@@ -384,12 +382,8 @@ public static class DatabaseResetExtensions
     private static ResetConnectionState WithMySqlForeignKeys(
         DbConnection connection, DbTransaction? transaction, ResetPlan plan, ResetConnectionState state)
     {
-        var nbe = state.MySqlNoBackslashEscapes;
-        var triggers = Convert.ToInt64(
-            Scalar(connection, transaction, DatabaseForeignKeys.MySqlDeleteTriggers(plan, nbe)),
-            System.Globalization.CultureInfo.InvariantCulture) != 0;
         var keys = DatabaseForeignKeys.GroupMySqlForeignKeys(
-            ReadRows(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, nbe, everyTable: triggers)));
+            ReadRows(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, state.MySqlNoBackslashEscapes)));
         var outside = keys.Where(k => !k.InPlan).ToList();
         var before = outside.Count == 0 ? [] : ReadRows(connection, transaction, MySqlCounts(outside))[0];
         return state with { MySqlForeignKeys = WithCounts(keys, outside, before) };

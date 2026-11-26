@@ -120,32 +120,21 @@ internal static class DatabaseForeignKeys
     }
 
     /// <summary>
-    ///     MySQL: one row per column of every foreign key from a table in <paramref name="plan" /> — or,
-    ///     with <paramref name="everyTable" />, from any table in the connection's database — giving
-    ///     constraint, table, column, referenced database, table and column, and whether the table is a
-    ///     reset one; in key order.
+    ///     MySQL: one row per column of every foreign key from a table in the connection's database —
+    ///     constraint, table, column, referenced database, table and column, and whether the table is one
+    ///     in <paramref name="plan" /> — in key order.
     /// </summary>
-    internal static string MySqlForeignKeys(ResetPlan plan, bool noBackslashEscapes, bool everyTable)
-    {
-        var names = MySqlNames(plan, noBackslashEscapes);
-        var only = everyTable ? "" : $"AND k.TABLE_NAME IN ({names})";
-        return $"""
-            SELECT k.CONSTRAINT_NAME, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME,
-                   CASE WHEN k.TABLE_NAME IN ({names}) THEN 1 ELSE 0 END
-            FROM information_schema.KEY_COLUMN_USAGE AS k
-            WHERE k.TABLE_SCHEMA = DATABASE()
-              AND k.REFERENCED_TABLE_NAME IS NOT NULL
-              {only}
-            ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION;
-            """;
-    }
-
-    /// <summary>MySQL: the number of <c>DELETE</c> triggers on the tables in <paramref name="plan" />.</summary>
-    internal static string MySqlDeleteTriggers(ResetPlan plan, bool noBackslashEscapes) => $"""
-        SELECT COUNT(*) FROM information_schema.TRIGGERS AS t
-        WHERE t.EVENT_OBJECT_SCHEMA = DATABASE()
-          AND t.EVENT_MANIPULATION = 'DELETE'
-          AND t.EVENT_OBJECT_TABLE IN ({MySqlNames(plan, noBackslashEscapes)});
+    /// <remarks>
+    ///     information_schema lists only the tables the user has some privilege on, so a key on a table
+    ///     the reset's user cannot see at all cannot be checked.
+    /// </remarks>
+    internal static string MySqlForeignKeys(ResetPlan plan, bool noBackslashEscapes) => $"""
+        SELECT k.CONSTRAINT_NAME, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME,
+               CASE WHEN k.TABLE_NAME IN ({MySqlNames(plan, noBackslashEscapes)}) THEN 1 ELSE 0 END
+        FROM information_schema.KEY_COLUMN_USAGE AS k
+        WHERE k.TABLE_SCHEMA = DATABASE()
+          AND k.REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION;
         """;
 
     /// <summary>Groups the rows of <see cref="MySqlForeignKeys" /> into keys.</summary>

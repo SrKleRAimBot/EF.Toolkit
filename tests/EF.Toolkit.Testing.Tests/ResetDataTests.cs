@@ -314,7 +314,25 @@ public sealed class ResetDataTests
 
         (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v == 0);
         (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Audit\"")).ShouldBe(1);
-        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"temp\".\"sqlite_master\" WHERE \"name\" = 'ef_toolkit_fk_before'")).ShouldBe(0);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"temp\".\"sqlite_master\" WHERE \"name\" LIKE 'ef_toolkit_fk_before%'")).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_temporary_table_of_the_caller_s_keeps_its_rows_whatever_it_is_called()
+    {
+        // The snapshot used one fixed name and dropped any table already called that before creating its own.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.OpenConnectionAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE TEMP TABLE \"ef_toolkit_fk_before\" (\"Kept\" INTEGER)", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO \"temp\".\"ef_toolkit_fk_before\" VALUES (7)", Ct);
+
+        await context.Database.ResetDataAsync(cancellationToken: Ct);
+
+        (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v == 0);
+        (await ScalarAsync(context, "SELECT \"Kept\" FROM \"temp\".\"ef_toolkit_fk_before\"")).ShouldBe(7);
+        await context.Database.CloseConnectionAsync();
     }
 
     [Fact]

@@ -205,7 +205,7 @@ public sealed class ResetSqlGeneratorTests
             Default with { SqliteHasSequenceTable = true });
 
         script.Prologue.ShouldBe(["PRAGMA foreign_keys = OFF;"]);
-        script.Body.Skip(2).ShouldBe(
+        script.Body.Skip(1).ShouldBe(
         [
             "DELETE FROM \"main\".\"Lines\";",
             "DELETE FROM \"main\".\"O'Brien\";",
@@ -217,7 +217,7 @@ public sealed class ResetSqlGeneratorTests
     [Fact]
     public void Sqlite_does_not_name_a_sequence_table_that_does_not_exist()
         => Generate(DatabaseEngine.Sqlite, ResetPlan.Create([Lines]), Default with { SqliteHasSequenceTable = false })
-            .Body.Skip(2).ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
+            .Body.Skip(1).ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
 
     [Fact]
     public void Sqlite_leaves_the_sequence_alone_when_identity_continues()
@@ -225,7 +225,7 @@ public sealed class ResetSqlGeneratorTests
                 DatabaseEngine.Sqlite,
                 ResetPlan.Create([Lines]),
                 Default with { RestartIdentity = false, SqliteHasSequenceTable = true })
-            .Body.Skip(2).ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
+            .Body.Skip(1).ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
 
     [Fact]
     public void Sqlite_leaves_foreign_keys_off_when_they_were_off()
@@ -322,11 +322,13 @@ public sealed class ResetSqlGeneratorTests
         var many = ResetPlan.Create([.. Enumerable.Range(0, 600).Select(i => new ResetTable(null, $"T{i}"))]);
         var script = Generate(DatabaseEngine.Sqlite, many);
 
-        script.Body[1].ShouldStartWith("CREATE TEMP TABLE \"ef_toolkit_fk_before\"");
+        script.Body[0].ShouldStartWith("CREATE TEMP TABLE \"ef_toolkit_fk_before_");
         script.Verify.ShouldHaveSingleItem().ShouldNotContain("UNION");
         script.Verify[0].ShouldContain("FROM pragma_foreign_key_check AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS");
         script.Verify[0].ShouldContain("WHERE a.n > (SELECT COUNT(*)");
-        script.Commit[0].ShouldBe("DROP TABLE \"temp\".\"ef_toolkit_fk_before\";");
+        script.Commit[0].ShouldStartWith("DROP TABLE \"temp\".\"ef_toolkit_fk_before_");
+        script.Body.ShouldNotContain(b => b.StartsWith("DROP", StringComparison.Ordinal));
+        Generate(DatabaseEngine.Sqlite, many).Commit[0].ShouldNotBe(script.Commit[0]);
     }
 
     [Fact]
