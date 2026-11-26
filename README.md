@@ -46,11 +46,18 @@ tested under Oracle's `MySql.EntityFrameworkCore`, the one that ships for EF Cor
 
 | Version | EF Core | TFM |
 | --- | --- | --- |
+| `11.x` | 11.x | `net11.0` |
 | `10.x` | 10.x | `net10.0` |
 | `9.x` | 9.x | `net8.0` |
 
 The version tracks EF Core's, because these packages hook low-level services and must never resolve
-across an EF major.
+across an EF major. The 10.x and 11.x lines are built from the same source: a plain build targets
+EF Core 10, and `-p:EfCoreMajor=11` builds, tests and packs the EF Core 11 line (it needs the .NET 11
+SDK).
+
+```bash
+dotnet test tests/EF.Toolkit.Bulk.Tests -p:EfCoreMajor=11
+```
 
 ---
 
