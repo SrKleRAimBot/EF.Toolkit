@@ -127,6 +127,20 @@ public sealed class ResetPlanTests
     }
 
     [Fact]
+    public void On_a_case_sensitive_server_a_table_differing_only_in_case_is_outside_the_reset()
+    {
+        var plan = ResetPlan.Create([new ResetTable(null, "Orders"), new ResetTable(null, "Customers")]);
+        DatabaseReference[] lowercase = [new DatabaseReference("orders", "Customers")];
+
+        // Where the server folds case, orders is Orders and is being reset with its principal.
+        plan.RefuseUnplannedReferences(lowercase, names: StringComparer.OrdinalIgnoreCase);
+
+        // Where it does not, orders is a table of its own, left pointing at customers that are gone.
+        Should.Throw<InvalidOperationException>(() => plan.RefuseUnplannedReferences(lowercase, names: StringComparer.Ordinal))
+            .Message.ShouldContain("'orders', which the reset does not empty");
+    }
+
+    [Fact]
     public void With_schemas_a_same_named_table_in_another_schema_is_outside_the_reset()
     {
         var plan = ResetPlan.Create([new ResetTable(null, "Orders"), new ResetTable("sales", "Customers")]);

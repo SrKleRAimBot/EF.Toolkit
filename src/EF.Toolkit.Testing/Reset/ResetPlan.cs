@@ -154,9 +154,11 @@ internal sealed class ResetPlan
     /// </summary>
     internal ResetPlan WithResolvedSchemas(IEnumerable<DatabaseReference> resolved)
     {
+        // Keyed by the names this plan itself put in the query, so exact comparison is right whatever
+        // the server's own rule.
         var schemas = resolved
             .Where(r => !string.IsNullOrEmpty(r.TableSchema))
-            .ToDictionary(r => r.Table, r => r.TableSchema!, StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(r => r.Table, r => r.TableSchema!, StringComparer.Ordinal);
 
         ResetTable Qualify(ResetTable table)
             => table.Schema is null && schemas.TryGetValue(table.Name, out var schema) ? table with { Schema = schema } : table;
@@ -170,20 +172,24 @@ internal sealed class ResetPlan
     ///     the reset empties — the catalog's view, covering tables the model does not map.
     /// </summary>
     /// <remarks>
-    ///     Names are compared without regard to case: both engines that need this can resolve a name in
-    ///     either case, so a match that differs only in case is still the same table.
+    ///     Names are compared the way the server compares table names, which the caller reads from it:
+    ///     a server where <c>Orders</c> and <c>orders</c> are two tables must not take one for the other.
     /// </remarks>
     /// <param name="references">The catalog's foreign keys.</param>
     /// <param name="defaultSchema">
     ///     The schema a model table without one lives in, for engines whose catalog reports schemas
     ///     (SQL Server's <c>dbo</c>); <see langword="null" /> to compare names alone.
     /// </param>
-    internal void RefuseUnplannedReferences(IEnumerable<DatabaseReference> references, string? defaultSchema = null)
+    /// <param name="names">How the server compares table names. Case-insensitive if omitted.</param>
+    internal void RefuseUnplannedReferences(
+        IEnumerable<DatabaseReference> references,
+        string? defaultSchema = null,
+        StringComparer? names = null)
     {
         string Key(string? schema, string name)
             => defaultSchema is null ? name : (schema ?? defaultSchema) + "." + name;
 
-        var reset = new HashSet<string>(Tables.Select(t => Key(t.Schema, t.Name)), StringComparer.OrdinalIgnoreCase);
+        var reset = new HashSet<string>(Tables.Select(t => Key(t.Schema, t.Name)), names ?? StringComparer.OrdinalIgnoreCase);
 
         foreach (var reference in references)
         {

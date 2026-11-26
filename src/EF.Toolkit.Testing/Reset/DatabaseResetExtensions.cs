@@ -60,9 +60,15 @@ public static class DatabaseResetExtensions
                     .ConfigureAwait(false);
                 if (DatabaseForeignKeys.Query(engine) is { } query)
                 {
+                    var caseSensitive = DatabaseForeignKeys.CaseSensitivityQuery(engine) is { } caseQuery
+                        && Convert.ToInt64(
+                            await ScalarAsync(connection, transaction, caseQuery, cancellationToken).ConfigureAwait(false),
+                            System.Globalization.CultureInfo.InvariantCulture) == 1;
+
                     plan.RefuseUnplannedReferences(
                         await ReadReferencesAsync(connection, transaction, query, cancellationToken).ConfigureAwait(false),
-                        DatabaseForeignKeys.DefaultSchema(engine));
+                        DatabaseForeignKeys.DefaultSchema(engine),
+                        caseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
                 }
 
                 if (engine == DatabaseEngine.PostgreSql)
@@ -118,8 +124,14 @@ public static class DatabaseResetExtensions
                 var state = ReadState(engine, connection, transaction, options);
                 if (DatabaseForeignKeys.Query(engine) is { } query)
                 {
+                    var caseSensitive = DatabaseForeignKeys.CaseSensitivityQuery(engine) is { } caseQuery
+                        && Convert.ToInt64(
+                            Scalar(connection, transaction, caseQuery), System.Globalization.CultureInfo.InvariantCulture) == 1;
+
                     plan.RefuseUnplannedReferences(
-                        ReadReferences(connection, transaction, query), DatabaseForeignKeys.DefaultSchema(engine));
+                        ReadReferences(connection, transaction, query),
+                        DatabaseForeignKeys.DefaultSchema(engine),
+                        caseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
                 }
 
                 if (engine == DatabaseEngine.PostgreSql)

@@ -116,6 +116,23 @@ internal static class DatabaseForeignKeys
             """;
     }
 
+    /// <summary>
+    ///     A query returning 1 when the server compares table names case-sensitively, or
+    ///     <see langword="null" /> when the engine's rule is fixed.
+    /// </summary>
+    /// <remarks>
+    ///     MySQL decides by <c>lower_case_table_names</c>: 0 — the Linux default — keeps names as given and
+    ///     compares them exactly. SQL Server compares names under the database's collation. SQLite folds
+    ///     ASCII case in identifiers always.
+    /// </remarks>
+    internal static string? CaseSensitivityQuery(DatabaseEngine engine)
+        => engine switch
+        {
+            DatabaseEngine.MySql => "SELECT CASE WHEN @@lower_case_table_names = 0 THEN 1 ELSE 0 END;",
+            DatabaseEngine.SqlServer => "SELECT CASE WHEN N'a' = N'A' THEN 0 ELSE 1 END;",
+            _ => null,
+        };
+
     /// <summary>The schema of a model table that names none, where the catalog reports schemas.</summary>
     /// <remarks>
     ///     <c>dbo</c> is SQL Server's default for the login EF connects as unless the model says

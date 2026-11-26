@@ -453,6 +453,37 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
 [Collection("testing-mysql")]
 public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture)
 {
+    [Fact]
+    public async Task A_table_differing_only_in_case_is_not_taken_for_a_reset_one()
+    {
+        // MySQL on Linux keeps table names case-sensitive by default: orders is not Orders.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        if (await ScalarAsync(context, "SELECT @@lower_case_table_names") != 0)
+        {
+            Assert.Skip("This server folds table names to one case.");
+        }
+
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE orders (Id int PRIMARY KEY, CustomerId int NOT NULL, FOREIGN KEY (CustomerId) REFERENCES Customers (Id))", Ct);
+        try
+        {
+            var customer = await context.Customers.Select(c => c.Id).FirstAsync(Ct);
+            await context.Database.ExecuteSqlRawAsync("INSERT INTO orders (Id, CustomerId) VALUES (1, {0})", [customer], Ct);
+
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("'orders', which the reset does not empty");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM orders")).ShouldBe(1);
+            (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v > 0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS orders", Ct);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
