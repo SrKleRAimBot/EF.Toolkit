@@ -23,7 +23,9 @@
                         or '$(MSBuildProjectName)' == 'EF.Toolkit.Query.Equivalence'
                         or '$(MSBuildProjectName)' == 'EF.Toolkit.Conventions.Tests'
                         or '$(MSBuildProjectName)' == 'EF.Toolkit.Sql.Tests'
-                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Sql.Integration'">
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Sql.Integration'
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Testing.Tests'
+                        or '$(MSBuildProjectName)' == 'EF.Toolkit.Testing.Integration'">
     <Using Include="Xunit" />
     <Using Include="Shouldly" />
   </ItemGroup>
