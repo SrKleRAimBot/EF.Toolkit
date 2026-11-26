@@ -65,6 +65,10 @@ public sealed class Note
 {
     public int Id { get; set; }
     public string Body { get; set; } = "";
+
+    /// <summary>Optional, and ClientNoAction: EF's delete fixup never nulls it.</summary>
+    public int? AuthorId { get; set; }
+    public Author? Author { get; set; }
 }
 
 public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tenant = null) : DbContext(options)
@@ -95,7 +99,11 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
 
         modelBuilder.Entity<FeaturedPost>();
         modelBuilder.Entity<Comment>().HasSoftDelete(c => c.DeletedAt);
-        modelBuilder.Entity<Note>().HasTimestamps();
+        modelBuilder.Entity<Note>(b =>
+        {
+            b.HasTimestamps();
+            b.HasOne(n => n.Author).WithMany().HasForeignKey(n => n.AuthorId).OnDelete(DeleteBehavior.ClientNoAction);
+        });
     }
 }
 

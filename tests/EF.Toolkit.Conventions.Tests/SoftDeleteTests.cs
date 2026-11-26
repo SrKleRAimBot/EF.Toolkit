@@ -26,7 +26,7 @@ public sealed class SoftDeleteTests : IAsyncLifetime
             new Post { Id = 2, Title = "two", Tenant = 1, Author = author, Seo = { Slug = "two-slug" } },
             new Post { Id = 3, Title = "three", Tenant = 2, Seo = { Slug = "three-slug" } },
             new FeaturedPost { Id = 4, Title = "four", Tenant = 1, Rank = 1, Seo = { Slug = "four-slug" } });
-        context.Notes.Add(new Note { Id = 1, Body = "n" });
+        context.Notes.Add(new Note { Id = 1, Body = "n", Author = author });
         await context.SaveChangesAsync(Ct);
     }
 
@@ -264,6 +264,25 @@ public sealed class SoftDeleteTests : IAsyncLifetime
         await using var fresh = _db.Context();
         (await fresh.Posts.CountAsync(p => p.AuthorId == 1, Ct)).ShouldBe(2);
         (await fresh.Authors.IncludeDeleted().SingleAsync(Ct)).Profile!.Links.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Under_Immediate_timing_a_ClientNoAction_key_the_application_nulled_stays_null()
+    {
+        // EF's fixup never nulls a ClientNoAction key, so this null can only be the application's.
+        await using (var context = _db.Context())
+        {
+            var note = await context.Notes.Include(n => n.Author).SingleAsync(Ct);
+            note.AuthorId = null;
+            context.ChangeTracker.DetectChanges();
+
+            context.Authors.Remove(await context.Authors.SingleAsync(Ct));
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Notes.SingleAsync(Ct)).AuthorId.ShouldBeNull();
+        (await fresh.Posts.CountAsync(p => p.AuthorId == 1, Ct)).ShouldBe(2);
     }
 
     [Fact]

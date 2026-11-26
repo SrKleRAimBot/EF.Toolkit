@@ -50,6 +50,23 @@ public sealed class TenantIsolationPolicyTests
     public void PostgreSql_drop_in_the_default_schema_resolves_the_table_the_way_ALTER_TABLE_does()
         => Policy.GetDropSql(SqlDialect.PostgreSql)[2].ShouldContain("polrelid = '\"Orders\"'::regclass");
 
+    [Theory]
+    [InlineData("orders$tenant_isolation$archive")]
+    [InlineData("orders$$archive")]
+    [InlineData("orders$body$archive")]
+    public void PostgreSql_drop_quotes_its_block_with_a_tag_the_table_name_cannot_close(string table)
+    {
+        var block = new TenantIsolationPolicy(table, "TenantId", "app.tenant_id", "integer", policyName: "iso")
+            .GetDropSql(SqlDialect.PostgreSql)[2];
+
+        block.ShouldStartWith("DO $");
+        var tag = block[3..(block.IndexOf('$', 4) + 1)];
+        var body = block[(3 + tag.Length)..^tag.Length];
+        body.ShouldNotContain(tag);
+        body.ShouldContain(table);
+        block.ShouldEndWith(tag);
+    }
+
     [Fact]
     public void PostgreSql_names_that_PostgreSQL_would_truncate_are_refused()
     {

@@ -143,6 +143,29 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_table_name_containing_dollar_quotes_creates_and_drops_cleanly()
+    {
+        var odd = new TenantIsolationPolicy("odd$$name", "TenantId", "app.tenant_id", "integer", policyName: "odd_iso");
+
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync("CREATE TABLE \"odd$$name\" (\"Id\" int PRIMARY KEY, \"TenantId\" int NOT NULL)", Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(odd);
+            await admin.Database.DropDatabaseObjectsAsync(odd);
+
+            var enabled = await admin.Database
+                .SqlQueryRaw<bool>("SELECT relrowsecurity AS \"Value\" FROM pg_class WHERE relname = 'odd$$name'")
+                .SingleAsync(Token);
+            enabled.ShouldBeFalse();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"odd$$name\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

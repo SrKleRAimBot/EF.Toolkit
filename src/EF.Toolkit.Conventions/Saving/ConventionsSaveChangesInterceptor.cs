@@ -178,7 +178,9 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
     {
         foreach (var foreignKey in entry.Metadata.GetForeignKeys())
         {
-            if (foreignKey.IsOwnership)
+            // ClientNoAction is the one behaviour under which EF's delete fixup never touches the
+            // dependent's key, so a null there was set by the application and is not ours to undo.
+            if (foreignKey.IsOwnership || foreignKey.DeleteBehavior == DeleteBehavior.ClientNoAction)
             {
                 continue;
             }

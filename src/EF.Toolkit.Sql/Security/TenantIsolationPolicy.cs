@@ -195,18 +195,20 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
         var target = SqlSyntax.Qualify(SqlDialect.PostgreSql, Table, Schema);
         var relation = SqlSyntax.Literal(SqlDialect.PostgreSql, target);
 
-        return $$"""
-            DO $tenant_isolation$
+        // Quoted by DollarQuote, which picks a tag the body does not contain: a fixed tag could appear
+        // inside a valid quoted table name and close the block early.
+        var body = $"""
             BEGIN
                 IF NOT EXISTS (
-                    SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = {{relation}}::regclass)
+                    SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = {relation}::regclass)
                 THEN
-                    ALTER TABLE {{target}} NO FORCE ROW LEVEL SECURITY;
-                    ALTER TABLE {{target}} DISABLE ROW LEVEL SECURITY;
+                    ALTER TABLE {target} NO FORCE ROW LEVEL SECURITY;
+                    ALTER TABLE {target} DISABLE ROW LEVEL SECURITY;
                 END IF;
             END
-            $tenant_isolation$
             """;
+
+        return "DO " + SqlSyntax.DollarQuote(body);
     }
 
     private SqlServerSecurityPolicy SqlServerPolicy()
