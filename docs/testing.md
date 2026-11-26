@@ -199,7 +199,7 @@ What each engine is sent:
 | --- | --- |
 | PostgreSQL | One `TRUNCATE TABLE a, b, ... RESTART IDENTITY`, without `CASCADE`. `TRUNCATE` checks the foreign keys between the listed tables as a set, so no order is needed. |
 | SQL Server | `DELETE` in dependency order, then `DBCC CHECKIDENT ... RESEED` for each table with an identity column. Tables on a foreign-key cycle — self-references included — have `NOCHECK CONSTRAINT ALL` for the delete and `WITH CHECK CHECK CONSTRAINT ALL` after, so the constraints come back trusted. Both run inside the reset's transaction, so a re-check that fails rolls back the deletes and the suspension together. |
-| MySQL | `DELETE` in dependency order with foreign-key checks left on, so the engine itself refuses a delete that would orphan a row — even in a table the login cannot see — then `ALTER TABLE ... AUTO_INCREMENT = 1` for each table after the commit. Only a plan with a foreign-key cycle switches the checks off (`SET FOREIGN_KEY_CHECKS = 0`, then back on). Then every foreign key in every database the login can see is checked before the commit, because MySQL never re-checks a row written while checks were off and a `DELETE` trigger could write anywhere: reset tables must have no violations, and other tables no more than they had before. Such a reset needs a login with a privilege on the whole database, or it is refused, since a login granted only some tables cannot see the others' foreign keys. |
+| MySQL | `DELETE` in dependency order with foreign-key checks left on, so the engine itself refuses a delete that would orphan a row — even in a table the login cannot see — then `ALTER TABLE ... AUTO_INCREMENT = 1` for each table after the commit. Only a plan with a foreign-key cycle switches the checks off (`SET FOREIGN_KEY_CHECKS = 0`, then back on). Then every foreign key in every database the login can see is checked before the commit, because MySQL never re-checks a row written while checks were off and a `DELETE` trigger could write anywhere: reset tables must have no violations, and other tables no more than they had before. Every MySQL reset needs a login with a privilege on the whole database, or it is refused: a login granted only some tables cannot see the others or their foreign keys, so an `ON DELETE CASCADE` there would empty rows it never checked. Tables that ignore transactions (MyISAM, MEMORY) are refused too, since a rollback could not restore them. |
 | SQLite | `PRAGMA foreign_keys = OFF`, `DELETE` each, clear `sqlite_sequence` for those tables, then back on. |
 
 The deletes run as **one unit**: a transaction, or a savepoint inside yours when one is open. A
@@ -441,9 +441,15 @@ backing field EF maps.
   same way; on MySQL a reset would commit it. Start transactions through EF.
 - **MySQL cannot restart identity inside a transaction.** `ALTER TABLE` commits implicitly, so inside
   an isolated scope the counters carry on.
-- **A MySQL temporary table named like a mapped one is refused.** MySQL resolves the name to the
-  session's temporary table first, even qualified with the database, so the reset would empty it
-  instead. Drop it, or reset on another connection.
+- **A MySQL temporary table named like a mapped one is refused** — or like any table the foreign-key
+  check reads. MySQL resolves the name to the session's temporary table first, even qualified with the
+  database, so the reset would empty it, or check it, instead. Drop it, or reset on another connection.
+- **MySQL foreign keys in a database the login has no access to are out of reach.** The reset sees
+  every table in its own database, which its privilege guarantees, and in any other database it has a
+  privilege on. A foreign key from a database it cannot see at all — whose `ON DELETE CASCADE` would
+  act on the reset, or whose rows a trigger could orphan while checks are off — is hidden from it, as
+  from every client short of a server-wide privilege. Run the reset as a login that can see every
+  database that references the test database.
 - **SQL Server re-enables every constraint on a cyclic table**, including one that was disabled on
   purpose. Temporal tables keep their history.
 - **`ResetDataAsync` clears the change tracker, and `SeedAsync` saves everything pending.** Both act on

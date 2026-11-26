@@ -175,6 +175,20 @@ internal static class DatabaseForeignKeys
             + $"WHERE d.GRANTEE = {grantee} AND DATABASE() LIKE d.TABLE_SCHEMA ESCAPE {escape}) THEN 1 ELSE 0 END;";
     }
 
+    /// <summary>
+    ///     MySQL: the tables in <paramref name="plan" /> whose storage engine does not support
+    ///     transactions — rows of (table, engine).
+    /// </summary>
+    internal static string MySqlNonTransactional(ResetPlan plan, bool noBackslashEscapes) => $"""
+        SELECT t.TABLE_NAME, COALESCE(t.ENGINE, '')
+        FROM information_schema.TABLES AS t
+        LEFT JOIN information_schema.ENGINES AS e ON e.ENGINE = t.ENGINE
+        WHERE t.TABLE_SCHEMA = DATABASE()
+          AND t.TABLE_TYPE = 'BASE TABLE'
+          AND t.TABLE_NAME IN ({MySqlNames(plan, noBackslashEscapes)})
+          AND COALESCE(e.TRANSACTIONS, 'NO') <> 'YES';
+        """;
+
     // A backslash escapes in a MySQL string literal unless the session's sql_mode has
     // NO_BACKSLASH_ESCAPES, where it is just a backslash: doubling it there would name another table.
     private static string MySqlNames(ResetPlan plan, bool noBackslashEscapes)

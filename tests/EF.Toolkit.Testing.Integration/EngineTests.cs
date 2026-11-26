@@ -817,15 +817,15 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
     public async Task A_table_the_login_cannot_see_keeps_its_rows_and_its_parents(bool acyclic)
     {
         // Granted only the mapped tables, the login sees neither HiddenChild nor its foreign key. With the
-        // checks off a reset emptied Customers under it; now the checks stay on where they can, and where
-        // they cannot the reset is refused.
+        // checks off a reset emptied Customers under it; with them on, an ON DELETE CASCADE emptied
+        // HiddenChild itself. Such a login is refused.
         Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
         await using var context = Fixture.CreateContext();
         await ShopData.SeedEverythingAsync(context);
         var before = await ShopData.CountsAsync(context);
         var customer = await context.Customers.Select(c => c.Id).FirstAsync(Ct);
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE TABLE HiddenChild (Id int PRIMARY KEY, CustomerId int NOT NULL, FOREIGN KEY (CustomerId) REFERENCES Customers (Id))", Ct);
+            "CREATE TABLE HiddenChild (Id int PRIMARY KEY, CustomerId int NOT NULL, FOREIGN KEY (CustomerId) REFERENCES Customers (Id) ON DELETE CASCADE)", Ct);
         await context.Database.ExecuteSqlRawAsync("INSERT INTO HiddenChild VALUES (1, {0})", [customer], Ct);
         var tables = await context.Database.SqlQueryRaw<string>(
                 "SELECT TABLE_NAME AS Value FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME <> 'HiddenChild'")
@@ -843,16 +843,10 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
             await using var limited = LimitedContext("tables_only");
             (await ScalarAsync(limited, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_NAME = 'HiddenChild'")).ShouldBe(0);
 
-            if (acyclic)
-            {
-                await Should.ThrowAsync<DbException>(() => limited.Database.ResetDataAsync(
-                    o => o.ExcludeEntity<Category>().ExcludeEntity<Team>().ExcludeEntity<Player>(), Ct));
-            }
-            else
-            {
-                (await Should.ThrowAsync<InvalidOperationException>(() => limited.Database.ResetDataAsync(cancellationToken: Ct)))
-                    .Message.ShouldContain("holds no privilege on the whole database");
-            }
+            (await Should.ThrowAsync<InvalidOperationException>(() => acyclic
+                    ? limited.Database.ResetDataAsync(o => o.ExcludeEntity<Category>().ExcludeEntity<Team>().ExcludeEntity<Player>(), Ct)
+                    : limited.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("holds no privilege on the whole database");
 
             (await ShopData.CountsAsync(context)).ShouldBe(before);
             (await ScalarAsync(context, "SELECT COUNT(*) FROM HiddenChild")).ShouldBe(1);
@@ -921,6 +915,65 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
             // The connection goes back to the pool with its session, temporary tables included.
             await context.Database.ExecuteSqlRawAsync("DROP TEMPORARY TABLE IF EXISTS Customers", Ct);
             await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_table_without_transactions_is_refused_before_anything_is_deleted()
+    {
+        // A MyISAM table ignores the rollback: a reset failing after it was emptied left it emptied.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        // MyISAM keys are limited to 1000 bytes, so the key column is narrowed for the test and put back after.
+        var codeType = await context.Database.SqlQueryRaw<string>(
+                "SELECT COLUMN_TYPE AS Value FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Tags' AND COLUMN_NAME = 'Code'")
+            .SingleAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("ALTER TABLE Tags MODIFY Code varchar(100) NOT NULL, ENGINE = MyISAM", Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("'Tags': it uses the MyISAM storage engine");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+        }
+        finally
+        {
+            var restore = "ALTER TABLE Tags ENGINE = InnoDB, MODIFY Code " + codeType + " NOT NULL";
+            await context.Database.ExecuteSqlRawAsync(restore, Ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_temporary_table_shadowing_one_the_check_reads_is_refused_before_anything_is_deleted()
+    {
+        // An empty temporary OutChild answered for the permanent one: the trigger's orphan went unseen.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await CreateOutsideTablesAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER WriteOutside AFTER DELETE ON Categories FOR EACH ROW INSERT INTO OutChild VALUES (OLD.Id + 1000, 2147483647)", Ct);
+        await context.Database.OpenConnectionAsync(Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("CREATE TEMPORARY TABLE OutChild (Id int PRIMARY KEY, ParentId int NOT NULL)", Ct);
+
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct)))
+                .Message.ShouldContain("temporary table of that name");
+
+            await context.Database.ExecuteSqlRawAsync("DROP TEMPORARY TABLE OutChild", Ct);
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM OutChild")).ShouldBe(0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TEMPORARY TABLE IF EXISTS OutChild", Ct);
+            await context.Database.CloseConnectionAsync();
+            await DropOutsideTablesAsync(context);
         }
     }
 

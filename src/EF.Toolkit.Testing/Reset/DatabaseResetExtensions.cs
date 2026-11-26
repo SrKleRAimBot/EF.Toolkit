@@ -88,19 +88,17 @@ public static class DatabaseResetExtensions
 
                 if (engine == DatabaseEngine.MySql)
                 {
-                    foreach (var table in plan.Tables)
-                    {
-                        var rows = await ReadRowsAsync(connection, transaction, ResetSqlGenerator.MySqlShowCreate(table), cancellationToken)
-                            .ConfigureAwait(false);
-                        RefuseMySqlTemporary(table, rows);
-                    }
+                    RefuseMySqlPartialVisibility(Convert.ToInt64(
+                        await ScalarAsync(connection, transaction, DatabaseForeignKeys.MySqlSeesEveryTable(state.MySqlNoBackslashEscapes), cancellationToken)
+                            .ConfigureAwait(false),
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    RefuseMySqlNonTransactional(
+                        await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlNonTransactional(plan, state.MySqlNoBackslashEscapes), cancellationToken)
+                            .ConfigureAwait(false));
+                    await RefuseMySqlTemporaryAsync(connection, transaction, plan.Tables, cancellationToken).ConfigureAwait(false);
 
                     if (ResetSqlGenerator.MySqlVerifies(plan, state))
                     {
-                        RefuseMySqlPartialVisibility(Convert.ToInt64(
-                            await ScalarAsync(connection, transaction, DatabaseForeignKeys.MySqlSeesEveryTable(state.MySqlNoBackslashEscapes), cancellationToken)
-                                .ConfigureAwait(false),
-                            System.Globalization.CultureInfo.InvariantCulture));
                         state = await WithMySqlForeignKeysAsync(connection, transaction, plan, state, cancellationToken).ConfigureAwait(false);
                     }
                 }
@@ -177,16 +175,15 @@ public static class DatabaseResetExtensions
 
                 if (engine == DatabaseEngine.MySql)
                 {
-                    foreach (var table in plan.Tables)
-                    {
-                        RefuseMySqlTemporary(table, ReadRows(connection, transaction, ResetSqlGenerator.MySqlShowCreate(table)));
-                    }
+                    RefuseMySqlPartialVisibility(Convert.ToInt64(
+                        Scalar(connection, transaction, DatabaseForeignKeys.MySqlSeesEveryTable(state.MySqlNoBackslashEscapes)),
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    RefuseMySqlNonTransactional(
+                        ReadRows(connection, transaction, DatabaseForeignKeys.MySqlNonTransactional(plan, state.MySqlNoBackslashEscapes)));
+                    RefuseMySqlTemporary(connection, transaction, plan.Tables);
 
                     if (ResetSqlGenerator.MySqlVerifies(plan, state))
                     {
-                        RefuseMySqlPartialVisibility(Convert.ToInt64(
-                            Scalar(connection, transaction, DatabaseForeignKeys.MySqlSeesEveryTable(state.MySqlNoBackslashEscapes)),
-                            System.Globalization.CultureInfo.InvariantCulture));
                         state = WithMySqlForeignKeys(connection, transaction, plan, state);
                     }
                 }
@@ -386,7 +383,46 @@ public static class DatabaseResetExtensions
 
     // MySQL resolves a name to the session's temporary table of that name first, even qualified with the
     // database, and has no syntax for the permanent one behind it: the reset would empty the temporary
-    // table, report success, and leave every row it was asked to remove.
+    // table, report success, and leave every row it was asked to remove. A table the verification reads
+    // is no different — an empty temporary one would hide the permanent table's violations — so both ends
+    // of every key it checks are refused the same way.
+    private static async Task RefuseMySqlTemporaryAsync(
+        DbConnection connection, DbTransaction? transaction, IEnumerable<ResetTable> tables, CancellationToken cancellationToken)
+    {
+        foreach (var table in tables)
+        {
+            RefuseMySqlTemporary(
+                table,
+                await ReadRowsAsync(connection, transaction, ResetSqlGenerator.MySqlShowCreate(table), cancellationToken).ConfigureAwait(false));
+        }
+    }
+
+    private static void RefuseMySqlTemporary(DbConnection connection, DbTransaction? transaction, IEnumerable<ResetTable> tables)
+    {
+        foreach (var table in tables)
+        {
+            RefuseMySqlTemporary(table, ReadRows(connection, transaction, ResetSqlGenerator.MySqlShowCreate(table)));
+        }
+    }
+
+    private static IEnumerable<ResetTable> TablesOf(IEnumerable<MySqlForeignKey> keys)
+        => keys
+            .SelectMany(k => new[] { new ResetTable(k.TableSchema, k.Table), new ResetTable(k.ReferencedSchema, k.ReferencedTable) })
+            .Distinct();
+
+    // MyISAM and MEMORY tables ignore transactions: a reset that failed later would roll back every other
+    // table and leave these emptied for good, the half-done state the unit exists to rule out.
+    private static void RefuseMySqlNonTransactional(List<string[]> tables)
+    {
+        if (tables.FirstOrDefault() is { } table)
+        {
+            throw new InvalidOperationException(
+                $"Cannot reset '{table[0]}': it uses the {table[1]} storage engine, which does not support transactions, "
+                + "so a reset that failed part way could not put its rows back. Convert it to InnoDB "
+                + "(ALTER TABLE ... ENGINE = InnoDB), or exclude it from the reset.");
+        }
+    }
+
     private static void RefuseMySqlTemporary(ResetTable table, List<string[]> showCreate)
     {
         if (showCreate.Count > 0 && showCreate[0].Length > 1
@@ -404,10 +440,10 @@ public static class DatabaseResetExtensions
         if (seesEveryTable == 0)
         {
             throw new InvalidOperationException(
-                "Cannot reset: the reset runs with MySQL's foreign-key checks off — the model has a foreign-key cycle, "
-                + "or the session already had them off — and this login holds no privilege on the whole database — only on some of its tables. The "
-                + "tables it cannot see, and their foreign keys, are hidden from it, so rows there could be orphaned "
-                + "with nothing able to check them. Grant the login a privilege on the database itself (for example "
+                "Cannot reset: this login holds no privilege on the whole database, only on some of its tables. The "
+                + "tables it cannot see, and their foreign keys, are hidden from it, so rows there could be deleted by "
+                + "an ON DELETE CASCADE, or orphaned while checks are off for a foreign-key cycle, with nothing able "
+                + "to check them. Grant the login a privilege on the database itself (for example "
                 + "GRANT SELECT ON `db`.* TO it) or run the reset as the database's owner.");
         }
     }
@@ -425,6 +461,7 @@ public static class DatabaseResetExtensions
         var keys = DatabaseForeignKeys.GroupMySqlForeignKeys(
             await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, state.MySqlNoBackslashEscapes), cancellationToken)
                 .ConfigureAwait(false));
+        await RefuseMySqlTemporaryAsync(connection, transaction, TablesOf(keys), cancellationToken).ConfigureAwait(false);
         var outside = keys.Where(k => !k.InPlan).ToList();
         var before = outside.Count == 0
             ? []
@@ -437,6 +474,7 @@ public static class DatabaseResetExtensions
     {
         var keys = DatabaseForeignKeys.GroupMySqlForeignKeys(
             ReadRows(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, state.MySqlNoBackslashEscapes)));
+        RefuseMySqlTemporary(connection, transaction, TablesOf(keys));
         var outside = keys.Where(k => !k.InPlan).ToList();
         var before = outside.Count == 0 ? [] : ReadRows(connection, transaction, MySqlCounts(outside))[0];
         return state with { MySqlForeignKeys = WithCounts(keys, outside, before) };
