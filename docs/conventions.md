@@ -116,6 +116,12 @@ foreign keys `Remove()` nulled on loaded optional dependents are all put back. D
 from ones the application removed itself; use `CascadeTiming.OnSaveChanges` (below) where that matters,
 under which `Remove()` touches no dependent until the save.
 
+The nulled keys are put back from the value EF tracks as each dependent's **original** — the one it
+was loaded with. A dependent moved to the removed principal earlier in the same unit of work is the
+exception: its key's value from just before `Remove()` is kept nowhere EF exposes, so under `Immediate`
+timing it stays nulled, for both a soft delete and a `Restore()`. `OnSaveChanges` timing has no fixup to
+undo and keeps it.
+
 ### Set-based
 
 The same, as one statement over every matching row, with nothing loaded:

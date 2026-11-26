@@ -212,6 +212,34 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Under_OnSaveChanges_timing_a_reparented_dependent_survives_Remove_then_Restore_of_its_new_principal()
+    {
+        // Under Immediate timing this is the one sequence the repair cannot follow: the key's value
+        // before Remove()'s fixup — the new principal — is kept nowhere EF exposes. Under OnSaveChanges
+        // there is no fixup to undo.
+        await using (var context = _db.Context())
+        {
+            context.ChangeTracker.CascadeDeleteTiming = CascadeTiming.OnSaveChanges;
+            context.ChangeTracker.DeleteOrphansTiming = CascadeTiming.OnSaveChanges;
+            var newAuthor = new Author { Id = 2, Name = "bo" };
+            context.Authors.Add(newAuthor);
+            await context.SaveChangesAsync(Ct);
+
+            var post = await context.Posts.SingleAsync(p => p.Id == 1, Ct);
+            post.AuthorId = 2;
+            context.ChangeTracker.DetectChanges();
+
+            context.Authors.Remove(newAuthor);
+            context.Restore(newAuthor);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.SingleAsync(p => p.Id == 1, Ct)).AuthorId.ShouldBe(2);
+        (await fresh.Authors.CountAsync(Ct)).ShouldBe(2);
+    }
+
+    [Fact]
     public async Task Restore_after_Remove_keeps_a_nested_owned_collection()
     {
         await using (var context = _db.Context())
