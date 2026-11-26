@@ -86,6 +86,63 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task Dropping_isolation_checks_the_table_search_path_resolves_to()
+    {
+        // search_path = app, public with no app."Documents": the unqualified name resolves to
+        // public."Documents", which has a policy of its own. A check against current_schema() would look
+        // in app, find nothing, and switch off row-level security on the table that does have one.
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.OpenConnectionAsync(Token);
+        await admin.Database.ExecuteSqlRawAsync("CREATE SCHEMA IF NOT EXISTS app", Token);
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE POLICY tenant_one_only ON public.\"Documents\" AS PERMISSIVE USING (\"TenantId\" = 1)", Token);
+        try
+        {
+            await admin.Database.ExecuteSqlRawAsync("SET search_path = app, public", Token);
+            await admin.Database.DropDatabaseObjectsAsync(Isolation);
+
+            await using var context = AppContext(() => null);
+            (await TitlesAsync(context)).ShouldBe(["one-a", "one-b"]);
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("SET search_path = public", Token);
+            await admin.Database.ExecuteSqlRawAsync("DROP POLICY IF EXISTS tenant_one_only ON public.\"Documents\"", Token);
+            await admin.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS app", Token);
+        }
+    }
+
+    [Fact]
+    public async Task Without_the_base_grant_the_tables_own_policies_still_decide_within_a_tenant()
+    {
+        // The table already limits every role to titles ending '-a'. The blanket base grant would widen
+        // that to every row of the tenant; grantAccess: false leaves the existing rule in charge.
+        var narrow = new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "integer", grantAccess: false);
+
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.DropDatabaseObjectsAsync(Isolation);
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE POLICY a_titles_only ON \"Documents\" AS PERMISSIVE USING (\"Title\" LIKE '%-a')", Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(narrow);
+
+            await using (var one = AppContext(() => 1))
+            {
+                (await TitlesAsync(one)).ShouldBe(["one-a"]);
+            }
+
+            await using var none = AppContext(() => null);
+            (await none.Documents.CountAsync(Token)).ShouldBe(0);
+        }
+        finally
+        {
+            await admin.Database.DropDatabaseObjectsAsync(narrow);
+            await admin.Database.ExecuteSqlRawAsync("DROP POLICY IF EXISTS a_titles_only ON \"Documents\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

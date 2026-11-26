@@ -42,13 +42,60 @@ public sealed class TenantIsolationPolicyTests
         drop[0].ShouldBe("DROP POLICY IF EXISTS \"iso_access\" ON \"shop\".\"Orders\"");
         drop[1].ShouldBe("DROP POLICY IF EXISTS \"iso\" ON \"shop\".\"Orders\"");
         drop[2].ShouldContain("IF NOT EXISTS (");
-        drop[2].ShouldContain("WHERE schemaname = 'shop' AND tablename = 'Orders'");
+        drop[2].ShouldContain("WHERE polrelid = '\"shop\".\"Orders\"'::regclass");
         drop[2].ShouldContain("ALTER TABLE \"shop\".\"Orders\" DISABLE ROW LEVEL SECURITY;");
     }
 
     [Fact]
-    public void PostgreSql_drop_in_the_default_schema_checks_the_current_one()
-        => Policy.GetDropSql(SqlDialect.PostgreSql)[2].ShouldContain("schemaname = current_schema()");
+    public void PostgreSql_drop_in_the_default_schema_resolves_the_table_the_way_ALTER_TABLE_does()
+        => Policy.GetDropSql(SqlDialect.PostgreSql)[2].ShouldContain("polrelid = '\"Orders\"'::regclass");
+
+    [Fact]
+    public void PostgreSql_names_that_PostgreSQL_would_truncate_are_refused()
+    {
+        // 63 bytes on its own, so "_access" takes the pair past the limit and both would truncate to
+        // the same name — the access policy's DROP IF EXISTS would then remove the tenant policy.
+        var name = new string('p', 63);
+        var policy = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "integer", policyName: name);
+
+        Should.Throw<ArgumentException>(() => policy.GetCreateSql(SqlDialect.PostgreSql))
+            .Message.ShouldContain("truncates names past 63");
+        Should.Throw<ArgumentException>(() => policy.GetDropSql(SqlDialect.PostgreSql));
+    }
+
+    [Fact]
+    public void PostgreSql_counts_bytes_not_characters()
+    {
+        // 28 two-byte characters plus "_access" is exactly 63 bytes and allowed; one more character is not.
+        new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "integer", policyName: new string('é', 28))
+            .GetCreateSql(SqlDialect.PostgreSql).ShouldNotBeEmpty();
+        Should.Throw<ArgumentException>(() => new TenantIsolationPolicy(
+            "Orders", "TenantId", "app.tenant_id", "integer", policyName: new string('é', 29)).GetCreateSql(SqlDialect.PostgreSql));
+    }
+
+    [Fact]
+    public void A_long_default_name_is_refused_too()
+        => Should.Throw<ArgumentException>(() => new TenantIsolationPolicy(
+            new string('t', 40), "TenantId", "app.tenant_id", "integer").GetCreateSql(SqlDialect.PostgreSql));
+
+    [Fact]
+    public void Without_the_base_grant_only_the_restrictive_policy_is_created_and_dropped()
+    {
+        var policy = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "integer", grantAccess: false);
+
+        policy.GrantsAccess.ShouldBeFalse();
+        var create = policy.GetCreateSql(SqlDialect.PostgreSql);
+        create.Count.ShouldBe(4);
+        create.ShouldNotContain(sql => sql.Contains("_access", StringComparison.Ordinal));
+
+        var drop = policy.GetDropSql(SqlDialect.PostgreSql);
+        drop.Count.ShouldBe(2);
+        drop.ShouldNotContain(sql => sql.Contains("_access", StringComparison.Ordinal));
+
+        // A name only the restrictive policy carries may use the whole limit.
+        new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "integer", policyName: new string('p', 63), grantAccess: false)
+            .GetCreateSql(SqlDialect.PostgreSql).ShouldNotBeEmpty();
+    }
 
     [Theory]
     [InlineData("tenant_id")]

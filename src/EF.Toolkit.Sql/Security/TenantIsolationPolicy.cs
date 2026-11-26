@@ -55,13 +55,21 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
     ///     The policy name. <see langword="null" /> for <c>&lt;table&gt;_tenant_isolation</c>; the SQL
     ///     Server predicate function is named after the policy with a <c>_predicate</c> suffix.
     /// </param>
+    /// <param name="grantAccess">
+    ///     PostgreSQL only. <see langword="true" /> (the default) also creates the permissive
+    ///     <see cref="AccessPolicyName" /> policy granting every row, which the restrictive tenant policy
+    ///     then narrows — without some permissive policy PostgreSQL grants nothing. Pass
+    ///     <see langword="false" /> when the table's own permissive policies already decide which rows a
+    ///     role may see: a blanket grant would widen them to every row of the tenant.
+    /// </param>
     public TenantIsolationPolicy(
         string table,
         string tenantColumn,
         string sessionKey,
         string columnStoreType,
         string? schema = null,
-        string? policyName = null)
+        string? policyName = null,
+        bool grantAccess = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantColumn);
@@ -78,6 +86,7 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
         ColumnStoreType = columnStoreType.Trim();
         Schema = SqlSyntax.OptionalName(schema, nameof(schema));
         PolicyName = policyName ?? table + "_tenant_isolation";
+        GrantsAccess = grantAccess;
     }
 
     /// <summary>The isolated table.</summary>
@@ -98,6 +107,9 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
     /// <summary>The policy name.</summary>
     public string PolicyName { get; }
 
+    /// <summary>Whether the PostgreSQL rendering includes the permissive base grant.</summary>
+    public bool GrantsAccess { get; }
+
     /// <inheritdoc />
     public IReadOnlyList<string> GetCreateSql(SqlDialect dialect)
         => dialect switch
@@ -106,7 +118,7 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
             [
                 .. new RowLevelSecurityTable(Table, Schema, force: true).GetCreateSql(dialect),
                 .. PostgreSqlPolicy().GetCreateSql(dialect),
-                .. PostgreSqlAccessPolicy().GetCreateSql(dialect),
+                .. (GrantsAccess ? PostgreSqlAccessPolicy().GetCreateSql(dialect) : []),
             ],
             SqlDialect.SqlServer => SqlServerPolicy().GetCreateSql(dialect),
             _ => throw NotSupported(dialect),
@@ -118,7 +130,7 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
         {
             SqlDialect.PostgreSql =>
             [
-                .. PostgreSqlAccessPolicy().GetDropSql(dialect),
+                .. (GrantsAccess ? PostgreSqlAccessPolicy().GetDropSql(dialect) : []),
                 .. PostgreSqlPolicy().GetDropSql(dialect),
                 DisableIfUnpoliced(),
             ],
@@ -126,9 +138,29 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
             _ => throw NotSupported(dialect),
         };
 
+    // PostgreSQL truncates identifiers past 63 bytes without an error. Two names that agree on their
+    // first 63 bytes are then one policy — and since each create is preceded by DROP POLICY IF EXISTS,
+    // creating the access policy would silently drop the tenant policy just created, leaving USING (true).
+    private const int PostgreSqlIdentifierBytes = 63;
+
+    private void RequireDistinctPostgreSqlNames()
+    {
+        var longest = GrantsAccess ? AccessPolicyName : PolicyName;
+        var bytes = System.Text.Encoding.UTF8.GetByteCount(longest);
+        if (bytes > PostgreSqlIdentifierBytes)
+        {
+            throw new ArgumentException(
+                $"The PostgreSQL policy name '{longest}' is {bytes} bytes; PostgreSQL truncates names past "
+                + $"{PostgreSqlIdentifierBytes}, which can merge the tenant policy with its '_access' "
+                + "counterpart and silently remove tenant isolation. Pass a shorter policyName.",
+                "policyName");
+        }
+    }
+
     private RowLevelSecurityPolicy PostgreSqlPolicy()
     {
         SessionContextSql.ValidateKey(SqlDialect.PostgreSql, SessionKey);
+        RequireDistinctPostgreSqlNames();
 
         // NULLIF because a setting that was set and then cleared reads back as '' rather than NULL,
         // and casting '' to integer or uuid is an error on every query against the table.
@@ -156,17 +188,18 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
     // unconditionally would leave any other policy on the table defined but no longer enforced.
     private string DisableIfUnpoliced()
     {
+        // The relation is resolved by regclass exactly as the ALTER TABLE below resolves it — through
+        // search_path when unqualified — so the check and the change can never look at two different
+        // tables. Comparing a schema name with current_schema() could: an unqualified name resolves to
+        // the first schema on the path that has it, which need not be the first schema on the path.
         var target = SqlSyntax.Qualify(SqlDialect.PostgreSql, Table, Schema);
-        var schema = Schema is null
-            ? "current_schema()"
-            : SqlSyntax.Literal(SqlDialect.PostgreSql, Schema);
+        var relation = SqlSyntax.Literal(SqlDialect.PostgreSql, target);
 
         return $$"""
             DO $tenant_isolation$
             BEGIN
                 IF NOT EXISTS (
-                    SELECT 1 FROM pg_policies
-                    WHERE schemaname = {{schema}} AND tablename = {{SqlSyntax.Literal(SqlDialect.PostgreSql, Table)}})
+                    SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = {{relation}}::regclass)
                 THEN
                     ALTER TABLE {{target}} NO FORCE ROW LEVEL SECURITY;
                     ALTER TABLE {{target}} DISABLE ROW LEVEL SECURITY;

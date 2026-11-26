@@ -254,6 +254,17 @@ only ever remove rows, though, and with no permissive policy PostgreSQL grants n
 `_access` policy is that grant. It makes any other permissive policy on the table redundant within a
 tenant, but other restrictive policies still apply on top.
 
+When the table's own permissive policies already decide which rows a role may see — published rows
+only, say — pass `grantAccess: false`. Only the restrictive tenant policy is created, and those
+policies keep deciding within each tenant:
+
+```csharp
+new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "integer", grantAccess: false)
+```
+
+PostgreSQL silently truncates identifiers past 63 bytes, which could merge the tenant policy with its
+`_access` counterpart. A name that would be truncated is refused; pass a shorter `policyName`.
+
 `DropTenantIsolation` removes both policies and switches row-level security off again **only if no
 other policy remains on the table**, so a rollback never leaves someone else's policy defined but
 unenforced.
