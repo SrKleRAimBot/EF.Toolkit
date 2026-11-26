@@ -61,6 +61,14 @@ public sealed class Comment
 
     /// <summary>An optimistic-concurrency token, so a soft delete can lose a race.</summary>
     public int Version { get; set; }
+
+    /// <summary>A complex property: its members are columns of the comment's own row.</summary>
+    public CommentMeta Meta { get; set; } = new();
+}
+
+public sealed class CommentMeta
+{
+    public string Mood { get; set; } = "calm";
 }
 
 /// <summary>No soft delete, shadow timestamps.</summary>
@@ -109,6 +117,7 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
         {
             b.HasSoftDelete(c => c.DeletedAt);
             b.Property(c => c.Version).IsConcurrencyToken();
+            b.ComplexProperty(c => c.Meta);
         });
         modelBuilder.Entity<Note>(b =>
         {
@@ -231,5 +240,6 @@ public sealed class PooledCommentsContext(DbContextOptions<PooledCommentsContext
             b.ToTable("Comments");
             b.HasSoftDelete(c => c.DeletedAt);
             b.Property(c => c.Version).IsConcurrencyToken();
+            b.ComplexProperty(c => c.Meta);
         });
 }

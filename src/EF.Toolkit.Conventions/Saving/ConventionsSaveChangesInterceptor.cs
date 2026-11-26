@@ -158,16 +158,10 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
             // discards them, so they are accepted as the baseline instead — all but concurrency tokens,
             // whose original value is what the UPDATE's WHERE clause has to check.
             entry.State = EntityState.Unchanged;
-            foreach (var other in entry.Properties)
+            AcceptAsBaseline(entry.Properties);
+            foreach (var complex in entry.ComplexProperties)
             {
-                if (!other.Metadata.IsConcurrencyToken
-                    && !other.Metadata.IsPrimaryKey()
-                    && !Equals(other.CurrentValue, other.OriginalValue))
-                {
-                    other.OriginalValue = other.CurrentValue;
-                }
-
-                other.IsModified = false;
+                AcceptAsBaseline(complex);
             }
 
             property.CurrentValue = ConventionMetadata.DeletedValue(mapping, now);
@@ -197,6 +191,38 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
         }
 
         CascadeRepair.RestoreNulledForeignKeys(context, state.Converted.Select(c => c.Entry).ToList());
+    }
+
+    private static void AcceptAsBaseline(IEnumerable<PropertyEntry> properties)
+    {
+        foreach (var property in properties)
+        {
+            if (!property.Metadata.IsConcurrencyToken
+                && !property.Metadata.IsPrimaryKey()
+                && !Equals(property.CurrentValue, property.OriginalValue))
+            {
+                property.OriginalValue = property.CurrentValue;
+            }
+
+            property.IsModified = false;
+        }
+    }
+
+    // A complex property's members are columns of the same row, so pre-Remove() edits to them are
+    // discarded the same way — at every level of nesting. An absent optional complex value has no
+    // members to read.
+    private static void AcceptAsBaseline(ComplexPropertyEntry complex)
+    {
+        if (complex.CurrentValue is null)
+        {
+            return;
+        }
+
+        AcceptAsBaseline(complex.Properties);
+        foreach (var nested in complex.ComplexProperties)
+        {
+            AcceptAsBaseline(nested);
+        }
     }
 
     // Remove() cascades to loaded required dependents, but only the principal carries the HardDelete()

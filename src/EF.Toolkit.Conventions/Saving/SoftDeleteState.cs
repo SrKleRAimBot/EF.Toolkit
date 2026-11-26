@@ -1,9 +1,10 @@
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace EFToolkit.Conventions.Saving;
 
 /// <summary>Per-context bookkeeping for soft delete. Scoped to one context instance.</summary>
-internal sealed class SoftDeleteState
+internal sealed class SoftDeleteState : IResettableService
 {
     private readonly HashSet<object> _hardDeletes = new(ReferenceEqualityComparer.Instance);
 
@@ -38,4 +39,20 @@ internal sealed class SoftDeleteState
 
     /// <summary>Forgets the hard-delete marks a save has carried out, keeping those <paramref name="stillPending" /> says are not.</summary>
     internal void ClearHardDeletes(Func<object, bool> stillPending) => _hardDeletes.RemoveWhere(entity => !stillPending(entity));
+
+    /// <summary>Clears everything when a pooled context is returned: the next lease starts clean.</summary>
+    public void ResetState()
+    {
+        _hardDeletes.Clear();
+        _propagated.Clear();
+        Converted.Clear();
+        Pending.Clear();
+    }
+
+    /// <inheritdoc cref="ResetState" />
+    public Task ResetStateAsync(CancellationToken cancellationToken = default)
+    {
+        ResetState();
+        return Task.CompletedTask;
+    }
 }

@@ -42,6 +42,11 @@ public sealed class ConventionsOptionsExtension : IDbContextOptionsExtension
         // interceptor that reads it each belong to exactly one context.
         services.AddScoped<SoftDeleteState>();
         services.AddScoped<IInterceptor, ConventionsSaveChangesInterceptor>();
+
+        // With context pooling the scope outlives a lease: EF resets the context and keeps its services.
+        // As a resettable service the state is cleared with it, so a HardDelete() mark from one lease
+        // cannot turn a later lease's ordinary Remove() of the same instance into a real delete.
+        services.AddScoped<IResettableService>(provider => provider.GetRequiredService<SoftDeleteState>());
     }
 
     /// <inheritdoc />

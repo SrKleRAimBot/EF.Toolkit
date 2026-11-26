@@ -588,6 +588,55 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_HardDelete_mark_from_one_pooled_lease_does_not_reach_the_next()
+    {
+        // The lease that called HardDelete() was returned without saving. Its scoped state lived on,
+        // so the next lease's ordinary Remove() of the same instance deleted the row for real.
+        var factory = PooledComments();
+        Comment comment;
+        await using (var first = factory.CreateDbContext())
+        {
+            comment = await first.Comments.SingleAsync(c => c.Id == 2, Ct);
+            first.HardDelete(comment);
+        }
+
+        await using (var second = factory.CreateDbContext())
+        {
+            second.Comments.Remove(comment);
+            await second.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct)).DeletedAt.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task Edits_to_a_complex_property_before_Remove_are_discarded_like_any_other()
+    {
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            comment.Meta.Mood = "edited before the remove";
+            context.Comments.Remove(comment);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct);
+        stored.DeletedAt.ShouldNotBeNull();
+        stored.Meta.Mood.ShouldBe("calm");
+    }
+
+    private Microsoft.EntityFrameworkCore.Infrastructure.PooledDbContextFactory<PooledCommentsContext> PooledComments()
+        => new(
+            new DbContextOptionsBuilder<PooledCommentsContext>()
+                .UseSqlite(_db.Connection)
+                .UseEntityConventions(c => c.Clock(_db.Clock))
+                .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.ManyServiceProvidersCreatedWarning))
+                .Options,
+            poolSize: 1);
+
+    [Fact]
     public async Task A_pooled_context_still_restores_a_lost_concurrency_race_on_its_second_lease()
     {
         // EF puts a pooled context's event handlers back on every lease; the interceptor, scoped to the
