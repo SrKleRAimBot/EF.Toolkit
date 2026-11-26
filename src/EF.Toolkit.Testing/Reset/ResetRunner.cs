@@ -5,7 +5,7 @@ namespace EFToolkit.Testing;
 /// <summary>Runs a <see cref="ResetScript" />, as one unit where the engine allows, and restores what it changed.</summary>
 /// <remarks>
 ///     <para>
-///         The order is prologue, begin, body, commit. If anything fails after the unit began, it is
+///         The order is prologue, begin, body, verify, commit. If anything fails after the unit began, it is
 ///         rolled back first — the rows come back before any check is switched on again, so no
 ///         half-emptied state is ever committed. Then <c>Epilogue[i]</c> undoes <c>Prologue[i]</c>, for
 ///         every prologue statement that ran, in reverse.
@@ -20,9 +20,14 @@ namespace EFToolkit.Testing;
 /// </remarks>
 internal static class ResetRunner
 {
+    internal const string VerifyFailed =
+        "The reset left rows that violate a foreign key — a trigger on a reset table wrote them while checks "
+        + "were suspended. It has been rolled back.";
+
     internal static async Task RunAsync(
         ResetScript script,
         Func<string, CancellationToken, Task> execute,
+        Func<string, CancellationToken, Task<long>> count,
         CancellationToken cancellationToken)
     {
         var applied = 0;
@@ -47,6 +52,14 @@ internal static class ResetRunner
             foreach (var sql in script.Body)
             {
                 await execute(sql, cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var sql in script.Verify)
+            {
+                if (await count(sql, cancellationToken).ConfigureAwait(false) != 0)
+                {
+                    throw new InvalidOperationException(VerifyFailed);
+                }
             }
 
             foreach (var sql in script.Commit)
@@ -81,7 +94,7 @@ internal static class ResetRunner
         Report(failure, cleanupFailures);
     }
 
-    internal static void Run(ResetScript script, Action<string> execute)
+    internal static void Run(ResetScript script, Action<string> execute, Func<string, long> count)
     {
         var applied = 0;
         var begun = false;
@@ -105,6 +118,14 @@ internal static class ResetRunner
             foreach (var sql in script.Body)
             {
                 execute(sql);
+            }
+
+            foreach (var sql in script.Verify)
+            {
+                if (count(sql) != 0)
+                {
+                    throw new InvalidOperationException(VerifyFailed);
+                }
             }
 
             foreach (var sql in script.Commit)

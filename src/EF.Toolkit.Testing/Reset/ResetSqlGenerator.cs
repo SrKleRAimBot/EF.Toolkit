@@ -65,6 +65,14 @@ internal sealed record ResetScript
     /// </summary>
     public IReadOnlyList<string> Begin { get; init; } = [];
 
+    /// <summary>
+    ///     Queries run after the body and before the commit, each of which must count zero. Where the
+    ///     reset suspended foreign-key checks, a trigger on a reset table could have written a row that
+    ///     violates one, and nothing would ever re-check it; a non-zero count fails the reset and rolls
+    ///     it back.
+    /// </summary>
+    public IReadOnlyList<string> Verify { get; init; } = [];
+
     /// <summary>Closes the unit once the body has succeeded.</summary>
     public IReadOnlyList<string> Commit { get; init; } = [];
 
@@ -78,7 +86,7 @@ internal sealed record ResetScript
     public static ResetScript Empty { get; } = new([], [], []);
 
     /// <summary>Every statement of a successful run, in execution order.</summary>
-    public IEnumerable<string> All => Prologue.Concat(Begin).Concat(Body).Concat(Commit).Concat(Epilogue.Reverse());
+    public IEnumerable<string> All => Prologue.Concat(Begin).Concat(Body).Concat(Verify).Concat(Commit).Concat(Epilogue.Reverse());
 }
 
 /// <summary>Turns a <see cref="ResetPlan" /> into SQL for one engine.</summary>
@@ -256,6 +264,7 @@ internal static class ResetSqlGenerator
                 state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = OFF;"])
             {
                 Begin = [$"SAVEPOINT {Savepoint};"],
+                Verify = [SqliteForeignKeyCheck(plan)],
                 Commit = [$"RELEASE SAVEPOINT {Savepoint};"],
                 Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};", $"RELEASE SAVEPOINT {Savepoint};"],
             };
@@ -265,7 +274,23 @@ internal static class ResetSqlGenerator
             ? new ResetScript(["PRAGMA foreign_keys = OFF;"], body, ["PRAGMA foreign_keys = ON;"])
             : new ResetScript([], body, []);
 
-        return script with { Begin = ["BEGIN;"], Commit = ["COMMIT;"], Rollback = ["ROLLBACK;"] };
+        return script with
+        {
+            Begin = ["BEGIN;"],
+            Verify = [SqliteForeignKeyCheck(plan)],
+            Commit = ["COMMIT;"],
+            Rollback = ["ROLLBACK;"],
+        };
+    }
+
+    // Turning foreign_keys back on checks nothing already written, and switching defer_foreign_keys off
+    // discards what was deferred — so a row a trigger wrote mid-reset, pointing at one just deleted,
+    // would otherwise be committed. Every reset table was emptied, so any violation in one is new, and
+    // the guard has already refused tables outside the reset that reference them.
+    private static string SqliteForeignKeyCheck(ResetPlan plan)
+    {
+        var checks = plan.Tables.Select(t => $"SELECT 1 FROM pragma_foreign_key_check({SqlLiteral(t.Name)}, 'main')");
+        return $"SELECT COUNT(*) FROM ({string.Join(" UNION ALL ", checks)});";
     }
 
     private static string Quote(ResetTable table, char open, char close)

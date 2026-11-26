@@ -76,6 +76,9 @@ public static class DatabaseResetExtensions
                 await ResetRunner.RunAsync(
                         script,
                         (sql, token) => ExecuteAsync(connection, transaction, database, sql, token),
+                        async (sql, token) => Convert.ToInt64(
+                            await ScalarAsync(connection, transaction, sql, token).ConfigureAwait(false),
+                            System.Globalization.CultureInfo.InvariantCulture),
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -128,7 +131,10 @@ public static class DatabaseResetExtensions
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
 
-                ResetRunner.Run(script, sql => Execute(connection, transaction, database, sql));
+                ResetRunner.Run(
+                    script,
+                    sql => Execute(connection, transaction, database, sql),
+                    sql => Convert.ToInt64(Scalar(connection, transaction, sql), System.Globalization.CultureInfo.InvariantCulture));
             }
             finally
             {
