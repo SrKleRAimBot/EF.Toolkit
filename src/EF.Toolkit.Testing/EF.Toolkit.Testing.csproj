@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>EF.Toolkit.Testing</PackageId>
+    <PackageTags>entity-framework-core;efcore;testing;integration-testing;test-database;sqlite;respawn;seeding;test-data;sql-capture</PackageTags>
+    <Description>
+      Test conveniences for EF Core applications. In-memory SQLite and real-engine test databases,
+      each test in a rolled-back transaction, model-driven data reset in foreign-key-safe order with
+      identity counters restarted, seeding that clears the change tracker, a test-data builder that
+      fills required columns from the model, SQL capture for catching N+1 queries, and model
+      assertions. Test-framework agnostic: a failed assertion throws EFToolkitAssertionException.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <!--
+      The bundled build, not Sqlite.Core. The production packages leave the choice of native SQLite
+      to the application; a test project has no such choice to protect, and SqliteTestDatabase
+      should work with nothing else installed.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../docs/testing.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="EF.Toolkit.Testing.Tests" />
+    <InternalsVisibleTo Include="EF.Toolkit.Testing.Integration" />
+  </ItemGroup>
+
+</Project>
