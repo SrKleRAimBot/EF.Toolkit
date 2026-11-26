@@ -972,6 +972,26 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Putting_the_token_back_leaves_another_entity_sharing_the_complex_instance_alone()
+    {
+        // The second comment was given the first one's Stamp instance and its revision bumped through it;
+        // restoring the soft-deleted comment's token on the shared instance undid the second one's bump.
+        await using (var context = _db.Context())
+        {
+            var first = await context.Comments.SingleAsync(c => c.Id == 1, Ct);
+            var second = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            second.Stamp = first.Stamp;
+            first.Stamp.Revision = 1;
+            context.Comments.Remove(first);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 1, Ct)).Stamp.Revision.ShouldBe(0);
+        (await fresh.Comments.SingleAsync(c => c.Id == 2, Ct)).Stamp.Revision.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task A_token_inside_a_complex_value_still_catches_a_writer_that_moved_the_row_on()
     {
         // ...and checked for the edited 2 against a row another writer had moved to 2: the stale delete won.

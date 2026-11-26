@@ -49,7 +49,15 @@ internal static class Baseline
         foreach (var (property, original) in complexTokens)
         {
             entry.OriginalValues[property] = original;
-            entry.CurrentValues[property] = original;
+
+            // Through a copy of its own: the same complex instance may also be another entity's (an
+            // application that assigned one entity's value to another), and putting the token back on
+            // the shared instance would undo that entity's change too. EF compares complex values by
+            // value, so the swap itself writes nothing.
+            if (OwnCopy(entry.Entity, (IComplexType)property.DeclaringType))
+            {
+                entry.CurrentValues[property] = original;
+            }
         }
 
         foreach (var property in entry.Properties)
@@ -117,6 +125,39 @@ internal static class Baseline
     private static bool IsDefault(object? value, Type clrType)
         => value is null
             || (clrType.IsValueType && Nullable.GetUnderlyingType(clrType) is null && value.Equals(Activator.CreateInstance(clrType)));
+
+    // Replaces each complex value on the way from the entity down to complexType with a shallow copy, so
+    // the entity alone holds the instance a member of complexType is then written to. False when one on
+    // the way is absent, and there is no current value to correct.
+    private static bool OwnCopy(object entity, IComplexType complexType)
+    {
+        var path = new Stack<IComplexProperty>();
+        for (IComplexType? type = complexType; type is not null; type = type.ComplexProperty.DeclaringType as IComplexType)
+        {
+            path.Push(type.ComplexProperty);
+        }
+
+        var owner = entity;
+        foreach (var complexProperty in path)
+        {
+            if (Get(complexProperty, owner) is not { } value)
+            {
+                return false;
+            }
+
+            var copy = MemberwiseCloneMethod.Invoke(value, null)!;
+            Set(complexProperty, owner, copy);
+            owner = copy;
+        }
+
+        return true;
+    }
+
+    private static readonly System.Reflection.MethodInfo MemberwiseCloneMethod = typeof(object).GetMethod(
+        "MemberwiseClone", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+    private static object? Get(IPropertyBase member, object target)
+        => member.FieldInfo is { } field ? field.GetValue(target) : member.PropertyInfo?.GetValue(target);
 
     // Value objects often hide their parameterless constructor, or have none: EF materializes them
     // either way, and so must this. Without one, the instance starts uninitialized and every mapped
