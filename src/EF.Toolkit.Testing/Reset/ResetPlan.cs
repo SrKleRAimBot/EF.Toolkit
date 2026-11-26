@@ -143,6 +143,22 @@ internal sealed class ResetPlan
         => new(tables, new HashSet<ResetTable>(cyclicTables ?? []), hasExclusions, retained, excludedNames);
 
     /// <summary>
+    ///     Refuses a SQL Server reset of a table an enabled row-level-security filter applies to, from rows
+    ///     produced by <see cref="DatabaseForeignKeys.SqlServerFilteredTables" />.
+    /// </summary>
+    internal static void RefuseFilteredTables(IEnumerable<DatabaseReference> filtered)
+    {
+        if (filtered.FirstOrDefault() is { } table)
+        {
+            throw new InvalidOperationException(
+                $"Cannot reset '{table.Table}': the security policy '{table.ReferencedTable}' filters it, and a "
+                + "filter applies to DELETE as well — the reset would remove only the rows this session can see "
+                + "and report success with the rest still there. Disable the policy for the reset "
+                + "(ALTER SECURITY POLICY ... WITH (STATE = OFF)), or exclude the table.");
+        }
+    }
+
+    /// <summary>
     ///     Refuses a PostgreSQL reset whose <c>TRUNCATE</c> would reach a table it was not asked to
     ///     empty, from rows produced by <see cref="DatabaseForeignKeys.PostgreSqlDescendants" />.
     /// </summary>

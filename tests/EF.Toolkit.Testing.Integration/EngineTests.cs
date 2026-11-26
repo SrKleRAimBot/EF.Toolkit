@@ -513,6 +513,38 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
     }
 
     [Fact]
+    public async Task A_table_under_an_enabled_row_level_security_filter_is_refused()
+    {
+        // A filter predicate applies to DELETE too: a reset under one tenant's session context removed
+        // that tenant's rows, reported success, and left every other tenant's.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE FUNCTION dbo.NoTags(@code nvarchar(450)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS allowed WHERE 1 = 0;", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE SECURITY POLICY TagFilter ADD FILTER PREDICATE dbo.NoTags(Code) ON dbo.Tags WITH (STATE = ON);", Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("the security policy 'TagFilter' filters it");
+
+            await context.Database.ExecuteSqlRawAsync("ALTER SECURITY POLICY TagFilter WITH (STATE = OFF);", Ct);
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+
+            // With the policy off, the reset sees every row and runs.
+            await context.Database.ResetDataAsync(cancellationToken: Ct);
+            (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v == 0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP SECURITY POLICY IF EXISTS TagFilter;", Ct);
+            await context.Database.ExecuteSqlRawAsync("DROP FUNCTION IF EXISTS dbo.NoTags;", Ct);
+        }
+    }
+
+    [Fact]
     public async Task Under_a_non_dbo_default_schema_the_check_follows_the_table_the_delete_resolves_to()
     {
         // For a user whose default schema is app, unqualified Customers is app.Customers. Checking

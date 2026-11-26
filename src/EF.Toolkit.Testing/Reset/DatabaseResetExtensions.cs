@@ -64,6 +64,13 @@ public static class DatabaseResetExtensions
                         await ReadReferencesAsync(connection, transaction, query, cancellationToken).ConfigureAwait(false));
                 }
 
+                if (engine == DatabaseEngine.SqlServer)
+                {
+                    ResetPlan.RefuseFilteredTables(
+                        await ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.SqlServerFilteredTables(plan), cancellationToken)
+                            .ConfigureAwait(false));
+                }
+
                 if (engine == DatabaseEngine.PostgreSql)
                 {
                     ResetPlan.RefuseTruncatedDescendants(await GuardedAsync(
@@ -125,6 +132,12 @@ public static class DatabaseResetExtensions
                 if (DatabaseForeignKeys.Query(engine, plan) is { } query)
                 {
                     ResetPlan.RefuseUnplannedReferences(ReadReferences(connection, transaction, query));
+                }
+
+                if (engine == DatabaseEngine.SqlServer)
+                {
+                    ResetPlan.RefuseFilteredTables(
+                        ReadReferences(connection, transaction, DatabaseForeignKeys.SqlServerFilteredTables(plan)));
                 }
 
                 if (engine == DatabaseEngine.PostgreSql)

@@ -428,6 +428,10 @@ backing field EF maps.
 - **Excluding a table that references a reset one is refused** before anything runs, on every engine:
   the reset would either delete the kept rows with their principals or orphan them. Exclude the
   principal too, or stop excluding the dependent.
+- **A SQL Server table under an enabled row-level-security filter is refused.** The filter applies to
+  `DELETE` as to `SELECT`, so the reset would remove only the rows the session can see and report
+  success. Turn the policy off for the reset (`ALTER SECURITY POLICY ... WITH (STATE = OFF)`) or
+  exclude the table.
 - **A transaction counts when EF or ADO.NET knows about it** — `Database.BeginTransaction`,
   `UseTransaction`, an isolated scope, or an ambient `TransactionScope`. One opened by sending
   `START TRANSACTION` as SQL text is invisible to EF itself, whose own `SaveChanges` would end it the

@@ -73,6 +73,26 @@ internal static class DatabaseForeignKeys
             _ => null,
         };
 
+    /// <summary>
+    ///     SQL Server: every reset table with an enabled row-level-security filter predicate, as rows
+    ///     shaped like <see cref="DatabaseReference" /> (table, policy).
+    /// </summary>
+    /// <remarks>
+    ///     A filter predicate applies to <c>DELETE</c> as to <c>SELECT</c> — and to the members of
+    ///     db_owner too — so a reset run under one tenant's session context deletes that tenant's rows
+    ///     and reports success with every other tenant's still there. Counting afterwards would not
+    ///     notice: the count is filtered the same way.
+    /// </remarks>
+    internal static string SqlServerFilteredTables(ResetPlan plan) => $"""
+        WITH [plan](id) AS ({string.Join(" UNION ALL ", plan.Tables.Select(t => $"SELECT OBJECT_ID({SqlServerName(t)})"))})
+        SELECT OBJECT_NAME(pr.target_object_id), sp.name, 0
+        FROM sys.security_predicates AS pr
+        JOIN sys.security_policies AS sp ON sp.object_id = pr.object_id
+        WHERE sp.is_enabled = 1
+          AND pr.predicate_type_desc = 'FILTER'
+          AND pr.target_object_id IN (SELECT id FROM [plan] WHERE id IS NOT NULL);
+        """;
+
     private static string SqlLiteral(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
 
     private static string SqlServerName(ResetTable table)
