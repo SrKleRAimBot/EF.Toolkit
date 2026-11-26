@@ -108,7 +108,9 @@ internal static class Baseline
             return null;
         }
 
-        var value = Create(complexProperty.ClrType);
+        // The complex type's own CLR type: an optional struct is a Nullable<T> property, and a Nullable<T>
+        // created empty boxes to null, with nothing to set its members on.
+        var value = Create(complexProperty.ComplexType.ClrType);
         foreach (var property in complexProperty.ComplexType.GetProperties())
         {
             Set(property, value, originals[property]);
@@ -146,6 +148,9 @@ internal static class Baseline
             path.Push(type.ComplexProperty);
         }
 
+        // Copied top down, assigned bottom up: a struct is copied when it is assigned, so each one may be
+        // put in its owner only after its own child has been replaced in it.
+        var steps = new List<(IComplexProperty Property, object Owner, object Copy)>();
         var owner = entity;
         foreach (var complexProperty in path)
         {
@@ -155,8 +160,13 @@ internal static class Baseline
             }
 
             var copy = MemberwiseCloneMethod.Invoke(value, null)!;
-            Set(complexProperty, owner, copy);
+            steps.Add((complexProperty, owner, copy));
             owner = copy;
+        }
+
+        for (var i = steps.Count - 1; i >= 0; i--)
+        {
+            Set(steps[i].Property, steps[i].Owner, steps[i].Copy);
         }
 
         return true;

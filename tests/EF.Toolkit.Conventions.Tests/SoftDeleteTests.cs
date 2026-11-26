@@ -1022,6 +1022,50 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_optional_complex_struct_cleared_before_Remove_is_kept()
+    {
+        // The rebuild created a Nullable<Mailbox>, which boxes to null, and then failed setting its members.
+        await using (var setup = _db.Context())
+        {
+            (await setup.Comments.SingleAsync(c => c.Id == 1, Ct)).Mailbox = new Mailbox { Number = 7, Code = "PO" };
+            await setup.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 1, Ct);
+            comment.Mailbox = null;
+            context.Comments.Remove(comment);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var kept = (await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 1, Ct)).Mailbox;
+        kept.ShouldNotBeNull();
+        kept.Value.Code.ShouldBe("PO");
+    }
+
+    [Fact]
+    public async Task A_token_reached_through_a_complex_struct_is_put_back_without_touching_a_sharer()
+    {
+        // The struct copy was assigned before its PhoneNumber was replaced, so the entity kept the shared
+        // PhoneNumber and the token went back on it — undoing the other comment's bump.
+        await using (var context = _db.Context())
+        {
+            var first = await context.Comments.SingleAsync(c => c.Id == 1, Ct);
+            var second = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            second.Contact = first.Contact;
+            first.Contact.Phone.Revision = 1;
+            context.Comments.Remove(first);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 1, Ct)).Contact.Phone.Revision.ShouldBe(0);
+        (await fresh.Comments.SingleAsync(c => c.Id == 2, Ct)).Contact.Phone.Revision.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task A_token_inside_a_complex_value_still_catches_a_writer_that_moved_the_row_on()
     {
         // ...and checked for the edited 2 against a row another writer had moved to 2: the stale delete won.

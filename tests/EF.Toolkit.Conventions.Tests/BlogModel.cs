@@ -82,6 +82,30 @@ public sealed class Comment
 
     /// <summary>A complex value holding an application-managed concurrency token.</summary>
     public Stamp Stamp { get; set; } = new();
+
+    /// <summary>An optional complex struct.</summary>
+    public Mailbox? Mailbox { get; set; }
+
+    /// <summary>A complex struct wrapping a reference-type value that holds a concurrency token.</summary>
+    public Contact Contact { get; set; } = new() { Phone = new PhoneNumber() };
+}
+
+public struct Mailbox
+{
+    /// <summary>Required: an optional complex value needs one.</summary>
+    public int Number { get; set; }
+
+    public string? Code { get; set; }
+}
+
+public struct Contact
+{
+    public PhoneNumber Phone { get; set; }
+}
+
+public sealed class PhoneNumber
+{
+    public int Revision { get; set; }
 }
 
 public sealed class Stamp
@@ -179,6 +203,8 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
             b.ComplexProperty(c => c.Spot, p => p.ComplexProperty(x => x.Geo));
             b.ComplexProperty(c => c.Badge);
             b.ComplexProperty(c => c.Stamp, s => s.Property(x => x.Revision).IsConcurrencyToken());
+            b.ComplexProperty(c => c.Mailbox);
+            b.ComplexProperty(c => c.Contact, s => s.ComplexProperty(x => x.Phone, p => p.Property(x => x.Revision).IsConcurrencyToken()));
         });
         modelBuilder.Entity<Note>(b =>
         {
@@ -308,5 +334,7 @@ public sealed class PooledCommentsContext(DbContextOptions<PooledCommentsContext
             b.ComplexProperty(c => c.Spot, p => p.ComplexProperty(x => x.Geo));
             b.ComplexProperty(c => c.Badge);
             b.ComplexProperty(c => c.Stamp, s => s.Property(x => x.Revision).IsConcurrencyToken());
+            b.ComplexProperty(c => c.Mailbox);
+            b.ComplexProperty(c => c.Contact, s => s.ComplexProperty(x => x.Phone, p => p.Property(x => x.Revision).IsConcurrencyToken()));
         });
 }
