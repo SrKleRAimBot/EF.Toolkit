@@ -1066,6 +1066,29 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_dependent_added_with_the_removed_principal_keeps_its_key_under_OnSaveChanges_timing()
+    {
+        // Under Immediate timing Remove() nulls an added post's AuthorId and its navigation, leaving nothing
+        // to put back (docs/conventions.md). OnSaveChanges timing does no fixup, so the key survives.
+        int postId;
+        await using (var context = _db.Context())
+        {
+            context.ChangeTracker.CascadeDeleteTiming = CascadeTiming.OnSaveChanges;
+            context.ChangeTracker.DeleteOrphansTiming = CascadeTiming.OnSaveChanges;
+            var author = await context.Authors.SingleAsync(a => a.Id == 1, Ct);
+            var post = new Post { Title = "added with its author", Author = author };
+            context.Posts.Add(post);
+            context.Authors.Remove(author);
+            await context.SaveChangesAsync(Ct);
+            postId = post.Id;
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.SingleAsync(p => p.Id == postId, Ct)).AuthorId.ShouldBe(1);
+        (await fresh.Authors.IncludeDeleted().SingleAsync(a => a.Id == 1, Ct)).ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task A_token_inside_a_complex_value_still_catches_a_writer_that_moved_the_row_on()
     {
         // ...and checked for the edited 2 against a row another writer had moved to 2: the stale delete won.

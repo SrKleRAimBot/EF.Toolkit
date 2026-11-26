@@ -131,10 +131,16 @@ from ones the application removed itself; use `CascadeTiming.OnSaveChanges` (bel
 under which `Remove()` touches no dependent until the save.
 
 The nulled keys are put back from the value EF tracks as each dependent's **original** — the one it
-was loaded with. A dependent moved to the removed principal earlier in the same unit of work is the
-exception: its key's value from just before `Remove()` is kept nowhere EF exposes, so under `Immediate`
-timing it stays nulled, for both a soft delete and a `Restore()`. `OnSaveChanges` timing has no fixup to
-undo and keeps it.
+was loaded with. Two kinds of dependent have none to put back, and under `Immediate` timing keep the
+`null` `Remove()` gave them, for both a soft delete and a `Restore()`:
+
+- one moved to the removed principal earlier in the same unit of work — its key's value from just
+  before `Remove()` is kept nowhere EF exposes;
+- one **added** in the same unit of work — a new post given the author that is then removed is
+  inserted with `AuthorId` `null`, since an added entry has no original value and `Remove()` clears its
+  navigation too.
+
+`OnSaveChanges` timing has no fixup to undo and keeps both.
 
 ### Set-based
 
