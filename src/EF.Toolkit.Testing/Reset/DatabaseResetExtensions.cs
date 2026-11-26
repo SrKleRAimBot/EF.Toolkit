@@ -86,9 +86,23 @@ public static class DatabaseResetExtensions
                         .ConfigureAwait(false));
                 }
 
-                if (engine == DatabaseEngine.MySql && ResetSqlGenerator.MySqlVerifies(plan, state))
+                if (engine == DatabaseEngine.MySql)
                 {
-                    state = await WithMySqlForeignKeysAsync(connection, transaction, plan, state, cancellationToken).ConfigureAwait(false);
+                    foreach (var table in plan.Tables)
+                    {
+                        var rows = await ReadRowsAsync(connection, transaction, ResetSqlGenerator.MySqlShowCreate(table), cancellationToken)
+                            .ConfigureAwait(false);
+                        RefuseMySqlTemporary(table, rows);
+                    }
+
+                    if (ResetSqlGenerator.MySqlVerifies(plan, state))
+                    {
+                        RefuseMySqlPartialVisibility(Convert.ToInt64(
+                            await ScalarAsync(connection, transaction, DatabaseForeignKeys.MySqlSeesEveryTable(state.MySqlNoBackslashEscapes), cancellationToken)
+                                .ConfigureAwait(false),
+                            System.Globalization.CultureInfo.InvariantCulture));
+                        state = await WithMySqlForeignKeysAsync(connection, transaction, plan, state, cancellationToken).ConfigureAwait(false);
+                    }
                 }
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
@@ -161,9 +175,20 @@ public static class DatabaseResetExtensions
                         () => ReadReferences(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan))));
                 }
 
-                if (engine == DatabaseEngine.MySql && ResetSqlGenerator.MySqlVerifies(plan, state))
+                if (engine == DatabaseEngine.MySql)
                 {
-                    state = WithMySqlForeignKeys(connection, transaction, plan, state);
+                    foreach (var table in plan.Tables)
+                    {
+                        RefuseMySqlTemporary(table, ReadRows(connection, transaction, ResetSqlGenerator.MySqlShowCreate(table)));
+                    }
+
+                    if (ResetSqlGenerator.MySqlVerifies(plan, state))
+                    {
+                        RefuseMySqlPartialVisibility(Convert.ToInt64(
+                            Scalar(connection, transaction, DatabaseForeignKeys.MySqlSeesEveryTable(state.MySqlNoBackslashEscapes)),
+                            System.Globalization.CultureInfo.InvariantCulture));
+                        state = WithMySqlForeignKeys(connection, transaction, plan, state);
+                    }
                 }
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
@@ -357,6 +382,34 @@ public static class DatabaseResetExtensions
     {
         using var command = CreateCommand(connection, transaction, sql);
         return command.ExecuteScalar();
+    }
+
+    // MySQL resolves a name to the session's temporary table of that name first, even qualified with the
+    // database, and has no syntax for the permanent one behind it: the reset would empty the temporary
+    // table, report success, and leave every row it was asked to remove.
+    private static void RefuseMySqlTemporary(ResetTable table, List<string[]> showCreate)
+    {
+        if (showCreate.Count > 0 && showCreate[0].Length > 1
+            && showCreate[0][1].StartsWith("CREATE TEMPORARY TABLE", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Cannot reset '{table}': this connection has a temporary table of that name, and MySQL resolves "
+                + "the name to it rather than to the table the model maps, so the reset would empty the temporary "
+                + "table and leave the real one as it is. Drop the temporary table, or reset on another connection.");
+        }
+    }
+
+    private static void RefuseMySqlPartialVisibility(long seesEveryTable)
+    {
+        if (seesEveryTable == 0)
+        {
+            throw new InvalidOperationException(
+                "Cannot reset: the reset runs with MySQL's foreign-key checks off — the model has a foreign-key cycle, "
+                + "or the session already had them off — and this login holds no privilege on the whole database — only on some of its tables. The "
+                + "tables it cannot see, and their foreign keys, are hidden from it, so rows there could be orphaned "
+                + "with nothing able to check them. Grant the login a privilege on the database itself (for example "
+                + "GRANT SELECT ON `db`.* TO it) or run the reset as the database's owner.");
+        }
     }
 
     private const string MySqlNoBackslashEscapes = "SELECT FIND_IN_SET('NO_BACKSLASH_ESCAPES', @@SESSION.sql_mode) > 0;";

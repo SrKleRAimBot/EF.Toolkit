@@ -803,6 +803,149 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
         }
     }
 
+    private ShopContext LimitedContext(string user)
+    {
+        var builder = new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(Fixture.ConnectionString) { UserID = user, Password = user };
+        return new ShopContext(new DbContextOptionsBuilder<ShopContext>().UseMySQL(builder.ConnectionString).Options);
+    }
+
+    private string DatabaseName => new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(Fixture.ConnectionString).Database;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_table_the_login_cannot_see_keeps_its_rows_and_its_parents(bool acyclic)
+    {
+        // Granted only the mapped tables, the login sees neither HiddenChild nor its foreign key. With the
+        // checks off a reset emptied Customers under it; now the checks stay on where they can, and where
+        // they cannot the reset is refused.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        var customer = await context.Customers.Select(c => c.Id).FirstAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE HiddenChild (Id int PRIMARY KEY, CustomerId int NOT NULL, FOREIGN KEY (CustomerId) REFERENCES Customers (Id))", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO HiddenChild VALUES (1, {0})", [customer], Ct);
+        var tables = await context.Database.SqlQueryRaw<string>(
+                "SELECT TABLE_NAME AS Value FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME <> 'HiddenChild'")
+            .ToListAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'tables_only'@'%'", Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE USER 'tables_only'@'%' IDENTIFIED BY 'tables_only'", Ct);
+        foreach (var table in tables)
+        {
+            var grant = "GRANT SELECT, INSERT, UPDATE, DELETE, ALTER, DROP ON `" + DatabaseName + "`.`" + table + "` TO 'tables_only'@'%'";
+            await context.Database.ExecuteSqlRawAsync(grant, Ct);
+        }
+
+        try
+        {
+            await using var limited = LimitedContext("tables_only");
+            (await ScalarAsync(limited, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_NAME = 'HiddenChild'")).ShouldBe(0);
+
+            if (acyclic)
+            {
+                await Should.ThrowAsync<DbException>(() => limited.Database.ResetDataAsync(
+                    o => o.ExcludeEntity<Category>().ExcludeEntity<Team>().ExcludeEntity<Player>(), Ct));
+            }
+            else
+            {
+                (await Should.ThrowAsync<InvalidOperationException>(() => limited.Database.ResetDataAsync(cancellationToken: Ct)))
+                    .Message.ShouldContain("holds no privilege on the whole database");
+            }
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM HiddenChild")).ShouldBe(1);
+            await AssertConstraintsRestoredAsync(context);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'tables_only'@'%'", Ct);
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS HiddenChild", Ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_trigger_that_orphans_a_row_in_another_database_fails_the_reset()
+    {
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync("CREATE DATABASE IF NOT EXISTS eftesting_other", Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE eftesting_other.OutParent (Id int PRIMARY KEY)", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE eftesting_other.OutChild (Id int PRIMARY KEY, ParentId int NOT NULL, FOREIGN KEY (ParentId) REFERENCES eftesting_other.OutParent (Id))", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER WriteOutside AFTER DELETE ON Categories FOR EACH ROW INSERT INTO eftesting_other.OutChild VALUES (OLD.Id + 1000, 2147483647)", Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct)))
+                .Message.ShouldContain("violate a foreign key");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM eftesting_other.OutChild")).ShouldBe(0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS WriteOutside", Ct);
+            await context.Database.ExecuteSqlRawAsync("DROP DATABASE IF EXISTS eftesting_other", Ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_temporary_table_shadowing_a_mapped_one_is_refused_and_both_keep_their_rows()
+    {
+        // MySQL resolves Customers to the session's temporary table first, even qualified: the reset
+        // emptied that, reported success, and left every real customer.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.OpenConnectionAsync(Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("CREATE TEMPORARY TABLE Customers (Id int PRIMARY KEY)", Ct);
+            await context.Database.ExecuteSqlRawAsync("INSERT INTO Customers VALUES (1)", Ct);
+
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("temporary table of that name");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM Customers")).ShouldBe(1);
+            await context.Database.ExecuteSqlRawAsync("DROP TEMPORARY TABLE Customers", Ct);
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+        }
+        finally
+        {
+            // The connection goes back to the pool with its session, temporary tables included.
+            await context.Database.ExecuteSqlRawAsync("DROP TEMPORARY TABLE IF EXISTS Customers", Ct);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_savepoint_of_the_caller_s_survives_a_reset_inside_its_transaction()
+    {
+        // MySQL replaces a savepoint of the same name, and the reset used one fixed name, then released it.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await using (var transaction = await context.Database.BeginTransactionAsync(Ct))
+        {
+            await context.Database.ExecuteSqlRawAsync("SAVEPOINT ef_toolkit_reset", Ct);
+            await context.Database.ResetDataAsync(cancellationToken: Ct);
+            (await context.Customers.CountAsync(Ct)).ShouldBe(0);
+
+            await context.Database.ExecuteSqlRawAsync("ROLLBACK TO SAVEPOINT ef_toolkit_reset", Ct);
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            await transaction.CommitAsync(Ct);
+        }
+
+        (await ShopData.CountsAsync(context)).ShouldBe(before);
+    }
+
     [Fact]
     public async Task An_orphan_that_was_there_before_the_reset_is_not_held_against_it()
     {

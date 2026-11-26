@@ -68,6 +68,11 @@ internal static class ResetRunner
             }
 
             committed = true;
+
+            foreach (var sql in script.AfterCommit)
+            {
+                await execute(sql, cancellationToken).ConfigureAwait(false);
+            }
         }
 #pragma warning disable CA1031 // Captured and rethrown below, after cleanup.
         catch (Exception e)
@@ -134,6 +139,11 @@ internal static class ResetRunner
             }
 
             committed = true;
+
+            foreach (var sql in script.AfterCommit)
+            {
+                execute(sql);
+            }
         }
 #pragma warning disable CA1031 // Captured and rethrown below, after cleanup.
         catch (Exception e)

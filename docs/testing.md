@@ -199,13 +199,15 @@ What each engine is sent:
 | --- | --- |
 | PostgreSQL | One `TRUNCATE TABLE a, b, ... RESTART IDENTITY`, without `CASCADE`. `TRUNCATE` checks the foreign keys between the listed tables as a set, so no order is needed. |
 | SQL Server | `DELETE` in dependency order, then `DBCC CHECKIDENT ... RESEED` for each table with an identity column. Tables on a foreign-key cycle — self-references included — have `NOCHECK CONSTRAINT ALL` for the delete and `WITH CHECK CHECK CONSTRAINT ALL` after, so the constraints come back trusted. Both run inside the reset's transaction, so a re-check that fails rolls back the deletes and the suspension together. |
-| MySQL | `SET FOREIGN_KEY_CHECKS = 0`, `TRUNCATE TABLE` each, then checks back on. When it deletes instead (inside a transaction, or with `RestartIdentity = false`), `DELETE` in dependency order with checks left on; only a plan with a foreign-key cycle suspends them, and then every foreign key from a reset table is checked before the commit, because MySQL never re-checks a row written while checks were off — a trigger's orphan fails the reset and rolls it back. A `DELETE` trigger on a reset table could write anywhere, so every foreign key in the database is checked, and a table outside the reset may not gain violations it did not already have. |
+| MySQL | `DELETE` in dependency order with foreign-key checks left on, so the engine itself refuses a delete that would orphan a row — even in a table the login cannot see — then `ALTER TABLE ... AUTO_INCREMENT = 1` for each table after the commit. Only a plan with a foreign-key cycle switches the checks off (`SET FOREIGN_KEY_CHECKS = 0`, then back on). Then every foreign key in every database the login can see is checked before the commit, because MySQL never re-checks a row written while checks were off and a `DELETE` trigger could write anywhere: reset tables must have no violations, and other tables no more than they had before. Such a reset needs a login with a privilege on the whole database, or it is refused, since a login granted only some tables cannot see the others' foreign keys. |
 | SQLite | `PRAGMA foreign_keys = OFF`, `DELETE` each, clear `sqlite_sequence` for those tables, then back on. |
 
 The deletes run as **one unit**: a transaction, or a savepoint inside yours when one is open. A
 reset that fails part way — a trigger, a lock timeout, a cancellation — rolls back every table it had
-already emptied, so it never leaves some tables empty and others not. The exception is MySQL outside
-a transaction, where `TRUNCATE` commits on its own; there the reset can stop part way.
+already emptied, so it never leaves some tables empty and others not. MySQL's counter restart is the
+one step outside the unit, after the commit, since `ALTER TABLE` commits on its own: if it fails, the
+rows are already gone and the error says so. The unit's savepoint gets a fresh name for every reset,
+so it can never take the place of one of yours.
 
 Whatever is suspended is restored even when a statement fails, and every restore is attempted even if
 one of them fails — those settings belong to the connection or the table, and a pooled connection
@@ -218,8 +220,8 @@ value — `RESEED, n` means "next is `n`" on a table that never has, and "next i
 increment" on one that has — so the next row gets the seed value either way.
 
 Inside a transaction the reset joins it, so it is rolled back with an isolated scope. Two engines
-need different statements there: MySQL deletes instead of truncating, because `TRUNCATE` commits the
-open transaction, and so does not restart identity; SQLite defers its foreign keys to commit rather
+need different statements there: MySQL does not restart identity, because `ALTER TABLE` commits the
+open transaction; SQLite defers its foreign keys to commit rather
 than switching them off, which it cannot do inside a transaction.
 
 The engine is read off `Database.ProviderName`: `Npgsql.EntityFrameworkCore.PostgreSQL`,
@@ -437,8 +439,11 @@ backing field EF maps.
   `UseTransaction`, an isolated scope, or an ambient `TransactionScope`. One opened by sending
   `START TRANSACTION` as SQL text is invisible to EF itself, whose own `SaveChanges` would end it the
   same way; on MySQL a reset would commit it. Start transactions through EF.
-- **MySQL cannot restart identity inside a transaction.** `TRUNCATE` and `ALTER TABLE` both commit
-  implicitly, so inside an isolated scope the reset deletes and the counters carry on.
+- **MySQL cannot restart identity inside a transaction.** `ALTER TABLE` commits implicitly, so inside
+  an isolated scope the counters carry on.
+- **A MySQL temporary table named like a mapped one is refused.** MySQL resolves the name to the
+  session's temporary table first, even qualified with the database, so the reset would empty it
+  instead. Drop it, or reset on another connection.
 - **SQL Server re-enables every constraint on a cyclic table**, including one that was disabled on
   purpose. Temporal tables keep their history.
 - **`ResetDataAsync` clears the change tracker, and `SeedAsync` saves everything pending.** Both act on

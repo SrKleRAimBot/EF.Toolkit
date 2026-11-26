@@ -12,7 +12,7 @@ public sealed class ResetSqlGeneratorTests
     private static readonly ResetConnectionState Default = new(RestartIdentity: true, InTransaction: false);
 
     private static ResetScript Generate(DatabaseEngine engine, ResetPlan plan, ResetConnectionState? state = null)
-        => ResetSqlGenerator.Generate(engine, plan, state ?? Default);
+        => ResetSqlGenerator.Generate(engine, plan, state ?? Default, "ef_toolkit_reset");
 
     [Theory]
     [InlineData("PostgreSql")]
@@ -94,15 +94,19 @@ public sealed class ResetSqlGeneratorTests
             .Body.ShouldBe(["DELETE FROM [Lines];"]);
 
     [Fact]
-    public void MySql_truncates_with_checks_suspended_and_restored()
+    public void MySql_deletes_with_checks_on_in_one_unit_and_restarts_counters_after_the_commit()
     {
+        // TRUNCATE needed the checks off, which let it orphan rows in tables the login cannot see.
         var script = Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines, Orders]));
 
-        script.Prologue.ShouldBe(["SET FOREIGN_KEY_CHECKS = 0;"]);
-        script.Body.ShouldBe(["TRUNCATE TABLE `Lines`;", "TRUNCATE TABLE `sales`.`Orders`;"]);
-        script.Epilogue.ShouldBe(["SET FOREIGN_KEY_CHECKS = 1;"]);
+        script.Prologue.ShouldBeEmpty();
+        script.Epilogue.ShouldBeEmpty();
+        script.Begin.ShouldBe(["START TRANSACTION;"]);
+        script.Body.ShouldBe(["DELETE FROM `Lines`;", "DELETE FROM `sales`.`Orders`;"]);
+        script.Commit.ShouldBe(["COMMIT;"]);
+        script.AfterCommit.ShouldBe(["ALTER TABLE `Lines` AUTO_INCREMENT = 1;", "ALTER TABLE `sales`.`Orders` AUTO_INCREMENT = 1;"]);
+        script.All.ShouldNotContain(s => s.StartsWith("TRUNCATE", StringComparison.Ordinal));
     }
-
     [Fact]
     public void MySql_leaves_checks_off_when_they_were_off()
     {
@@ -110,9 +114,8 @@ public sealed class ResetSqlGeneratorTests
 
         script.Prologue.ShouldBeEmpty();
         script.Epilogue.ShouldBeEmpty();
-        script.Body.ShouldBe(["TRUNCATE TABLE `Lines`;"]);
+        script.Body.ShouldBe(["DELETE FROM `Lines`;"]);
     }
-
     [Fact]
     public void MySql_deletes_with_checks_on_when_no_table_is_on_a_cycle()
     {
@@ -183,9 +186,24 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
-    public void MySql_truncating_needs_no_verify_because_truncate_fires_no_trigger()
-        => ResetSqlGenerator.MySqlVerifies(ResetPlan.Create([Lines], cyclicTables: [Lines]), Default).ShouldBeFalse();
+    public void MySql_verifies_only_when_the_checks_are_off()
+    {
+        ResetSqlGenerator.MySqlVerifies(ResetPlan.Create([Lines], cyclicTables: [Lines]), Default).ShouldBeTrue();
+        ResetSqlGenerator.MySqlVerifies(ResetPlan.Create([Lines]), Default).ShouldBeFalse();
+    }
 
+    [Fact]
+    public void Every_reset_takes_a_savepoint_name_of_its_own()
+    {
+        // MySQL replaces a savepoint of the same name: a fixed one would take the place of a caller's.
+        var first = ResetSqlGenerator.NewSavepoint();
+        var second = ResetSqlGenerator.NewSavepoint();
+
+        first.ShouldNotBe(second);
+        first.Length.ShouldBeLessThanOrEqualTo(32);
+        ResetSqlGenerator.Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), Default with { InTransaction = true })
+            .Begin.ShouldHaveSingleItem().ShouldNotBe("SAVEPOINT ef_toolkit_reset;");
+    }
     [Fact]
     public void MySql_deletes_inside_a_transaction_because_truncate_would_commit_it()
         => Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), Default with { InTransaction = true })
@@ -291,17 +309,14 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
-    public void MySql_deletes_as_a_unit_when_it_cannot_truncate_and_truncates_without_one()
+    public void MySql_restarts_no_counter_inside_a_transaction_because_ALTER_TABLE_would_commit_it()
     {
-        Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), Default with { RestartIdentity = false })
-            .Begin.ShouldBe(["START TRANSACTION;"]);
+        var inside = Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), Default with { InTransaction = true });
+        inside.Begin.ShouldBe(["SAVEPOINT ef_toolkit_reset;"]);
+        inside.AfterCommit.ShouldBeEmpty();
 
-        // TRUNCATE commits implicitly, so a unit around it would promise a rollback it cannot give.
-        var truncating = Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]));
-        truncating.Begin.ShouldBeEmpty();
-        truncating.Rollback.ShouldBeEmpty();
+        Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), Default with { RestartIdentity = false }).AfterCommit.ShouldBeEmpty();
     }
-
     [Fact]
     public void PostgreSql_needs_no_unit_for_its_single_statement_but_takes_a_savepoint_in_a_transaction()
     {
@@ -431,16 +446,16 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
-    public void A_MySQL_model_truncates_each_table_outside_a_transaction_and_deletes_inside_one()
+    public void A_MySQL_model_deletes_each_table_inside_a_transaction_or_out()
     {
         using var context = Contexts.MySql();
 
         DatabaseResetExtensions.GenerateResetScript(context.Database).Body
-            .ShouldAllBe(s => s.StartsWith("TRUNCATE TABLE `", StringComparison.Ordinal));
-        DatabaseResetExtensions.GenerateResetScript(context.Database, inTransaction: true).Body
             .ShouldAllBe(s => s.StartsWith("DELETE FROM `", StringComparison.Ordinal));
+        DatabaseResetExtensions.GenerateResetScript(context.Database).AfterCommit
+            .ShouldAllBe(s => s.StartsWith("ALTER TABLE `", StringComparison.Ordinal));
+        DatabaseResetExtensions.GenerateResetScript(context.Database, inTransaction: true).AfterCommit.ShouldBeEmpty();
     }
-
     [Fact]
     public void Options_reach_the_generator()
     {

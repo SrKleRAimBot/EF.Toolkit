@@ -41,12 +41,16 @@ internal sealed record ResetConnectionState(
     bool MySqlNoBackslashEscapes = false);
 
 /// <summary>A MySQL foreign key from a reset table, as the catalog records it.</summary>
-/// <param name="Table">The referencing table, in the connection's database.</param>
+/// <param name="Table">The referencing table.</param>
 /// <param name="Columns">Its columns, in key order.</param>
 /// <param name="ReferencedSchema">The referenced table's database.</param>
 /// <param name="ReferencedTable">The referenced table.</param>
 /// <param name="ReferencedColumns">The referenced columns, in key order.</param>
 /// <param name="InPlan">Whether <paramref name="Table" /> is one the reset empties.</param>
+/// <param name="TableSchema">
+///     The referencing table's database when it is not the connection's — a trigger can write to
+///     another database just as well.
+/// </param>
 /// <param name="Before">
 ///     For a table outside the reset: how many of its rows violated the key just before the reset,
 ///     which the reset must not add to. A reset table ends empty, so for one of those it is zero.
@@ -58,7 +62,8 @@ internal sealed record MySqlForeignKey(
     string ReferencedTable,
     IReadOnlyList<string> ReferencedColumns,
     bool InPlan = true,
-    long Before = 0);
+    long Before = 0,
+    string? TableSchema = null);
 
 /// <summary>The statements a reset runs, in three parts.</summary>
 internal sealed record ResetScript
@@ -109,6 +114,12 @@ internal sealed record ResetScript
     public IReadOnlyList<string> Commit { get; init; } = [];
 
     /// <summary>
+    ///     Run after the commit, for what cannot be part of the unit — MySQL's counter restart is DDL,
+    ///     which commits on its own. A failure here is reported; the rows are already gone.
+    /// </summary>
+    public IReadOnlyList<string> AfterCommit { get; init; } = [];
+
+    /// <summary>
     ///     Undoes the body if it failed, before the epilogue restores anything — so a reset that fails
     ///     part way never leaves some tables emptied and others not, with the checks that would have
     ///     caught the orphans switched back on only after the fact.
@@ -118,7 +129,8 @@ internal sealed record ResetScript
     public static ResetScript Empty { get; } = new([], [], []);
 
     /// <summary>Every statement of a successful run, in execution order.</summary>
-    public IEnumerable<string> All => Prologue.Concat(Begin).Concat(Body).Concat(Verify).Concat(Commit).Concat(Epilogue.Reverse());
+    public IEnumerable<string> All
+        => Prologue.Concat(Begin).Concat(Body).Concat(Verify).Concat(Commit).Concat(AfterCommit).Concat(Epilogue.Reverse());
 }
 
 /// <summary>Turns a <see cref="ResetPlan" /> into SQL for one engine.</summary>
@@ -130,22 +142,31 @@ internal sealed record ResetScript
 /// </remarks>
 internal static class ResetSqlGenerator
 {
-    /// <summary>The savepoint a reset inside the caller's transaction runs under.</summary>
-    internal const string Savepoint = "ef_toolkit_reset";
+    /// <summary>A fresh name for the savepoint a reset inside the caller's transaction runs under.</summary>
+    /// <remarks>
+    ///     Never a fixed one: MySQL replaces a savepoint of the same name, so a caller's own savepoint
+    ///     called that would be lost. Short enough for SQL Server, which allows 32 characters.
+    /// </remarks>
+    internal static string NewSavepoint() => "ef_reset_" + Guid.NewGuid().ToString("N")[..16];
 
-    public static ResetScript Generate(DatabaseEngine engine, ResetPlan plan, ResetConnectionState state)
+    /// <param name="engine">The engine.</param>
+    /// <param name="plan">The tables.</param>
+    /// <param name="state">The connection.</param>
+    /// <param name="savepoint">The savepoint name; a fresh one when <see langword="null" />.</param>
+    public static ResetScript Generate(DatabaseEngine engine, ResetPlan plan, ResetConnectionState state, string? savepoint = null)
     {
         if (plan.Tables.Count == 0)
         {
             return ResetScript.Empty;
         }
 
+        savepoint ??= NewSavepoint();
         return engine switch
         {
-            DatabaseEngine.PostgreSql => PostgreSql(plan, state),
-            DatabaseEngine.SqlServer => SqlServer(plan, state),
-            DatabaseEngine.MySql => MySql(plan, state),
-            DatabaseEngine.Sqlite => Sqlite(plan, state),
+            DatabaseEngine.PostgreSql => PostgreSql(plan, state, savepoint),
+            DatabaseEngine.SqlServer => SqlServer(plan, state, savepoint),
+            DatabaseEngine.MySql => MySql(plan, state, savepoint),
+            DatabaseEngine.Sqlite => Sqlite(plan, state, savepoint),
             _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, null),
         };
     }
@@ -155,7 +176,7 @@ internal static class ResetSqlGenerator
     ///     foreign keys between them as a set, and is transactional on PostgreSQL, so it needs no
     ///     ordering and works inside an isolated scope. There is no <c>CASCADE</c>: see the comment below.
     /// </remarks>
-    private static ResetScript PostgreSql(ResetPlan plan, ResetConnectionState state)
+    private static ResetScript PostgreSql(ResetPlan plan, ResetConnectionState state, string savepoint)
     {
         var tables = string.Join(", ", plan.Tables.Select(t => Quote(t, '"', '"')));
         var identity = state.RestartIdentity ? " RESTART IDENTITY" : "";
@@ -171,9 +192,9 @@ internal static class ResetSqlGenerator
         return state.InTransaction
             ? script with
             {
-                Begin = [$"SAVEPOINT {Savepoint};"],
-                Commit = [$"RELEASE SAVEPOINT {Savepoint};"],
-                Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};"],
+                Begin = [$"SAVEPOINT {savepoint};"],
+                Commit = [$"RELEASE SAVEPOINT {savepoint};"],
+                Rollback = [$"ROLLBACK TO SAVEPOINT {savepoint};"],
             }
             : script;
     }
@@ -195,7 +216,7 @@ internal static class ResetSqlGenerator
     ///         time, which is the one source of truth — the model only says what EF generates.
     ///     </para>
     /// </remarks>
-    private static ResetScript SqlServer(ResetPlan plan, ResetConnectionState state)
+    private static ResetScript SqlServer(ResetPlan plan, ResetConnectionState state, string savepoint)
     {
         var cyclic = plan.Tables.Where(plan.CyclicTables.Contains).ToList();
 
@@ -230,77 +251,80 @@ internal static class ResetSqlGenerator
 
         return new ResetScript([], body, [])
         {
-            Begin = [state.InTransaction ? $"SAVE TRANSACTION {Savepoint};" : "BEGIN TRANSACTION;"],
+            Begin = [state.InTransaction ? $"SAVE TRANSACTION {savepoint};" : "BEGIN TRANSACTION;"],
             Commit = state.InTransaction ? [] : ["COMMIT TRANSACTION;"],
             // An error can end the caller's transaction outright (a trigger's THROW rolls it all back) or
             // doom it; the savepoint is then gone or unusable, and only the caller can roll back.
             Rollback = [state.InTransaction
-                ? $"IF XACT_STATE() = 1 ROLLBACK TRANSACTION {Savepoint};"
+                ? $"IF XACT_STATE() = 1 ROLLBACK TRANSACTION {savepoint};"
                 : "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;"],
         };
     }
 
     /// <remarks>
     ///     <para>
-    ///         <c>TRUNCATE</c> is the only statement that restarts <c>AUTO_INCREMENT</c> without DDL, and
-    ///         both it and <c>ALTER TABLE</c> commit any open transaction implicitly. Inside a transaction
-    ///         the rows are deleted instead and the counters keep going: an isolated scope that silently
-    ///         committed would be worse than one whose ids are not 1. <c>TRUNCATE</c> refuses a table
-    ///         any foreign key references, so it runs with checks off; it fires no trigger, so nothing
-    ///         can write behind it.
+    ///         Rows go by <c>DELETE</c> in dependency order, as on SQL Server, inside one unit, with the
+    ///         foreign-key checks left on: then the engine itself refuses a delete that would orphan a
+    ///         row, wherever that row is — in a table the reset's login cannot even see — and a trigger
+    ///         that writes an orphan fails the reset there and then. <c>TRUNCATE</c> would need the
+    ///         checks off, since it refuses any table a foreign key references, and commits on its own.
     ///     </para>
     ///     <para>
-    ///         A deleting reset keeps the checks on and relies on the dependency order, as on SQL Server,
-    ///         so a trigger that writes a row pointing at a deleted one fails the reset there and then.
-    ///         Only a plan with a foreign-key cycle needs them off. With them off — suspended, or already
-    ///         off for the session, which keeps them off — <see cref="ResetConnectionState.MySqlForeignKeys" /> is checked
-    ///         before the commit: MySQL never re-checks rows written while checks were off.
+    ///         Only a plan with a foreign-key cycle needs the checks off. With them off — suspended, or
+    ///         already off for the session, which keeps them off — <see cref="ResetConnectionState.MySqlForeignKeys" />
+    ///         are checked before the commit, since MySQL never re-checks rows written while checks were off.
+    ///     </para>
+    ///     <para>
+    ///         Counters restart with <c>ALTER TABLE ... AUTO_INCREMENT = 1</c>, which on an emptied table
+    ///         means the next row gets 1, after the commit: <c>ALTER TABLE</c> commits implicitly, so it
+    ///         cannot run inside the unit. Inside the caller's transaction it would commit that too, so
+    ///         there the counters keep going: an isolated scope that silently committed would be worse
+    ///         than one whose ids are not 1.
     ///     </para>
     /// </remarks>
-    private static ResetScript MySql(ResetPlan plan, ResetConnectionState state)
+    private static ResetScript MySql(ResetPlan plan, ResetConnectionState state, string savepoint)
     {
-        var truncate = state.RestartIdentity && !state.InTransaction;
+        var body = plan.Tables.Select(t => $"DELETE FROM {Quote(t, '`', '`')};").ToList();
 
-        var body = plan.Tables
-            .Select(t => truncate
-                ? $"TRUNCATE TABLE {Quote(t, '`', '`')};"
-                : $"DELETE FROM {Quote(t, '`', '`')};")
-            .ToList();
-
-        var suspend = state.MySqlForeignKeyChecks && (truncate || plan.CyclicTables.Count > 0);
-        var script = suspend
+        var script = state.MySqlForeignKeyChecks && plan.CyclicTables.Count > 0
             ? new ResetScript(["SET FOREIGN_KEY_CHECKS = 0;"], body, ["SET FOREIGN_KEY_CHECKS = 1;"])
             : new ResetScript([], body, []);
-
-        // TRUNCATE commits implicitly, so a truncating reset cannot be one unit; a deleting one can.
-        if (truncate)
-        {
-            return script;
-        }
 
         if (MySqlVerifies(plan, state))
         {
             script = script with { Verify = MySqlOrphans(state.MySqlForeignKeys ?? []) };
         }
 
-        return state.InTransaction
-            ? script with
+        if (state.InTransaction)
+        {
+            return script with
             {
-                Begin = [$"SAVEPOINT {Savepoint};"],
-                Commit = [$"RELEASE SAVEPOINT {Savepoint};"],
-                Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};"],
-            }
-            : script with { Begin = ["START TRANSACTION;"], Commit = ["COMMIT;"], Rollback = ["ROLLBACK;"] };
+                Begin = [$"SAVEPOINT {savepoint};"],
+                Commit = [$"RELEASE SAVEPOINT {savepoint};"],
+                Rollback = [$"ROLLBACK TO SAVEPOINT {savepoint};"],
+            };
+        }
+
+        return script with
+        {
+            Begin = ["START TRANSACTION;"],
+            Commit = ["COMMIT;"],
+            Rollback = ["ROLLBACK;"],
+            AfterCommit = state.RestartIdentity
+                ? [.. plan.Tables.Select(t => $"ALTER TABLE {Quote(t, '`', '`')} AUTO_INCREMENT = 1;")]
+                : [],
+        };
     }
+
+    /// <summary>MySQL: the statement whose answer tells a temporary table from a permanent one.</summary>
+    internal static string MySqlShowCreate(ResetTable table) => $"SHOW CREATE TABLE {Quote(table, '`', '`')};";
 
     /// <summary>
     ///     Whether a MySQL reset of <paramref name="plan" /> deletes with foreign-key checks off, and so
     ///     needs the catalog's foreign keys to verify against.
     /// </summary>
     internal static bool MySqlVerifies(ResetPlan plan, ResetConnectionState state)
-        => plan.Tables.Count > 0
-            && !(state.RestartIdentity && !state.InTransaction)
-            && (!state.MySqlForeignKeyChecks || plan.CyclicTables.Count > 0);
+        => plan.Tables.Count > 0 && (!state.MySqlForeignKeyChecks || plan.CyclicTables.Count > 0);
 
     // Every reset table is empty once the deletes are done, so any row there that violates a foreign key
     // was written during the reset — by a trigger — and none is acceptable. Elsewhere only a DELETE
@@ -324,7 +348,8 @@ internal static class ResetSqlGenerator
         var present = string.Join(" AND ", fk.Columns.Select(c => $"c.{Quote(c, '`', '`')} IS NOT NULL"));
         var join = string.Join(" AND ", fk.Columns.Zip(fk.ReferencedColumns, (c, r) => $"p.{Quote(r, '`', '`')} = c.{Quote(c, '`', '`')}"));
         var parent = $"{Quote(fk.ReferencedSchema, '`', '`')}.{Quote(fk.ReferencedTable, '`', '`')}";
-        return $"(SELECT COUNT(*) FROM {Quote(fk.Table, '`', '`')} AS c WHERE {present} "
+        var child = fk.TableSchema is null ? Quote(fk.Table, '`', '`') : $"{Quote(fk.TableSchema, '`', '`')}.{Quote(fk.Table, '`', '`')}";
+        return $"(SELECT COUNT(*) FROM {child} AS c WHERE {present} "
             + $"AND NOT EXISTS (SELECT 1 FROM {parent} AS p WHERE {join}))";
     }
 
@@ -336,7 +361,7 @@ internal static class ResetSqlGenerator
     ///     <c>AUTOINCREMENT</c> tables; a plain <c>INTEGER PRIMARY KEY</c> restarts on its own once
     ///     the table is empty.
     /// </remarks>
-    private static ResetScript Sqlite(ResetPlan plan, ResetConnectionState state)
+    private static ResetScript Sqlite(ResetPlan plan, ResetConnectionState state, string savepoint)
     {
         // Qualified with main, where EF creates every table: unqualified, a temporary table of the same
         // name would shadow it and be emptied instead — one the foreign-key check, which reads main,
@@ -362,10 +387,10 @@ internal static class ResetSqlGenerator
                 body,
                 state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = OFF;"])
             {
-                Begin = [$"SAVEPOINT {Savepoint};"],
+                Begin = [$"SAVEPOINT {savepoint};"],
                 Verify = [SqliteNewViolations(snapshot)],
-                Commit = [SqliteDropSnapshot(snapshot), $"RELEASE SAVEPOINT {Savepoint};"],
-                Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};", $"RELEASE SAVEPOINT {Savepoint};"],
+                Commit = [SqliteDropSnapshot(snapshot), $"RELEASE SAVEPOINT {savepoint};"],
+                Rollback = [$"ROLLBACK TO SAVEPOINT {savepoint};", $"RELEASE SAVEPOINT {savepoint};"],
             };
         }
 

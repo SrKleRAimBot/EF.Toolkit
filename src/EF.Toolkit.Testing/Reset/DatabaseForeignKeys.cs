@@ -120,35 +120,60 @@ internal static class DatabaseForeignKeys
     }
 
     /// <summary>
-    ///     MySQL: one row per column of every foreign key from a table in the connection's database —
-    ///     constraint, table, column, referenced database, table and column, and whether the table is one
-    ///     in <paramref name="plan" /> — in key order.
+    ///     MySQL: one row per column of every foreign key from a table in any user database — constraint,
+    ///     table, column, referenced database, table and column, whether the table is one in
+    ///     <paramref name="plan" />, and the table's database — in key order.
     /// </summary>
     /// <remarks>
-    ///     information_schema lists only the tables the user has some privilege on, so a key on a table
-    ///     the reset's user cannot see at all cannot be checked.
+    ///     Every database, not just the connection's: a trigger on a reset table can write to another
+    ///     one just as well. information_schema lists only the tables the user has some privilege on;
+    ///     <see cref="MySqlSeesEveryTable" /> guarantees that for the connection's own database.
     /// </remarks>
     internal static string MySqlForeignKeys(ResetPlan plan, bool noBackslashEscapes) => $"""
         SELECT k.CONSTRAINT_NAME, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME,
-               CASE WHEN k.TABLE_NAME IN ({MySqlNames(plan, noBackslashEscapes)}) THEN 1 ELSE 0 END
+               CASE WHEN k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME IN ({MySqlNames(plan, noBackslashEscapes)}) THEN 1 ELSE 0 END,
+               k.TABLE_SCHEMA
         FROM information_schema.KEY_COLUMN_USAGE AS k
-        WHERE k.TABLE_SCHEMA = DATABASE()
+        WHERE k.TABLE_SCHEMA NOT IN ('mysql', 'sys', 'information_schema', 'performance_schema')
           AND k.REFERENCED_TABLE_NAME IS NOT NULL
-        ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION;
+        ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION;
         """;
 
     /// <summary>Groups the rows of <see cref="MySqlForeignKeys" /> into keys.</summary>
     internal static List<MySqlForeignKey> GroupMySqlForeignKeys(IEnumerable<string[]> rows)
         => rows
-            .GroupBy(r => (Table: r[1], Constraint: r[0]))
+            .GroupBy(r => (Schema: r[7], Table: r[1], Constraint: r[0]))
             .Select(g => new MySqlForeignKey(
                 g.Key.Table,
                 [.. g.Select(r => r[2])],
                 g.First()[3],
                 g.First()[4],
                 [.. g.Select(r => r[5])],
-                InPlan: g.First()[6] != "0"))
+                InPlan: g.First()[6] != "0",
+                TableSchema: g.Key.Schema))
             .ToList();
+
+    /// <summary>
+    ///     MySQL: 1 when the login holds a privilege on the connection's whole database (or a global
+    ///     one), and so sees every table in it in information_schema; 0 otherwise.
+    /// </summary>
+    /// <remarks>
+    ///     A login granted only some tables does not see the others, nor their foreign keys: a reset that
+    ///     switches checks off could orphan rows there, and nothing could check them. Database grants may
+    ///     use wildcards, matched here by <c>LIKE</c> as MySQL matches them. Privileges held through a
+    ///     role are not listed in these views, so such a login is refused too, which is the safe way to
+    ///     be wrong.
+    /// </remarks>
+    internal static string MySqlSeesEveryTable(bool noBackslashEscapes)
+    {
+        const string grantee = "CONCAT('''', LEFT(CURRENT_USER(), LENGTH(CURRENT_USER()) - LOCATE('@', REVERSE(CURRENT_USER()))), "
+            + "'''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')";
+        var escape = noBackslashEscapes ? @"'\'" : @"'\\'";
+        return "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES AS u "
+            + $"WHERE u.GRANTEE = {grantee} AND u.PRIVILEGE_TYPE <> 'USAGE') "
+            + "OR EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES AS d "
+            + $"WHERE d.GRANTEE = {grantee} AND DATABASE() LIKE d.TABLE_SCHEMA ESCAPE {escape}) THEN 1 ELSE 0 END;";
+    }
 
     // A backslash escapes in a MySQL string literal unless the session's sql_mode has
     // NO_BACKSLASH_ESCAPES, where it is just a backslash: doubling it there would name another table.
