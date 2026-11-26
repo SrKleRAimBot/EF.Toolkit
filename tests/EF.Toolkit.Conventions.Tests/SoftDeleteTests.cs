@@ -651,7 +651,7 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_complex_collection_changed_before_Remove_is_refused_plainly_and_nothing_is_written()
+    public async Task A_complex_collection_changed_before_Remove_is_refused_on_EF10_and_discarded_on_EF11()
     {
         // EF Core cannot take the deleted entry back to Unchanged once a collection that already had
         // elements has changed, and has no way to restore it. The save fails before anything is sent —
@@ -668,13 +668,23 @@ public sealed class SoftDeleteTests : IAsyncLifetime
             comment.Reactions.Add(new CommentMeta { Mood = "added before the remove" });
             context.Comments.Remove(comment);
 
+#if EFCORE10
+            // EF Core 10 cannot take the entry back to Unchanged in this state: refused, nothing written.
             (await Should.ThrowAsync<InvalidOperationException>(() => context.SaveChangesAsync(Ct)))
                 .Message.ShouldContain("a complex collection on it (Reactions) was changed after it was loaded");
+#else
+            // EF Core 11 can: the soft delete goes through with the collection change discarded.
+            await context.SaveChangesAsync(Ct);
+#endif
         }
 
         await using var fresh = _db.Context();
-        var stored = await fresh.Comments.SingleAsync(c => c.Id == 2, Ct);
+        var stored = await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct);
+#if EFCORE10
         stored.DeletedAt.ShouldBeNull();
+#else
+        stored.DeletedAt.ShouldNotBeNull();
+#endif
         stored.Reactions.Select(r => r.Mood).ShouldBe(["like"]);
     }
 

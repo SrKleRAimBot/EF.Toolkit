@@ -28,6 +28,7 @@ internal static class Baseline
             .Select(p => (Property: p, Original: p.OriginalValue))
             .ToList();
 
+        RestoreClearedComplexValues(entry.ComplexProperties, entry.OriginalValues);
         entry.OriginalValues.SetValues(entry.CurrentValues);
 
         foreach (var (property, original) in tokens)
@@ -38,6 +39,37 @@ internal static class Baseline
         foreach (var property in entry.Properties)
         {
             property.IsModified = false;
+        }
+
+    }
+
+    // An optional complex value set to null before Remove() is an edit like any other. Comparing a null
+    // value against its snapshot is where EF Core versions differ — 11 writes the nulls even with the
+    // snapshot replaced — so the value is rebuilt from its members' original values instead, before the
+    // snapshot is. The entity is being deleted, so reverting it in memory costs the application nothing.
+    private static void RestoreClearedComplexValues(IEnumerable<ComplexPropertyEntry> complexProperties, PropertyValues originals)
+    {
+        foreach (var complex in complexProperties)
+        {
+            if (complex.CurrentValue is not null)
+            {
+                RestoreClearedComplexValues(complex.ComplexProperties, originals);
+                continue;
+            }
+
+            var members = complex.Metadata.ComplexType.GetProperties().ToList();
+            if (!complex.Metadata.IsNullable || members.All(p => originals[p] is null))
+            {
+                continue;
+            }
+
+            var value = Activator.CreateInstance(complex.Metadata.ClrType)!;
+            foreach (var member in members)
+            {
+                member.PropertyInfo?.SetValue(value, originals[member]);
+            }
+
+            complex.CurrentValue = value;
         }
     }
 }

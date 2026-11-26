@@ -80,10 +80,11 @@ made to the entity before it was removed are discarded, exactly as a real delete
 to its own columns, its complex properties (including one set to `null`), and owned entities kept in
 its row.
 
-One edit cannot be discarded: an element added to, or removed from, a **complex collection** that
-already had elements. EF Core cannot take the deleted entry back to unchanged in that state and has no
-way to restore the collection, so the save is refused with a message naming the collection, before
-anything is written. Undo the collection change, or save it first.
+On EF Core 10 one edit cannot be discarded: an element added to, or removed from, a **complex
+collection** that already had elements. EF Core 10 cannot take the deleted entry back to unchanged in
+that state and has no way to restore the collection, so the save is refused with a message naming the
+collection, before anything is written — undo the collection change, or save it first. EF Core 11
+handles it, and the change is discarded like the rest.
 
 The property can be a `bool` (`true` means deleted) or a nullable `DateTime` / `DateTimeOffset` (a
 value means deleted, and records when). A `DateTime` is always written in UTC.
