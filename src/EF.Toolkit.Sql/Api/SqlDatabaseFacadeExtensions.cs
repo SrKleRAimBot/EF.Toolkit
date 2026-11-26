@@ -18,9 +18,12 @@ namespace Microsoft.EntityFrameworkCore;
 ///         quoted.
 ///     </para>
 ///     <para>
-///         Retries differ by method. <c>CreateDatabaseObjectsAsync</c> and <c>DropDatabaseObjectsAsync</c>
-///         run their whole set inside the context's execution strategy, so a retrying strategy retries
-///         the set as one unit. <c>QueryProcedureAsync</c> and <c>QueryFunction</c> are queries, retried
+///         Retries differ by method. <c>CreateDatabaseObjectsAsync</c> and <c>DropDatabaseObjectsAsync</c>,
+///         when they start their own transaction — no transaction open, and not MySQL — run the whole set
+///         inside the context's execution strategy, so a retrying strategy retries it as one unit. Inside
+///         a transaction of yours they run in it, and retrying is the caller's; on MySQL, which commits
+///         each DDL statement as it runs, they are not retried, and a failure part way through can leave
+///         a replaced object dropped and not yet recreated. <c>QueryProcedureAsync</c> and <c>QueryFunction</c> are queries, retried
 ///         as EF retries any query. <c>ExecuteProcedureAsync</c>, <c>SetSessionContextAsync</c> and
 ///         <c>RefreshMaterializedViewAsync</c> are not retried: EF does not retry raw commands on its
 ///         own, and a procedure may not be safe to run twice. Wrap them in
@@ -250,8 +253,29 @@ public static class SqlDatabaseFacadeExtensions
 
         var (sql, arguments) = SessionContextSql.ForRawSql(database.GetSqlDialect(), key, value);
 
-        await database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await database.ExecuteSqlRawAsync(sql, Parameters(arguments), cancellationToken).ConfigureAwait(false);
+        // EF counts every OpenConnection and closes only when each is matched, so opening again on an
+        // already-open connection would make the one CloseConnection the remarks promise insufficient.
+        // The setter opens only a closed connection — once, however many values are set — and undoes
+        // that open if the command fails.
+        var opened = database.GetDbConnection().State != System.Data.ConnectionState.Open;
+        if (opened)
+        {
+            await database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await database.ExecuteSqlRawAsync(sql, Parameters(arguments), cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (opened)
+            {
+                await database.CloseConnectionAsync().ConfigureAwait(false);
+            }
+
+            throw;
+        }
     }
 
     // EF maps a null argument to a typed null parameter itself; DBNull has no type mapping and is

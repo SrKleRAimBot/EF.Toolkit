@@ -328,6 +328,38 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task Setting_several_values_needs_one_close_and_a_failed_setter_leaves_nothing_open()
+    {
+        await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString).Options);
+
+        await context.Database.SetSessionContextAsync("app.tenant_id", 1, Token);
+        await context.Database.SetSessionContextAsync("app.other", "x", Token);
+        (await context.Documents.CountAsync(Token)).ShouldBe(2);
+
+        await context.Database.CloseConnectionAsync();
+        context.Database.GetDbConnection().State.ShouldBe(System.Data.ConnectionState.Closed);
+
+        // A command that fails after the open must not leave that open behind.
+        await using var failing = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+            .AddInterceptors(new FailSetConfig())
+            .Options);
+        await Should.ThrowAsync<InvalidOperationException>(() => failing.Database.SetSessionContextAsync("app.tenant_id", 1, Token));
+        failing.Database.GetDbConnection().State.ShouldBe(System.Data.ConnectionState.Closed);
+    }
+
+    private sealed class FailSetConfig : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> NonQueryExecutingAsync(
+            System.Data.Common.DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+            => command.CommandText.Contains("set_config", StringComparison.Ordinal)
+                ? throw new InvalidOperationException("set_config failed")
+                : base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+    }
+
+    [Fact]
     public async Task SetSessionContext_holds_for_the_rest_of_the_contexts_life()
     {
         await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString).Options);

@@ -491,6 +491,22 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Restore_cancels_a_HardDelete_so_a_later_Remove_soft_deletes()
+    {
+        await using (var context = _db.Context())
+        {
+            var post = await context.Posts.SingleAsync(p => p.Id == 2, Ct);
+            context.HardDelete(post);
+            context.Restore(post);
+            context.Posts.Remove(post);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.IncludeDeleted().SingleAsync(p => p.Id == 2, Ct)).IsDeleted.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task HardDelete_works_on_a_context_without_the_conventions()
     {
         await using (var context = _db.Context(conventions: false))

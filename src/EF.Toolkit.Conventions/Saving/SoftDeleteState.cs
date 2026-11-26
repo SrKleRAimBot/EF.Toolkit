@@ -16,6 +16,9 @@ internal sealed class SoftDeleteState
     /// <summary>Whether <paramref name="entity" /> was marked with <see cref="MarkHardDelete" />.</summary>
     internal bool IsHardDelete(object entity) => _hardDeletes.Contains(entity);
 
+    /// <summary>Forgets the hard-delete mark on <paramref name="entity" />, if it has one.</summary>
+    internal void ClearHardDelete(object entity) => _hardDeletes.Remove(entity);
+
     /// <summary>Forgets the hard-delete marks a save has carried out, keeping those <paramref name="stillPending" /> says are not.</summary>
     internal void ClearHardDeletes(Func<object, bool> stillPending) => _hardDeletes.RemoveWhere(entity => !stillPending(entity));
 }

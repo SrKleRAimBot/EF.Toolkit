@@ -75,6 +75,13 @@ public static class SoftDeleteExtensions
         var entry = Entry(context, entity);
         var mapping = Mapping(entry.Metadata);
 
+        // A Restore() cancels a HardDelete() too: left marked, a later ordinary Remove() of the same
+        // instance would delete the row for real instead of marking it.
+        if (context.GetService<IDbContextOptions>().FindExtension<ConventionsOptionsExtension>() is not null)
+        {
+            context.GetService<SoftDeleteState>().ClearHardDelete(entity);
+        }
+
         if (entry.State == EntityState.Detached)
         {
             entry.State = EntityState.Unchanged;
