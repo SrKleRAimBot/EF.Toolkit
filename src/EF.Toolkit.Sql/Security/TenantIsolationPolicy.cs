@@ -339,19 +339,27 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         var modified = bare.Length != storeType.Length;
 
         bare = Whitespace().Replace(bare.Trim(), " ");
-        var schema = bare.StartsWith("pg_catalog.", StringComparison.OrdinalIgnoreCase) ? bare[..11] : "";
-        var name = bare[schema.Length..].ToLowerInvariant();
+        var schema = bare.StartsWith("pg_catalog.", StringComparison.OrdinalIgnoreCase) ? bare[..11]
+            : bare.StartsWith("\"pg_catalog\".", StringComparison.Ordinal) ? bare[..13]
+            : "";
+        var name = bare[schema.Length..];
         var array = name.EndsWith("[]", StringComparison.Ordinal) ? "[]" : "";
         name = name[..^array.Length].TrimEnd();
+
+        // A quoted name is the type of exactly that spelling: "name" is name, but "char" is PostgreSQL's
+        // one-byte internal type, not character — it keeps one byte of 'acme' too. A quoted name in
+        // capitals is some other, user-defined type.
+        var quoted = name.Length > 2 && name[0] == '"' && name[^1] == '"';
+        name = quoted ? name[1..^1] : name.ToLowerInvariant();
 
         // Bare, these still have a length: character is character(1) and bit is bit(1), so 'acme' cast to
         // character is 'a', and name keeps only its first 63 bytes. They need the comparison with or
         // without a modifier.
-        var unbounded = name switch
+        var unbounded = (quoted, name) switch
         {
-            "char" or "character" or "nchar" or "national character" or "national char" => schema + "bpchar" + array,
-            "bit" => schema + "varbit" + array,
-            "name" => schema + "text" + array,
+            (true, "char") or (_, "name") => schema + "text" + array,
+            (false, "char" or "character" or "nchar" or "national character" or "national char") => schema + "bpchar" + array,
+            (_, "bit") => schema + "varbit" + array,
             _ => null,
         };
 

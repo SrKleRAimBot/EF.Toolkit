@@ -166,6 +166,9 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("char[]", "bpchar[]")]
     [InlineData("name", "text")]
     [InlineData("pg_catalog.name", "pg_catalog.text")]
+    [InlineData("pg_catalog.\"name\"", "pg_catalog.text")]
+    [InlineData("\"pg_catalog\".\"name\"", "\"pg_catalog\".text")]
+    [InlineData("\"char\"", "text")]
     public void PostgreSql_compares_a_constrained_cast_with_the_unconstrained_one(string storeType, string unconstrained)
     {
         var sql = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3];

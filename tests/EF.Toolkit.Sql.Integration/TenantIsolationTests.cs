@@ -425,14 +425,18 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
         }
     }
 
-    [Fact]
-    public async Task A_name_tenant_keeps_its_63_byte_limit_from_merging_two_keys()
+    [Theory]
+    [InlineData("name", 63)]
+    [InlineData("pg_catalog.\"name\"", 63)]
+    [InlineData("\"char\"", 1)]
+    public async Task A_type_with_a_built_in_length_keeps_it_from_merging_two_keys(string storeType, int length)
     {
-        // name keeps the first 63 bytes, so a 64-byte session value matched the tenant that is its prefix.
-        var roles = new TenantIsolationPolicy("RoleRows", "Tenant", "app.tenant_role", "name", policyName: "roles_iso");
-        var prefix = new string('r', 63);
+        // name keeps the first 63 bytes and "char" one, so a longer session value matched the tenant that is
+        // its prefix — quoted spellings included.
+        var roles = new TenantIsolationPolicy("RoleRows", "Tenant", "app.tenant_role", storeType, policyName: "roles_iso");
+        var prefix = new string('r', length);
         await using var admin = fixture.CreateAdminContext();
-        var create = "CREATE TABLE \"RoleRows\" (\"Id\" int PRIMARY KEY, \"Tenant\" name NOT NULL); "
+        var create = "CREATE TABLE \"RoleRows\" (\"Id\" int PRIMARY KEY, \"Tenant\" " + storeType + " NOT NULL); "
             + "INSERT INTO \"RoleRows\" VALUES (1, '" + prefix + "'); "
             + "ALTER TABLE \"RoleRows\" OWNER TO " + PostgreSqlFixture.AppUser + ";";
         await admin.Database.ExecuteSqlRawAsync(create, Token);

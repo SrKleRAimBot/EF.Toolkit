@@ -119,6 +119,17 @@ public sealed class SessionContextSqlTests
     }
 
     [Fact]
+    public void A_SQL_Server_DateTime_is_bound_as_datetime2_so_it_is_not_rounded()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var at = new DateTime(2026, 11, 26, 12, 30, 0).AddMilliseconds(1);
+
+        using var command = SessionContextSql.CreateCommand(connection, SqlDialect.SqlServer, [("TenantAt", at)]);
+
+        command.Parameters[1].DbType.ShouldBe(System.Data.DbType.DateTime2);
+    }
+
+    [Fact]
     public void PostgreSql_values_are_text_formatted_invariantly()
     {
         var previous = CultureInfo.CurrentCulture;

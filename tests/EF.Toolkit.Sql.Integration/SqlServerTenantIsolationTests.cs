@@ -100,6 +100,9 @@ public sealed class SqlServerTenantIsolationTests(SqlServerFixture fixture)
 
             (await CountAs(tenant)).ShouldBe(1);
             (await CountAs(tenant.AddMilliseconds(400))).ShouldBe(0);
+
+            // Bound as SQL Server's datetime, 12:30:00.001 was rounded to 12:30:00.000 before it was stored.
+            (await CountAs(tenant.AddMilliseconds(1))).ShouldBe(0);
         }
         finally
         {

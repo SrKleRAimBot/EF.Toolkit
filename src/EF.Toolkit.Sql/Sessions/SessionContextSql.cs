@@ -122,6 +122,14 @@ internal static partial class SessionContextSql
                 var parameter = command.CreateParameter();
                 parameter.ParameterName = name;
                 parameter.Value = value;
+
+                // SqlClient infers SQL Server's datetime for a DateTime, which rounds to 1/300 s: 12:30:00.001
+                // would be stored as 12:30:00.000, another datetime2 tenant's key. datetime2 keeps it whole.
+                if (dialect == SqlDialect.SqlServer && value is DateTime)
+                {
+                    parameter.DbType = System.Data.DbType.DateTime2;
+                }
+
                 command.Parameters.Add(parameter);
             }
 
