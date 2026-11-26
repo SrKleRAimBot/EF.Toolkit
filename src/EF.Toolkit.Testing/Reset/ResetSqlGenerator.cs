@@ -208,7 +208,9 @@ internal static class ResetSqlGenerator
     ///         has, <c>n</c> plus the increment. Which applies is read off
     ///         <c>sys.identity_columns.last_value</c>, and the seed and increment come from the table
     ///         rather than being assumed to be 1. Tables without an identity column are skipped at run
-    ///         time, which is the one source of truth — the model only says what EF generates.
+    ///         time, which is the one source of truth — the model only says what EF generates. The
+    ///         arithmetic is <c>decimal(38, 0)</c>, the widest an identity column can be: a <c>bigint</c>
+    ///         would overflow on a <c>decimal(20, 0)</c> identity seeded past its range.
     ///     </para>
     /// </remarks>
     private static ResetScript SqlServer(ResetPlan plan, ResetConnectionState state, string savepoint)
@@ -233,7 +235,7 @@ internal static class ResetSqlGenerator
                 return $"""
                     IF OBJECTPROPERTY(OBJECT_ID({name}), 'TableHasIdentity') = 1
                     BEGIN
-                        DECLARE @reseed BIGINT = IDENT_SEED({name});
+                        DECLARE @reseed decimal(38, 0) = IDENT_SEED({name});
                         IF (SELECT last_value FROM sys.identity_columns WHERE object_id = OBJECT_ID({name})) IS NOT NULL
                             SET @reseed = @reseed - IDENT_INCR({name});
                         DBCC CHECKIDENT({name}, RESEED, @reseed) WITH NO_INFOMSGS;

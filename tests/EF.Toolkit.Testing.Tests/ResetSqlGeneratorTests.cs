@@ -61,7 +61,7 @@ public sealed class ResetSqlGeneratorTests
             """
             IF OBJECTPROPERTY(OBJECT_ID(N'[sales].[Orders]'), 'TableHasIdentity') = 1
             BEGIN
-                DECLARE @reseed BIGINT = IDENT_SEED(N'[sales].[Orders]');
+                DECLARE @reseed decimal(38, 0) = IDENT_SEED(N'[sales].[Orders]');
                 IF (SELECT last_value FROM sys.identity_columns WHERE object_id = OBJECT_ID(N'[sales].[Orders]')) IS NOT NULL
                     SET @reseed = @reseed - IDENT_INCR(N'[sales].[Orders]');
                 DBCC CHECKIDENT(N'[sales].[Orders]', RESEED, @reseed) WITH NO_INFOMSGS;

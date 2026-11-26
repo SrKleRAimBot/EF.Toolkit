@@ -445,6 +445,11 @@ backing field EF maps.
   from an updatable view deletes from its base table, and on SQLite an `INSTEAD OF` trigger runs in its
   place; either way the reset would touch a table it was never asked to. (PostgreSQL's `TRUNCATE`
   refuses a view itself.)
+- **SQLite names are matched with the built-in `NOCASE` collation**, which folds ASCII letters only,
+  exactly as SQLite matches identifiers. An application that overrides `NOCASE` (Microsoft.Data.Sqlite
+  allows it, for Unicode-aware comparisons) changes that: two tables whose names differ only in the case
+  of a non-ASCII letter would then be taken for one. Keep the built-in `NOCASE` on connections a reset
+  runs on.
 - **A trigger's writes are only as transactional as the tables they land in.** A `DELETE` trigger on a
   reset table that writes to a MyISAM log keeps that write when the reset rolls back.
 - **A MySQL temporary table named like a mapped one is refused** — or like any table the foreign-key

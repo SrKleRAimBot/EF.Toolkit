@@ -512,6 +512,48 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
         }
     }
 
+    private sealed class BigSeed
+    {
+        public decimal Id { get; set; }
+
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class BigSeedContext(DbContextOptions<BigSeedContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<BigSeed>(b =>
+            {
+                b.ToTable("BigSeeds");
+                b.Property(x => x.Id).HasColumnType("decimal(20, 0)").ValueGeneratedOnAdd();
+            });
+    }
+
+    [Fact]
+    public async Task A_decimal_identity_seeded_past_the_bigint_range_restarts_at_its_seed()
+    {
+        // The reseed arithmetic was bigint: assigning this seed overflowed and the reset failed.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new BigSeedContext(
+            new DbContextOptionsBuilder<BigSeedContext>().UseSqlServer(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE BigSeeds (Id decimal(20, 0) IDENTITY(10000000000000000000, 1) PRIMARY KEY, Name nvarchar(10) NOT NULL)", Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("INSERT INTO BigSeeds (Name) VALUES (N'a'), (N'b')", Ct);
+
+            await context.Database.ResetDataAsync(cancellationToken: Ct);
+
+            context.Add(new BigSeed { Name = "c" });
+            await context.SaveChangesAsync(Ct);
+            (await context.Set<BigSeed>().SingleAsync(Ct)).Id.ShouldBe(10000000000000000000m);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS BigSeeds", Ct);
+        }
+    }
+
     [Fact]
     public async Task A_view_under_a_mapped_table_s_name_is_refused_and_its_base_table_keeps_its_rows()
     {
