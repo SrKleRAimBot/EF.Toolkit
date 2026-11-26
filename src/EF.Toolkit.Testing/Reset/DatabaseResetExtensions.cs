@@ -86,6 +86,16 @@ public static class DatabaseResetExtensions
                         .ConfigureAwait(false));
                 }
 
+                if (engine == DatabaseEngine.MySql && ResetSqlGenerator.MySqlVerifies(plan, state))
+                {
+                    state = state with
+                    {
+                        MySqlForeignKeys = DatabaseForeignKeys.GroupMySqlForeignKeys(
+                            await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlPlanForeignKeys(plan), cancellationToken)
+                                .ConfigureAwait(false)),
+                    };
+                }
+
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
 
                 await ResetRunner.RunAsync(
@@ -154,6 +164,15 @@ public static class DatabaseResetExtensions
                         transaction,
                         state.InTransaction,
                         () => ReadReferences(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan))));
+                }
+
+                if (engine == DatabaseEngine.MySql && ResetSqlGenerator.MySqlVerifies(plan, state))
+                {
+                    state = state with
+                    {
+                        MySqlForeignKeys = DatabaseForeignKeys.GroupMySqlForeignKeys(
+                            ReadRows(connection, transaction, DatabaseForeignKeys.MySqlPlanForeignKeys(plan))),
+                    };
                 }
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
@@ -339,6 +358,53 @@ public static class DatabaseResetExtensions
     {
         using var command = CreateCommand(connection, transaction, sql);
         return command.ExecuteScalar();
+    }
+
+    private static async Task<List<string[]>> ReadRowsAsync(
+        DbConnection connection,
+        DbTransaction? transaction,
+        string sql,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<string[]>();
+        var command = CreateCommand(connection, transaction, sql);
+        await using (command.ConfigureAwait(false))
+        {
+            var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await using (reader.ConfigureAwait(false))
+            {
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    rows.Add(Row(reader));
+                }
+            }
+        }
+
+        return rows;
+    }
+
+    private static List<string[]> ReadRows(DbConnection connection, DbTransaction? transaction, string sql)
+    {
+        var rows = new List<string[]>();
+        using var command = CreateCommand(connection, transaction, sql);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(Row(reader));
+        }
+
+        return rows;
+    }
+
+    private static string[] Row(DbDataReader reader)
+    {
+        var row = new string[reader.FieldCount];
+        for (var i = 0; i < row.Length; i++)
+        {
+            row[i] = Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture) ?? "";
+        }
+
+        return row;
     }
 
     // PostgreSQL aborts the caller's whole transaction on any error, a cancelled or timed-out catalog

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using EFToolkit.Sql.Definitions;
 using EFToolkit.Sql.Dialects;
 using EFToolkit.Sql.Sessions;
@@ -38,7 +39,7 @@ namespace EFToolkit.Sql.Security;
 ///         new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "integer"));
 ///     </code>
 /// </example>
-public sealed class TenantIsolationPolicy : IDatabaseObject
+public sealed partial class TenantIsolationPolicy : IDatabaseObject
 {
     internal const string Feature = "Tenant isolation (row-level security)";
 
@@ -167,18 +168,20 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
         var setting = $"NULLIF(current_setting({SqlSyntax.Literal(SqlDialect.PostgreSql, SessionKey)}, true), '')";
         var tenant = $"CAST({setting} AS {ColumnStoreType})";
 
-        // The cast must also be lossless. Casting to varchar(8) truncates 'acme-dev2' to 'acme-dev',
-        // and a session carrying the longer value would match the shorter tenant's rows. Requiring the
-        // cast to read back as the very text that was set refuses every conversion that loses
-        // anything, while the column side of the first comparison stays index-friendly.
-        //
-        // Numeric types are the exception: numeric(10,2) renders 12.5 back as 12.50, which is the same
-        // value, not a lossy one. There the constrained cast is compared with the unconstrained numeric
-        // instead — added scale passes, rounding (12.555 to 12.56) still does not.
-        var lossless = IsPostgreSqlNumeric(ColumnStoreType)
-            ? $"{tenant} = CAST({setting} AS numeric)"
-            : $"CAST({tenant} AS text) = {setting}";
-        var condition = $"{SqlSyntax.Quote(SqlDialect.PostgreSql, TenantColumn)} = {tenant} AND {lossless}";
+        // The cast must also be lossless. A type modifier is where PostgreSQL loses data on a cast:
+        // varchar(8) truncates 'acme-dev2' to 'acme-dev', numeric(10,2) rounds 12.555 to 12.56,
+        // timestamp(0) rounds away fractions — and a session carrying the longer value would match the
+        // shorter tenant's rows. So the constrained cast must equal the same value cast without the
+        // modifier. This compares values, not renderings: 12.5 is 12.50 and an ISO 8601 timestamp is
+        // the timestamp PostgreSQL prints with a space, while a truncation or rounding is still refused.
+        // A type without a modifier loses nothing on the cast, so there is nothing to compare. The
+        // column side of the first comparison stays index-friendly either way.
+        var condition = $"{SqlSyntax.Quote(SqlDialect.PostgreSql, TenantColumn)} = {tenant}";
+        var unconstrained = PostgreSqlUnconstrained(ColumnStoreType);
+        if (unconstrained is not null)
+        {
+            condition += $" AND {tenant} = CAST({setting} AS {unconstrained})";
+        }
 
         // Restrictive: PostgreSQL ORs permissive policies together, so a permissive tenant check
         // would be bypassed by any other permissive policy on the table — a reporting policy with
@@ -239,25 +242,59 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
     }
 
     // As on PostgreSQL, the conversion from the session value must be lossless: a string holding a GUID
-    // followed by extra text converts to that GUID, and an nvarchar(8) column truncates a longer
-    // value — either way matching a different tenant's rows. The converted value has to read back as
-    // the session value's own text.
+    // followed by extra text converts to that GUID, an nvarchar(8) column truncates a longer value, and
+    // decimal(10,2) rounds 12.555 — each matching a different tenant's rows. Either of two checks
+    // shows nothing was lost:
+    //  - the converted value, as a sql_variant, equals the session value. sql_variant compares values
+    //    of one type family by value (decimal 12.50 equals 12.5, datetime2(0) equals a datetime2 with
+    //    no fraction), and values of different families never as equal, so a string never passes this
+    //    way for a GUID or number column;
+    //  - or the converted value reads back as the session value's very text, compared as bytes because
+    //    string equality ignores trailing spaces. This is how a string session value passes for a
+    //    column of another type: only when it is that value's own canonical text.
     private string SqlServerCondition()
     {
         var value = $"SESSION_CONTEXT({SqlSyntax.Literal(SqlDialect.SqlServer, SessionKey)})";
         var tenant = $"CAST({value} AS {ColumnStoreType})";
-        // Compared as bytes: SQL Server's string equality ignores trailing spaces, so a GUID followed by a
-        // space would still read back "equal". The toolkit stores typed session values, which both sides
-        // render identically, so an exact comparison costs nothing for them.
-        return $"@tenant = {tenant} AND CAST(CAST({tenant} AS nvarchar(4000)) AS varbinary(8000)) "
-            + $"= CAST(CAST({value} AS nvarchar(4000)) AS varbinary(8000))";
+        return $"@tenant = {tenant} AND (CAST({tenant} AS sql_variant) = {value} "
+            + $"OR CAST(CAST({tenant} AS nvarchar(4000)) AS varbinary(8000)) "
+            + $"= CAST(CAST({value} AS nvarchar(4000)) AS varbinary(8000)))";
     }
 
-    private static bool IsPostgreSqlNumeric(string storeType)
+    /// <summary>
+    ///     <paramref name="storeType" /> with its length, precision or scale modifiers removed, or
+    ///     <see langword="null" /> when it has none.
+    /// </summary>
+    /// <remarks>
+    ///     <c>char</c> and <c>bit</c> are the two types whose bare name is not unbounded: bare, they mean
+    ///     length 1. Their unbounded forms are <c>bpchar</c> and <c>varbit</c>.
+    /// </remarks>
+    internal static string? PostgreSqlUnconstrained(string storeType)
     {
-        var type = storeType.Trim().ToLowerInvariant();
-        return type.StartsWith("numeric", StringComparison.Ordinal) || type.StartsWith("decimal", StringComparison.Ordinal);
+        var bare = TypeModifier().Replace(storeType, "");
+        if (bare.Length == storeType.Length)
+        {
+            return null;
+        }
+
+        bare = Whitespace().Replace(bare.Trim(), " ");
+        var schema = bare.StartsWith("pg_catalog.", StringComparison.OrdinalIgnoreCase) ? bare[..11] : "";
+        var name = bare[schema.Length..].ToLowerInvariant();
+        return name switch
+        {
+            "char" or "character" or "nchar" or "national character" or "national char" => schema + "bpchar",
+            "char[]" or "character[]" => schema + "bpchar[]",
+            "bit" => schema + "varbit",
+            "bit[]" => schema + "varbit[]",
+            _ => bare,
+        };
     }
+
+    [GeneratedRegex(@"\s*\(\s*-?\d+\s*(,\s*-?\d+\s*)?\)", RegexOptions.CultureInvariant)]
+    private static partial Regex TypeModifier();
+
+    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
+    private static partial Regex Whitespace();
 
     private static SqlFeatureNotSupportedException NotSupported(SqlDialect dialect)
         => SqlFeatureNotSupportedException.For(

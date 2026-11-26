@@ -20,13 +20,31 @@ namespace EFToolkit.Testing;
 ///     A user variable would save the round trip, but both MySQL client libraries refuse
 ///     <c>@name</c> as an undefined parameter unless the connection string opts in to user variables.
 /// </param>
+/// <param name="MySqlForeignKeys">
+///     MySQL: the catalog's foreign keys from the reset tables, read only when the reset deletes with
+///     checks off, for the verify step. <see langword="null" /> when not read.
+/// </param>
 internal sealed record ResetConnectionState(
     bool RestartIdentity,
     bool InTransaction,
     bool SqliteForeignKeysEnabled = true,
     bool SqliteHasSequenceTable = false,
     bool MySqlForeignKeyChecks = true,
-    bool SqliteDeferForeignKeys = false);
+    bool SqliteDeferForeignKeys = false,
+    IReadOnlyList<MySqlForeignKey>? MySqlForeignKeys = null);
+
+/// <summary>A MySQL foreign key from a reset table, as the catalog records it.</summary>
+/// <param name="Table">The referencing table, in the connection's database.</param>
+/// <param name="Columns">Its columns, in key order.</param>
+/// <param name="ReferencedSchema">The referenced table's database.</param>
+/// <param name="ReferencedTable">The referenced table.</param>
+/// <param name="ReferencedColumns">The referenced columns, in key order.</param>
+internal sealed record MySqlForeignKey(
+    string Table,
+    IReadOnlyList<string> Columns,
+    string ReferencedSchema,
+    string ReferencedTable,
+    IReadOnlyList<string> ReferencedColumns);
 
 /// <summary>The statements a reset runs, in three parts.</summary>
 internal sealed record ResetScript
@@ -209,11 +227,21 @@ internal static class ResetSqlGenerator
     }
 
     /// <remarks>
-    ///     <c>TRUNCATE</c> is the only statement that restarts <c>AUTO_INCREMENT</c> without DDL, and
-    ///     both it and <c>ALTER TABLE</c> commit any open transaction implicitly. Inside a transaction
-    ///     the rows are deleted instead and the counters keep going: an isolated scope that silently
-    ///     committed would be worse than one whose ids are not 1. The check setting is saved and
-    ///     left alone when it was already off, so a session that had it off keeps it off.
+    ///     <para>
+    ///         <c>TRUNCATE</c> is the only statement that restarts <c>AUTO_INCREMENT</c> without DDL, and
+    ///         both it and <c>ALTER TABLE</c> commit any open transaction implicitly. Inside a transaction
+    ///         the rows are deleted instead and the counters keep going: an isolated scope that silently
+    ///         committed would be worse than one whose ids are not 1. <c>TRUNCATE</c> refuses a table
+    ///         any foreign key references, so it runs with checks off; it fires no trigger, so nothing
+    ///         can write behind it.
+    ///     </para>
+    ///     <para>
+    ///         A deleting reset keeps the checks on and relies on the dependency order, as on SQL Server,
+    ///         so a trigger that writes a row pointing at a deleted one fails the reset there and then.
+    ///         Only a plan with a foreign-key cycle needs them off. With them off — suspended, or already
+    ///         off for the session, which keeps them off — <see cref="ResetConnectionState.MySqlForeignKeys" /> is checked
+    ///         before the commit: MySQL never re-checks rows written while checks were off.
+    ///     </para>
     /// </remarks>
     private static ResetScript MySql(ResetPlan plan, ResetConnectionState state)
     {
@@ -225,7 +253,8 @@ internal static class ResetSqlGenerator
                 : $"DELETE FROM {Quote(t, '`', '`')};")
             .ToList();
 
-        var script = state.MySqlForeignKeyChecks
+        var suspend = state.MySqlForeignKeyChecks && (truncate || plan.CyclicTables.Count > 0);
+        var script = suspend
             ? new ResetScript(["SET FOREIGN_KEY_CHECKS = 0;"], body, ["SET FOREIGN_KEY_CHECKS = 1;"])
             : new ResetScript([], body, []);
 
@@ -233,6 +262,11 @@ internal static class ResetSqlGenerator
         if (truncate)
         {
             return script;
+        }
+
+        if (MySqlVerifies(plan, state))
+        {
+            script = script with { Verify = MySqlOrphans(state.MySqlForeignKeys ?? []) };
         }
 
         return state.InTransaction
@@ -243,6 +277,38 @@ internal static class ResetSqlGenerator
                 Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};"],
             }
             : script with { Begin = ["START TRANSACTION;"], Commit = ["COMMIT;"], Rollback = ["ROLLBACK;"] };
+    }
+
+    /// <summary>
+    ///     Whether a MySQL reset of <paramref name="plan" /> deletes with foreign-key checks off, and so
+    ///     needs the catalog's foreign keys to verify against.
+    /// </summary>
+    internal static bool MySqlVerifies(ResetPlan plan, ResetConnectionState state)
+        => plan.Tables.Count > 0
+            && !(state.RestartIdentity && !state.InTransaction)
+            && (!state.MySqlForeignKeyChecks || plan.CyclicTables.Count > 0);
+
+    // Every reset table is empty once the deletes are done, so any row there that violates a foreign key
+    // was written during the reset — by a trigger — and none is acceptable. Tables outside the reset
+    // cannot be affected: the catalog preflight refuses any foreign key from one of them into a reset
+    // table. A key with a NULL column is not enforced, as MySQL treats it.
+    private static string[] MySqlOrphans(IReadOnlyList<MySqlForeignKey> foreignKeys)
+    {
+        if (foreignKeys.Count == 0)
+        {
+            return [];
+        }
+
+        var counts = foreignKeys.Select(fk =>
+        {
+            var present = string.Join(" AND ", fk.Columns.Select(c => $"c.{Quote(c, '`', '`')} IS NOT NULL"));
+            var join = string.Join(" AND ", fk.Columns.Zip(fk.ReferencedColumns, (c, r) => $"p.{Quote(r, '`', '`')} = c.{Quote(c, '`', '`')}"));
+            var parent = $"{Quote(fk.ReferencedSchema, '`', '`')}.{Quote(fk.ReferencedTable, '`', '`')}";
+            return $"(SELECT COUNT(*) FROM {Quote(fk.Table, '`', '`')} AS c WHERE {present} "
+                + $"AND NOT EXISTS (SELECT 1 FROM {parent} AS p WHERE {join}))";
+        });
+
+        return ["SELECT " + string.Join(" + ", counts) + ";"];
     }
 
     /// <remarks>

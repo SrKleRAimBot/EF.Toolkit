@@ -18,7 +18,7 @@ public sealed class StoredProcedureDefinitionTests
             "report", [new SqlParameterDefinition("from", "int"), new SqlParameterDefinition("tenantId", "int")], "BEGIN END;");
 
         procedure.GetCreateSql(SqlDialect.PostgreSql)[0].ShouldContain("(IN \"from\" int, IN tenantId int)");
-        procedure.GetCreateSql(SqlDialect.MySql)[1].ShouldContain("IN from int");
+        procedure.GetCreateSql(SqlDialect.MySql)[1].ShouldContain("IN `from` int");
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public sealed class StoredProcedureDefinitionTests
         sql.ShouldBe(
         [
             "DROP PROCEDURE IF EXISTS `close_month`",
-            "CREATE PROCEDURE `close_month`(IN tenant_id integer, OUT total numeric(10,2), INOUT counter integer)\nBEGIN\n  SET total = 0;\nEND",
+            "CREATE PROCEDURE `close_month`(IN `tenant_id` integer, OUT `total` numeric(10,2), INOUT `counter` integer)\nBEGIN\n  SET total = 0;\nEND",
         ]);
         sql.ShouldAllBe(s => !s.Contains("DELIMITER"));
     }

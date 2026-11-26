@@ -38,6 +38,33 @@ public sealed class MySqlDdlTests(MySqlFixture fixture)
     }
 
     [Fact]
+    public async Task A_procedure_with_a_reserved_parameter_name_is_created_replaced_and_called()
+    {
+        // `select` cannot be a bare parameter name; written bare, MySQL refuses the CREATE — after the
+        // replacement's DROP has already removed the procedure that was there.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        var procedure = new StoredProcedureDefinition(
+            "orders_select",
+            [new("select", "int")],
+            "BEGIN INSERT INTO Orders (TenantId, Total, Note) VALUES (9, `select`, 'reserved'); END");
+
+        await using var context = fixture.CreateContext();
+        await context.Database.ExecuteSqlRawAsync("DELETE FROM Orders", Token);
+        await context.Database.CreateDatabaseObjectsAsync(procedure);
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(procedure);
+            await context.Database.ExecuteProcedureAsync("orders_select", new { Select = 77 }, cancellationToken: Token);
+
+            (await context.Orders.SingleAsync(o => o.Note == "reserved", Token)).Total.ShouldBe(77m);
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(procedure);
+        }
+    }
+
+    [Fact]
     public async Task Outside_a_transaction_objects_are_created_and_dropped()
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");

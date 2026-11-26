@@ -140,11 +140,12 @@ On PostgreSQL the dollar-quote tag is chosen so that it does not occur in the bo
 `DELIMITER` script — `DELIMITER` belongs to the `mysql` command-line client, not to the server. Pass
 `language: "sql"` for a PostgreSQL procedure in plain SQL.
 
-Parameter names are written bare, because the body refers to them bare, so they must be plain
-identifiers (letters, digits, underscores). SQL Server's `@` is added for you. On PostgreSQL a name
+Parameter names must be plain identifiers (letters, digits, underscores), because the body refers to
+them bare. SQL Server's `@` is added for you. On PostgreSQL a name
 that is a reserved word there (`from`, `order`, `user`, …) is quoted in the definition and in named
 calls, as `"from"`; refer to it quoted inside the body too. Other names stay bare, so PostgreSQL folds
-them to lower case.
+them to lower case. On MySQL every parameter name is quoted (`` `select` ``), which changes nothing for
+the body's bare references; a reserved one must be quoted in the body as well.
 
 ### Calling them
 
@@ -242,25 +243,34 @@ ALTER TABLE "Orders" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "Orders" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "Orders_tenant_isolation" ON "Orders"
     AS RESTRICTIVE FOR ALL TO PUBLIC
-    USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer)
-           AND CAST(CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AS text)
-               = NULLIF(current_setting('app.tenant_id', true), ''))
+    USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
     WITH CHECK (/* the same */);
 CREATE POLICY "Orders_tenant_isolation_access" ON "Orders"
     AS PERMISSIVE FOR ALL TO PUBLIC
     USING (true) WITH CHECK (true);
 ```
 
-The second half of each comparison makes the conversion from the session value **lossless**. Casting
-alone would truncate: with a `varchar(8)` tenant column, a session carrying `acme-dev2` would match
-`acme-dev`'s rows, and on SQL Server a string holding a GUID followed by anything converts to that
-GUID. The session value must read back as exactly the text that was set, so the value you put in the
-session context should be the tenant value's own canonical text — `1`, not `01`; a GUID as .NET formats
-it — which is what `UseSessionContext` writes for the CLR value you return. Return the tenant as its
-own type (a `Guid`, an `int`), not as a string. On SQL Server the texts are compared as bytes, because
-string equality there ignores trailing spaces. A PostgreSQL `numeric`/`decimal` column is compared as a
-number instead: `numeric(10,2)` reads `12.5` back as `12.50`, the same tenant, while `12.555` rounds to
-a different one and matches nothing.
+The cast from the session value must also be **lossless**, so for a column type with a length,
+precision or scale a second comparison is added. Casting alone would truncate or round: with a
+`varchar(8)` tenant column a session carrying `acme-dev2` would match `acme-dev`'s rows, and with
+`numeric(10,2)` a session carrying `12.555` would match `12.56`'s. On PostgreSQL the constrained cast
+must therefore equal the same value cast without the modifier:
+
+```sql
+USING ("TenantId" = CAST(s AS varchar(8)) AND CAST(s AS varchar(8)) = CAST(s AS varchar))
+```
+
+Values are compared, not their text, so `12.5` matches a `numeric(10,2)` tenant stored as `12.50`, and
+the ISO 8601 timestamp `UseSessionContext` writes for a `DateTime` matches the `timestamp(0)` PostgreSQL
+prints with a space; `12:30:00.4` against that column matches nothing. A type with no modifier
+(`integer`, `uuid`, `text`) loses nothing on the cast and gets no second comparison.
+
+On SQL Server a string holding a GUID followed by anything converts to that GUID, and its string
+equality ignores trailing spaces. There the converted value must either equal the session value as a
+`sql_variant`, which compares a typed value by value (`decimal` 12.5 equals `decimal(10,2)` 12.50, but
+never a string with a GUID), or read back as the session value's exact text, compared as bytes. Return
+the tenant from `UseSessionContext` as its own type (a `Guid`, an `int`, a `decimal`); a string works
+only when it is that value's canonical text, so `12.50` for a `decimal(10,2)` tenant and not `12.5`.
 
 The tenant check is **restrictive**. PostgreSQL ORs permissive policies together, so a permissive
 tenant check would be bypassed by any other permissive policy on the table — a reporting policy with
@@ -296,8 +306,9 @@ On **SQL Server** it renders a schema-bound predicate function and a security po
 CREATE OR ALTER FUNCTION [dbo].[Orders_tenant_isolation_predicate](@tenant int)
 RETURNS TABLE WITH SCHEMABINDING
 AS RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'app.tenant_id') AS int)
-    AND CAST(CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS nvarchar(4000)) AS varbinary(8000))
-        = CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS nvarchar(4000)) AS varbinary(8000));
+    AND (CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS sql_variant) = SESSION_CONTEXT(N'app.tenant_id')
+         OR CAST(CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS nvarchar(4000)) AS varbinary(8000))
+            = CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS nvarchar(4000)) AS varbinary(8000)));
 
 CREATE SECURITY POLICY [dbo].[Orders_tenant_isolation]
     ADD FILTER PREDICATE [dbo].[Orders_tenant_isolation_predicate]([TenantId]) ON [dbo].[Orders],
@@ -467,8 +478,9 @@ way to emit SQL for the wrong engine.
 **Names and values.** Every name is quoted, with the engine's quote character doubled inside it
 (`"we""ird"`, `[a]]b]`, `` `a``b` ``), even names that would be legal bare — a reserved-word list per
 engine and version is never complete, and names EF mapped (`Order`, `User`) are exactly the ones that
-collide. The exceptions are routine parameter names and PostgreSQL languages, which must be plain
-identifiers because the body refers to them unquoted. Values never reach SQL text at runtime: they are
+collide. The exceptions are PostgreSQL languages and routine parameter names, which must be plain
+identifiers because the body refers to them unquoted. PostgreSQL quotes a parameter name only when it
+is reserved, since quoting would stop it folding to lower case; MySQL quotes every one. Values never reach SQL text at runtime: they are
 `{0}` placeholders that EF binds as parameters. The only literal this package renders is a
 session-context key inside a generated policy, escaped per engine.
 

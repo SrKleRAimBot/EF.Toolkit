@@ -258,12 +258,14 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
         }
     }
 
-    [Fact]
-    public async Task A_numeric_tenant_column_accepts_added_scale_but_not_rounding()
+    [Theory]
+    [InlineData("numeric(10,2)")]
+    [InlineData("pg_catalog.numeric(10,2)")]
+    public async Task A_numeric_tenant_column_accepts_added_scale_but_not_rounding(string storeType)
     {
         // numeric(10,2) renders 12.5 back as 12.50: the same value, which a text comparison refused.
         // Rounding 12.555 to 12.56 is a different tenant and must still reach nothing.
-        var accounts = new TenantIsolationPolicy("Accounts", "Tenant", "app.tenant_num", "numeric(10,2)", policyName: "accounts_iso");
+        var accounts = new TenantIsolationPolicy("Accounts", "Tenant", "app.tenant_num", storeType, policyName: "accounts_iso");
         await using var admin = fixture.CreateAdminContext();
         await admin.Database.ExecuteSqlRawAsync(
             "CREATE TABLE \"Accounts\" (\"Id\" int PRIMARY KEY, \"Tenant\" numeric(10,2) NOT NULL); "
@@ -288,6 +290,41 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
         finally
         {
             await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Accounts\"", Token);
+        }
+    }
+
+    [Fact]
+    public async Task A_timestamp_tenant_matches_the_session_setter_s_own_format_but_not_a_rounded_one()
+    {
+        // The setter writes a DateTime as ISO 8601 ("2026-11-26T12:30:00.0000000"), which PostgreSQL
+        // prints back as "2026-11-26 12:30:00" — the same instant. timestamp(0) rounding away a fraction
+        // is a different tenant.
+        var tenant = new DateTime(2026, 11, 26, 12, 30, 0, DateTimeKind.Unspecified);
+        var cohorts = new TenantIsolationPolicy("Cohorts", "Tenant", "app.tenant_at", "timestamp(0)", policyName: "cohorts_iso");
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Cohorts\" (\"Id\" int PRIMARY KEY, \"Tenant\" timestamp(0) NOT NULL); "
+                + "INSERT INTO \"Cohorts\" VALUES (1, '2026-11-26 12:30:00'); "
+                + $"ALTER TABLE \"Cohorts\" OWNER TO {PostgreSqlFixture.AppUser};",
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(cohorts);
+
+            async Task<List<int>> IdsAs(DateTime at)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set("app.tenant_at", () => at))
+                    .Options);
+                return await context.Database.SqlQueryRaw<int>("SELECT \"Id\" AS \"Value\" FROM \"Cohorts\"").ToListAsync(Token);
+            }
+
+            (await IdsAs(tenant)).ShouldBe([1]);
+            (await IdsAs(tenant.AddMilliseconds(400))).ShouldBeEmpty();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Cohorts\"", Token);
         }
     }
 

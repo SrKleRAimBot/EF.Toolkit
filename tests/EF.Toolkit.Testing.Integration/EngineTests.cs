@@ -681,6 +681,76 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
             inTransaction,
             o => o.RestartIdentity = false);
 
+    // A trigger on Products writes an order line for an order that does not exist, into OrderLines,
+    // which the reset has already emptied. MySQL never re-checks a row written while checks were off,
+    // so with them suspended that orphan used to be committed.
+    private const string LeaveOrphan =
+        "CREATE TRIGGER LeaveOrphan AFTER DELETE ON Products FOR EACH ROW "
+        + "INSERT INTO OrderLines (OrderId, ProductId, Quantity) VALUES (2147483647, OLD.Id, 1)";
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_trigger_that_orphans_a_row_while_checks_are_suspended_fails_the_reset_and_rolls_it_back(bool inTransaction)
+    {
+        // Categories, Teams and Players are on cycles, so the deletes run with checks suspended.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(LeaveOrphan, Ct);
+        try
+        {
+            await using (var transaction = inTransaction ? await context.Database.BeginTransactionAsync(Ct) : null)
+            {
+                (await Should.ThrowAsync<InvalidOperationException>(
+                        () => context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct)))
+                    .Message.ShouldContain("violate a foreign key");
+                if (transaction is not null)
+                {
+                    await transaction.CommitAsync(Ct);
+                }
+            }
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM OrderLines WHERE OrderId = 2147483647")).ShouldBe(0);
+            await AssertConstraintsRestoredAsync(context);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS LeaveOrphan", Ct);
+        }
+    }
+
+    [Fact]
+    public async Task Without_a_cycle_the_deletes_keep_checks_on_and_the_orphaning_trigger_fails_at_once()
+    {
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(LeaveOrphan, Ct);
+        try
+        {
+            await Should.ThrowAsync<DbException>(() => context.Database.ResetDataAsync(
+                o => o.ExcludeEntity<Category>().ExcludeEntity<Team>().ExcludeEntity<Player>().RestartIdentity = false,
+                Ct));
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            await AssertConstraintsRestoredAsync(context);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS LeaveOrphan", Ct);
+        }
+
+        // And without the trigger, the same reset empties what it was asked to.
+        await context.Database.ResetDataAsync(
+            o => o.ExcludeEntity<Category>().ExcludeEntity<Team>().ExcludeEntity<Player>().RestartIdentity = false, Ct);
+        (await context.OrderLines.CountAsync(Ct)).ShouldBe(0);
+        (await context.Categories.CountAsync(Ct)).ShouldBeGreaterThan(0);
+    }
+
     [Fact]
     public Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset()
         // FOREIGN_KEY_CHECKS = 0 would let the truncate through, so the catalog check refuses first.

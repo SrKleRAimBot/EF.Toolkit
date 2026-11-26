@@ -119,6 +119,31 @@ internal static class DatabaseForeignKeys
         return "N" + SqlLiteral(name);
     }
 
+    /// <summary>
+    ///     MySQL: one row per column of every foreign key from a table in <paramref name="plan" /> —
+    ///     constraint, table, column, referenced database, table and column — in key order.
+    /// </summary>
+    internal static string MySqlPlanForeignKeys(ResetPlan plan) => $"""
+        SELECT k.CONSTRAINT_NAME, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME
+        FROM information_schema.KEY_COLUMN_USAGE AS k
+        WHERE k.TABLE_SCHEMA = DATABASE()
+          AND k.REFERENCED_TABLE_NAME IS NOT NULL
+          AND k.TABLE_NAME IN ({MySqlNames(plan)})
+        ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION;
+        """;
+
+    /// <summary>Groups the rows of <see cref="MySqlPlanForeignKeys" /> into keys.</summary>
+    internal static List<MySqlForeignKey> GroupMySqlForeignKeys(IEnumerable<string[]> rows)
+        => rows
+            .GroupBy(r => (Table: r[1], Constraint: r[0]))
+            .Select(g => new MySqlForeignKey(
+                g.Key.Table,
+                [.. g.Select(r => r[2])],
+                g.First()[3],
+                g.First()[4],
+                [.. g.Select(r => r[5])]))
+            .ToList();
+
     private static string MySqlNames(ResetPlan plan)
         => string.Join(", ", plan.Tables.Select(t => SqlLiteral(t.Name.Replace("\\", "\\\\", StringComparison.Ordinal))));
 

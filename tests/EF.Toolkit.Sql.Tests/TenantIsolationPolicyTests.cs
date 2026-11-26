@@ -18,8 +18,8 @@ public sealed class TenantIsolationPolicyTests
                 AS RESTRICTIVE
                 FOR ALL
                 TO PUBLIC
-                USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AND CAST(CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AS text) = NULLIF(current_setting('app.tenant_id', true), ''))
-                WITH CHECK ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AND CAST(CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AS text) = NULLIF(current_setting('app.tenant_id', true), ''))
+                USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
+                WITH CHECK ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
             """,
             "DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"",
             """
@@ -133,7 +133,7 @@ public sealed class TenantIsolationPolicyTests
             RETURNS TABLE
             WITH SCHEMABINDING
             AS
-            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND CAST(CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) AS varbinary(8000)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(8000))
+            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND (CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS sql_variant) = SESSION_CONTEXT(N'TenantId') OR CAST(CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) AS varbinary(8000)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(8000)))
             """,
             """
             CREATE SECURITY POLICY [sales].[Orders_tenant_isolation]
@@ -145,15 +145,33 @@ public sealed class TenantIsolationPolicyTests
         ]);
 
     [Theory]
-    [InlineData("numeric(10,2)")]
-    [InlineData(" DECIMAL(12, 4)")]
-    public void PostgreSql_numeric_tenants_compare_as_numbers_so_added_scale_is_not_taken_for_loss(string storeType)
+    [InlineData("numeric(10,2)", "numeric")]
+    [InlineData(" DECIMAL(12, 4)", "DECIMAL")]
+    [InlineData("pg_catalog.numeric(10,2)", "pg_catalog.numeric")]
+    [InlineData("varchar(8)", "varchar")]
+    [InlineData("character varying (8)", "character varying")]
+    [InlineData("timestamp(0) with time zone", "timestamp with time zone")]
+    [InlineData("char(8)", "bpchar")]
+    [InlineData("CHARACTER(8)", "bpchar")]
+    [InlineData("pg_catalog.bpchar(8)", "pg_catalog.bpchar")]
+    [InlineData("bit(3)", "varbit")]
+    [InlineData("varchar(8)[]", "varchar[]")]
+    public void PostgreSql_compares_a_constrained_cast_with_the_unconstrained_one(string storeType, string unconstrained)
     {
         var sql = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3];
 
-        sql.ShouldContain("= CAST(NULLIF(current_setting('app.tenant_id', true), '') AS numeric)");
+        sql.ShouldContain(
+            $"AS {storeType.Trim()}) = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS {unconstrained})");
         sql.ShouldNotContain("AS text)");
     }
+
+    [Theory]
+    [InlineData("integer")]
+    [InlineData("uuid")]
+    [InlineData("pg_catalog.timestamp")]
+    public void PostgreSql_needs_no_second_comparison_for_a_type_without_modifiers(string storeType)
+        => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3]
+            .ShouldContain($"USING (\"TenantId\" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS {storeType}))\n");
 
     [Fact]
     public void SqlServer_escapes_the_key_literal()

@@ -85,7 +85,7 @@ public sealed class FunctionDefinitionTests
             .ShouldBe(
             [
                 "DROP FUNCTION IF EXISTS `add`",
-                "CREATE FUNCTION `add`(a integer, b integer)\nRETURNS INT\nDETERMINISTIC\nRETURN a + b",
+                "CREATE FUNCTION `add`(`a` integer, `b` integer)\nRETURNS INT\nDETERMINISTIC\nRETURN a + b",
             ]);
 
     [Fact]

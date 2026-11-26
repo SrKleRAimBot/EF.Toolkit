@@ -112,7 +112,7 @@ public sealed class MigrationBuilderExtensionsTests
         Sql(builder).ShouldBe(
         [
             "DROP PROCEDURE IF EXISTS `p`",
-            "CREATE PROCEDURE `p`(IN a INT)\nBEGIN SELECT a; END",
+            "CREATE PROCEDURE `p`(IN `a` INT)\nBEGIN SELECT a; END",
             "DROP PROCEDURE IF EXISTS `p`",
         ]);
     }

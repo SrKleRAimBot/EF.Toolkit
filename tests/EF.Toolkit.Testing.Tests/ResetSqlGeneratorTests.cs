@@ -114,6 +114,63 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
+    public void MySql_deletes_with_checks_on_when_no_table_is_on_a_cycle()
+    {
+        // The order alone is enough, and a trigger writing an orphan then fails the reset on the spot.
+        var script = Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines, Orders]), Default with { InTransaction = true });
+
+        script.Prologue.ShouldBeEmpty();
+        script.Epilogue.ShouldBeEmpty();
+        script.Verify.ShouldBeEmpty();
+        script.Body.ShouldBe(["DELETE FROM `Lines`;", "DELETE FROM `sales`.`Orders`;"]);
+    }
+
+    [Fact]
+    public void MySql_suspends_checks_for_a_cycle_and_verifies_every_reset_table_s_foreign_keys_before_committing()
+    {
+        var plan = ResetPlan.Create([Lines, Orders], cyclicTables: [Orders]);
+        ResetSqlGenerator.MySqlVerifies(plan, Default with { RestartIdentity = false }).ShouldBeTrue();
+        var state = Default with
+        {
+            RestartIdentity = false,
+            MySqlForeignKeys =
+            [
+                new MySqlForeignKey("Lines", ["OrderId", "Shop`Id"], "shop", "Orders", ["Id", "ShopId"]),
+                new MySqlForeignKey("Orders", ["ParentId"], "shop", "Orders", ["Id"]),
+            ],
+        };
+
+        var script = Generate(DatabaseEngine.MySql, plan, state);
+
+        script.Prologue.ShouldBe(["SET FOREIGN_KEY_CHECKS = 0;"]);
+        script.Epilogue.ShouldBe(["SET FOREIGN_KEY_CHECKS = 1;"]);
+        script.Verify.ShouldBe(
+        [
+            "SELECT (SELECT COUNT(*) FROM `Lines` AS c WHERE c.`OrderId` IS NOT NULL AND c.`Shop``Id` IS NOT NULL "
+                + "AND NOT EXISTS (SELECT 1 FROM `shop`.`Orders` AS p WHERE p.`Id` = c.`OrderId` AND p.`ShopId` = c.`Shop``Id`)) + "
+                + "(SELECT COUNT(*) FROM `Orders` AS c WHERE c.`ParentId` IS NOT NULL "
+                + "AND NOT EXISTS (SELECT 1 FROM `shop`.`Orders` AS p WHERE p.`Id` = c.`ParentId`));",
+        ]);
+        script.All.ToList().IndexOf(script.Verify[0]).ShouldBeLessThan(script.All.ToList().IndexOf("COMMIT;"));
+    }
+
+    [Fact]
+    public void MySql_verifies_when_the_session_already_had_checks_off()
+    {
+        var state = Default with { InTransaction = true, MySqlForeignKeyChecks = false, MySqlForeignKeys = [new MySqlForeignKey("Lines", ["OrderId"], "shop", "Orders", ["Id"])] };
+        ResetSqlGenerator.MySqlVerifies(ResetPlan.Create([Lines]), state).ShouldBeTrue();
+
+        var script = Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), state);
+
+        script.Prologue.ShouldBeEmpty();
+        script.Verify.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public void MySql_truncating_needs_no_verify_because_truncate_fires_no_trigger()
+        => ResetSqlGenerator.MySqlVerifies(ResetPlan.Create([Lines], cyclicTables: [Lines]), Default).ShouldBeFalse();
+
+    [Fact]
     public void MySql_deletes_inside_a_transaction_because_truncate_would_commit_it()
         => Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), Default with { InTransaction = true })
             .Body.ShouldBe(["DELETE FROM `Lines`;"]);

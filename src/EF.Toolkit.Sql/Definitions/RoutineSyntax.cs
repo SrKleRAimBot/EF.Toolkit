@@ -47,7 +47,12 @@ internal static class RoutineSyntax
         SqlDialect dialect = SqlDialect.MySql)
         => string.Join(", ", parameters.Select(p =>
         {
-            var name = dialect == SqlDialect.PostgreSql ? PostgreSqlParameterName(p.Name) : p.Name;
+            // MySQL quotes every name: quoting changes nothing there (parameter names ignore case either
+            // way, and the body's bare references still resolve), and a reserved word such as `select`
+            // cannot be written bare. A refused CREATE would leave a replaced procedure dropped.
+            var name = dialect == SqlDialect.PostgreSql
+                ? PostgreSqlParameterName(p.Name)
+                : SqlSyntax.Quote(SqlDialect.MySql, p.Name);
             return withDirection ? $"{Direction(p.Direction)} {name} {p.StoreType}" : $"{name} {p.StoreType}";
         }));
 
