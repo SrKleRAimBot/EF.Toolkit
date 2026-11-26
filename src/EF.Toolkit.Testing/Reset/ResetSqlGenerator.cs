@@ -11,11 +11,17 @@ namespace EFToolkit.Testing;
 ///     Whether <c>sqlite_sequence</c> exists. SQLite creates it on the first <c>AUTOINCREMENT</c> table
 ///     and refuses to name it before then.
 /// </param>
+/// <param name="MySqlForeignKeyChecks">
+///     The session's <c>@@FOREIGN_KEY_CHECKS</c>, read beforehand so it can be restored as a literal.
+///     A user variable would save the round trip, but both MySQL client libraries refuse
+///     <c>@name</c> as an undefined parameter unless the connection string opts in to user variables.
+/// </param>
 internal sealed record ResetConnectionState(
     bool RestartIdentity,
     bool InTransaction,
     bool SqliteForeignKeysEnabled = true,
-    bool SqliteHasSequenceTable = false);
+    bool SqliteHasSequenceTable = false,
+    bool MySqlForeignKeyChecks = true);
 
 /// <summary>The statements a reset runs, in three parts.</summary>
 /// <param name="Prologue">Suspends whatever has to be suspended.</param>
@@ -136,7 +142,7 @@ internal static class ResetSqlGenerator
     ///     both it and <c>ALTER TABLE</c> commit any open transaction implicitly. Inside a transaction
     ///     the rows are deleted instead and the counters keep going: an isolated scope that silently
     ///     committed would be worse than one whose ids are not 1. The check setting is saved and
-    ///     restored rather than switched back on, so a session that had it off keeps it off.
+    ///     left alone when it was already off, so a session that had it off keeps it off.
     /// </remarks>
     private static ResetScript MySql(ResetPlan plan, ResetConnectionState state)
     {
@@ -148,10 +154,9 @@ internal static class ResetSqlGenerator
                 : $"DELETE FROM {Quote(t, '`', '`')};")
             .ToList();
 
-        return new ResetScript(
-            ["SET @ef_toolkit_foreign_key_checks = @@FOREIGN_KEY_CHECKS;", "SET FOREIGN_KEY_CHECKS = 0;"],
-            body,
-            ["SET FOREIGN_KEY_CHECKS = @ef_toolkit_foreign_key_checks;"]);
+        return state.MySqlForeignKeyChecks
+            ? new ResetScript(["SET FOREIGN_KEY_CHECKS = 0;"], body, ["SET FOREIGN_KEY_CHECKS = 1;"])
+            : new ResetScript([], body, []);
     }
 
     /// <remarks>

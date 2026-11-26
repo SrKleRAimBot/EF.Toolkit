@@ -138,8 +138,8 @@ public static class DatabaseResetExtensions
 
     /// <summary>The SQL a reset of this context's database would run, without running it.</summary>
     /// <remarks>
-    ///     For tests of the generated SQL. Assumes no transaction is open and, on SQLite, that foreign
-    ///     keys are on and <c>sqlite_sequence</c> exists, since answering either needs the database.
+    ///     For tests of the generated SQL. Assumes foreign keys are enforced and, on SQLite, that
+    ///     <c>sqlite_sequence</c> exists, since answering either needs the database.
     /// </remarks>
     internal static ResetScript GenerateResetScript(
         DatabaseFacade database,
@@ -180,6 +180,14 @@ public static class DatabaseResetExtensions
         CancellationToken cancellationToken)
     {
         var inTransaction = InTransaction(transaction);
+        if (engine == DatabaseEngine.MySql)
+        {
+            var checks = Convert.ToInt64(
+                await ScalarAsync(connection, transaction, "SELECT @@FOREIGN_KEY_CHECKS;", cancellationToken).ConfigureAwait(false),
+                System.Globalization.CultureInfo.InvariantCulture) != 0;
+            return new ResetConnectionState(options.RestartIdentity, inTransaction, MySqlForeignKeyChecks: checks);
+        }
+
         if (engine != DatabaseEngine.Sqlite)
         {
             return new ResetConnectionState(options.RestartIdentity, inTransaction);
@@ -202,6 +210,14 @@ public static class DatabaseResetExtensions
         ResetDataOptions options)
     {
         var inTransaction = InTransaction(transaction);
+        if (engine == DatabaseEngine.MySql)
+        {
+            var checks = Convert.ToInt64(
+                Scalar(connection, transaction, "SELECT @@FOREIGN_KEY_CHECKS;"),
+                System.Globalization.CultureInfo.InvariantCulture) != 0;
+            return new ResetConnectionState(options.RestartIdentity, inTransaction, MySqlForeignKeyChecks: checks);
+        }
+
         if (engine != DatabaseEngine.Sqlite)
         {
             return new ResetConnectionState(options.RestartIdentity, inTransaction);

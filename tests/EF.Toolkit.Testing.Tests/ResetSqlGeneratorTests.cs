@@ -89,10 +89,19 @@ public sealed class ResetSqlGeneratorTests
     {
         var script = Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines, Orders]));
 
-        script.Prologue.ShouldBe(
-            ["SET @ef_toolkit_foreign_key_checks = @@FOREIGN_KEY_CHECKS;", "SET FOREIGN_KEY_CHECKS = 0;"]);
+        script.Prologue.ShouldBe(["SET FOREIGN_KEY_CHECKS = 0;"]);
         script.Body.ShouldBe(["TRUNCATE TABLE `Lines`;", "TRUNCATE TABLE `sales`.`Orders`;"]);
-        script.Epilogue.ShouldBe(["SET FOREIGN_KEY_CHECKS = @ef_toolkit_foreign_key_checks;"]);
+        script.Epilogue.ShouldBe(["SET FOREIGN_KEY_CHECKS = 1;"]);
+    }
+
+    [Fact]
+    public void MySql_leaves_checks_off_when_they_were_off()
+    {
+        var script = Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), Default with { MySqlForeignKeyChecks = false });
+
+        script.Prologue.ShouldBeEmpty();
+        script.Epilogue.ShouldBeEmpty();
+        script.Body.ShouldBe(["TRUNCATE TABLE `Lines`;"]);
     }
 
     [Fact]

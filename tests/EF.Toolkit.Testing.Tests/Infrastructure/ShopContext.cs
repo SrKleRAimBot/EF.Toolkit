@@ -184,7 +184,7 @@ public class ShopContext(DbContextOptions<ShopContext> options) : DbContext(opti
             b.HasIndex(c => new { c.Name, c.Tier });
             b.Property(c => c.Tier).HasConversion<string>();
             b.Property(c => c.Balance).HasPrecision(5, 2);
-            b.Property(c => c.RowStamp).HasDefaultValueSql("'generated'");
+            b.Property(c => c.RowStamp).HasMaxLength(20).HasDefaultValueSql("'generated'");
             b.ComplexProperty(c => c.Address);
         });
 
