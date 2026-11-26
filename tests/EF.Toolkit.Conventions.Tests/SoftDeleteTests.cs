@@ -611,6 +611,48 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_optional_complex_value_that_was_never_there_is_not_invented_by_the_soft_delete()
+    {
+        // Spot is absent; its Geo is required whenever Spot exists. Building the required child before
+        // asking whether Spot was there made it look present, and the soft delete wrote one.
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            comment.Spot.ShouldBeNull();
+            context.Comments.Remove(comment);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct);
+        stored.DeletedAt.ShouldNotBeNull();
+        stored.Spot.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_cleared_value_object_with_a_private_constructor_is_rebuilt()
+    {
+        await using (var seed = _db.Context())
+        {
+            (await seed.Comments.SingleAsync(c => c.Id == 2, Ct)).Badge = new Badge("gold");
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            comment.Badge = null;
+            context.Comments.Remove(comment);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct);
+        stored.DeletedAt.ShouldNotBeNull();
+        stored.Badge.ShouldNotBeNull().Code.ShouldBe("gold");
+    }
+
+    [Fact]
     public async Task Clearing_an_optional_complex_value_with_only_nested_values_before_Remove_is_discarded()
     {
         // Rebuilding only Place's direct members put Floor back and lost Geo, so the soft delete cleared

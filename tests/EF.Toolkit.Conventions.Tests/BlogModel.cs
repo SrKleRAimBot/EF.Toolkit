@@ -73,6 +73,29 @@ public sealed class Comment
 
     /// <summary>An optional complex value with an optional complex value nested in it.</summary>
     public Place? Place { get; set; }
+
+    /// <summary>An optional complex value whose nested complex value is required when it is present.</summary>
+    public Spot? Spot { get; set; }
+
+    /// <summary>An optional value object, with a private constructor and a private setter.</summary>
+    public Badge? Badge { get; set; }
+}
+
+public sealed class Spot
+{
+    public int Floor { get; set; }
+    public Geo Geo { get; set; } = new();
+}
+
+public sealed class Badge
+{
+    private Badge()
+    {
+    }
+
+    public Badge(string code) => Code = code;
+
+    public string Code { get; private set; } = "";
 }
 
 public sealed class Place
@@ -145,6 +168,8 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
             b.ComplexProperty(c => c.Extra);
             b.ComplexCollection(c => c.Reactions, r => r.ToJson());
             b.ComplexProperty(c => c.Place, p => p.ComplexProperty(x => x.Geo));
+            b.ComplexProperty(c => c.Spot, p => p.ComplexProperty(x => x.Geo));
+            b.ComplexProperty(c => c.Badge);
         });
         modelBuilder.Entity<Note>(b =>
         {
@@ -271,5 +296,7 @@ public sealed class PooledCommentsContext(DbContextOptions<PooledCommentsContext
             b.ComplexProperty(c => c.Extra);
             b.ComplexCollection(c => c.Reactions, r => r.ToJson());
             b.ComplexProperty(c => c.Place, p => p.ComplexProperty(x => x.Geo));
+            b.ComplexProperty(c => c.Spot, p => p.ComplexProperty(x => x.Geo));
+            b.ComplexProperty(c => c.Badge);
         });
 }

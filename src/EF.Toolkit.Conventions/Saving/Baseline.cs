@@ -66,33 +66,69 @@ internal static class Baseline
     }
 
     // The value a complex property had when loaded, rebuilt member by member and level by level from the
-    // original snapshot — or null when nothing under it held a value, which is how an absent optional
-    // complex value is stored.
+    // original snapshot — or null for an optional value that was absent. Presence is decided from the
+    // snapshot alone, before anything is built: constructing a required child first would make an
+    // absent parent look present, and invent a value the row never had.
     private static object? FromOriginals(IComplexProperty complexProperty, PropertyValues originals)
     {
-        var type = complexProperty.ComplexType;
-        var scalars = type.GetProperties().Select(p => (Property: p, Value: originals[p])).ToList();
-        var nested = type.GetComplexProperties()
-            .Where(c => !c.IsCollection)
-            .Select(c => (Property: c, Value: FromOriginals(c, originals)))
-            .ToList();
-
-        if (complexProperty.IsNullable && scalars.All(s => s.Value is null) && nested.All(n => n.Value is null))
+        if (complexProperty.IsNullable && !HadAnyValue(complexProperty.ComplexType, originals))
         {
             return null;
         }
 
-        var value = Activator.CreateInstance(complexProperty.ClrType)!;
-        foreach (var (property, original) in scalars)
+        var value = Create(complexProperty.ClrType);
+        foreach (var property in complexProperty.ComplexType.GetProperties())
         {
-            property.PropertyInfo?.SetValue(value, original);
+            Set(property, value, originals[property]);
         }
 
-        foreach (var (property, original) in nested)
+        foreach (var nested in complexProperty.ComplexType.GetComplexProperties().Where(c => !c.IsCollection))
         {
-            property.PropertyInfo?.SetValue(value, original);
+            Set(nested, value, FromOriginals(nested, originals));
         }
 
         return value;
+    }
+
+    // EF keeps no presence flag for an optional complex value in the snapshot: the members of an absent
+    // one read back as their CLR defaults — 0, not null, for an int. So a value counts as having been
+    // there only if some member held something other than its default. The one value this misreads is
+    // a present one made entirely of defaults, cleared before Remove(): it is not rebuilt, and on
+    // EF Core 11 the clear is written. Inventing a value for every absent one would be worse.
+    private static bool HadAnyValue(IComplexType type, PropertyValues originals)
+        => type.GetProperties().Any(p => !IsDefault(originals[p], p.ClrType))
+            || type.GetComplexProperties().Where(c => !c.IsCollection).Any(c => HadAnyValue(c.ComplexType, originals));
+
+    private static bool IsDefault(object? value, Type clrType)
+        => value is null
+            || (clrType.IsValueType && Nullable.GetUnderlyingType(clrType) is null && value.Equals(Activator.CreateInstance(clrType)));
+
+    // Value objects often hide their parameterless constructor, or have none: EF materializes them
+    // either way, and so must this. Without one, the instance starts uninitialized and every mapped
+    // member is written below.
+    private static object Create(Type type)
+    {
+        try
+        {
+            return Activator.CreateInstance(type, nonPublic: true)!;
+        }
+        catch (MissingMethodException)
+        {
+            return System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(type);
+        }
+    }
+
+    // Through the backing field where EF maps one — its default, and the only way into a get-only or
+    // privately set member — and through the property otherwise.
+    private static void Set(IPropertyBase member, object target, object? value)
+    {
+        if (member.FieldInfo is { } field)
+        {
+            field.SetValue(target, value);
+        }
+        else
+        {
+            member.PropertyInfo?.SetValue(target, value);
+        }
     }
 }

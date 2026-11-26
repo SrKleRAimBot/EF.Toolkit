@@ -169,6 +169,10 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
             // which runs after this, would find them on an entry that is now Modified. A real delete
             // discards them, so they are accepted as the baseline instead — all but concurrency tokens,
             // whose original value is what the UPDATE's WHERE clause has to check.
+            // Registered before anything about the entry changes, so that a failure from here on —
+            // the state change below, or rebuilding a value — is restored by Failed() like the rest.
+            state.Converted.Add((entry, mapping.Property.Name, before));
+
             try
             {
                 entry.State = EntityState.Unchanged;
@@ -191,8 +195,6 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
 
             property.CurrentValue = ConventionMetadata.DeletedValue(mapping, now);
             property.IsModified = true;
-
-            state.Converted.Add((entry, mapping.Property.Name, before));
         }
 
         if (state.Converted.Count == 0)
