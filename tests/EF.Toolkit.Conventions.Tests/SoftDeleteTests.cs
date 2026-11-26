@@ -992,6 +992,36 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Rebuilding_a_cleared_nested_value_leaves_another_entity_sharing_the_container_alone()
+    {
+        // The second comment was given the first one's Place and cleared its Geo through it; rebuilding the
+        // soft-deleted comment's Geo inside the shared Place put the second one's coordinates back too.
+        await using (var setup = _db.Context())
+        {
+            foreach (var c in await setup.Comments.Where(c => c.Id == 1 || c.Id == 2).ToListAsync(Ct))
+            {
+                c.Place = new Place { Floor = 3, Geo = new Geo { Lat = 1.5, Lng = 2.5 } };
+            }
+
+            await setup.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = _db.Context())
+        {
+            var first = await context.Comments.SingleAsync(c => c.Id == 1, Ct);
+            var second = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            second.Place = first.Place;
+            second.Place!.Geo = null;
+            context.Comments.Remove(first);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 1, Ct)).Place!.Geo!.Lat.ShouldBe(1.5);
+        (await fresh.Comments.SingleAsync(c => c.Id == 2, Ct)).Place!.Geo.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_token_inside_a_complex_value_still_catches_a_writer_that_moved_the_row_on()
     {
         // ...and checked for the edited 2 against a row another writer had moved to 2: the stale delete won.

@@ -38,7 +38,7 @@ internal static class Baseline
             .Select(p => (Property: p, Original: entry.OriginalValues[p]))
             .ToList();
 
-        RestoreClearedComplexValues(entry.ComplexProperties, entry.OriginalValues);
+        RestoreClearedComplexValues(entry.Entity, entry.ComplexProperties, entry.OriginalValues);
         entry.OriginalValues.SetValues(entry.CurrentValues);
 
         foreach (var (property, original) in tokens)
@@ -71,18 +71,27 @@ internal static class Baseline
     // value against its snapshot is where EF Core versions differ — 11 writes the nulls even with the
     // snapshot replaced — so the value is rebuilt from its members' original values instead, before the
     // snapshot is. The entity is being deleted, so reverting it in memory costs the application nothing.
-    private static void RestoreClearedComplexValues(IEnumerable<ComplexPropertyEntry> complexProperties, PropertyValues originals)
+    //
+    // A nested value is put back on the entity's own copy of the values containing it: the containing
+    // instance may also be another entity's, whose own edit — clearing the same nested value — would be
+    // undone by writing into it.
+    private static void RestoreClearedComplexValues(object entity, IEnumerable<ComplexPropertyEntry> complexProperties, PropertyValues originals)
     {
         foreach (var complex in complexProperties)
         {
             if (complex.CurrentValue is not null)
             {
-                RestoreClearedComplexValues(complex.ComplexProperties, originals);
+                RestoreClearedComplexValues(entity, complex.ComplexProperties, originals);
                 continue;
             }
 
             if (complex.Metadata.IsNullable && FromOriginals(complex.Metadata, originals) is { } value)
             {
+                if (complex.Metadata.DeclaringType is IComplexType containing)
+                {
+                    OwnCopy(entity, containing);
+                }
+
                 complex.CurrentValue = value;
             }
         }
