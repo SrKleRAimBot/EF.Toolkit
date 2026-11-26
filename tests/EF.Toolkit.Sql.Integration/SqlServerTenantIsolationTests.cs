@@ -226,4 +226,44 @@ public sealed class SqlServerTenantIsolationTests(SqlServerFixture fixture)
             await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Offices", Token);
         }
     }
+
+    [Fact]
+    public async Task Long_tenant_keys_that_differ_only_past_4000_characters_stay_apart()
+    {
+        // Cut to nvarchar(4000), 4000 a's and 4000 a's plus a b compared equal: each tenant read both rows.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        var policy = new TenantIsolationPolicy("Vaults8k", "Tenant", "TenantLong", "varchar(8000)", policyName: "vaults8k_iso");
+        var shorter = new string('a', 4000);
+        var longer = shorter + "b";
+
+        await using var admin = fixture.CreateContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE Vaults8k (Id int PRIMARY KEY, Tenant varchar(8000) NOT NULL); INSERT INTO Vaults8k VALUES (1, {0}), (2, {1});",
+            [shorter, longer],
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(policy);
+
+            // Only a varchar session value can be this long: sql_variant holds 8000 bytes, 4000 nvarchar characters.
+            async Task<List<int>> IdsAs(string suffix)
+            {
+                await using var context = fixture.CreateContext();
+                await context.Database.OpenConnectionAsync(Token);
+                await context.Database.ExecuteSqlRawAsync(
+                    "DECLARE @v varchar(8000) = REPLICATE(CAST('a' AS varchar(max)), 4000) + {0}; EXEC sp_set_session_context N'TenantLong', @v;",
+                    [suffix],
+                    Token);
+                return await context.Database.SqlQueryRaw<int>("SELECT Id AS [Value] FROM Vaults8k").ToListAsync(Token);
+            }
+
+            (await IdsAs("")).ShouldBe([1]);
+            (await IdsAs("b")).ShouldBe([2]);
+        }
+        finally
+        {
+            await admin.Database.DropDatabaseObjectsAsync(policy);
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Vaults8k", Token);
+        }
+    }
 }

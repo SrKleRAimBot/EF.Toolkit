@@ -190,9 +190,11 @@ public sealed class TenantIsolationPolicyTests
     {
         var sql = new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1];
 
-        sql.ShouldContain("(@tenant nvarchar(4000))");
-        sql.ShouldContain("AND CAST(@tenant AS varbinary(max)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(max)) "
-            + "AND DATALENGTH(@tenant) = DATALENGTH(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)))");
+        sql.ShouldContain("(@tenant nvarchar(max))");
+        const string full = "(CASE WHEN SQL_VARIANT_PROPERTY(SESSION_CONTEXT(N'TenantId'), 'BaseType') IN ('varchar', 'char') "
+            + "THEN CAST(CAST(SESSION_CONTEXT(N'TenantId') AS varchar(8000)) AS nvarchar(max)) "
+            + "ELSE CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) END)";
+        sql.ShouldContain($"AND CAST(@tenant AS varbinary(max)) = CAST({full} AS varbinary(max)) AND DATALENGTH(@tenant) = DATALENGTH({full})");
     }
 
     [Theory]
@@ -204,7 +206,7 @@ public sealed class TenantIsolationPolicyTests
         var sql = new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1];
 
         sql.ShouldNotContain("AS sql_variant)");
-        sql.ShouldContain(storeType == "nvarchar(max)" ? "(@tenant nvarchar(max))" : "(@tenant nvarchar(4000))");
+        sql.ShouldContain("(@tenant nvarchar(max))");
     }
 
     [Theory]
