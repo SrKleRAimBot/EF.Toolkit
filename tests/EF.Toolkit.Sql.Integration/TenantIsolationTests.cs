@@ -143,6 +143,32 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task Reapplying_without_the_base_grant_withdraws_the_one_an_earlier_install_left()
+    {
+        // Installed with the grant, then reapplied without it: the old "_access" policy stayed and went on
+        // showing every row of the tenant past the table's own permissive policy.
+        var narrow = new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "integer", grantAccess: false);
+
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.CreateDatabaseObjectsAsync(Isolation);
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE POLICY a_titles_only ON \"Documents\" AS PERMISSIVE USING (\"Title\" LIKE '%-a')", Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(narrow);
+
+            await using var one = AppContext(() => 1);
+            (await TitlesAsync(one)).ShouldBe(["one-a"]);
+        }
+        finally
+        {
+            await admin.Database.DropDatabaseObjectsAsync(narrow);
+            await admin.Database.ExecuteSqlRawAsync("DROP POLICY IF EXISTS a_titles_only ON \"Documents\"", Token);
+            await admin.Database.CreateDatabaseObjectsAsync(Isolation);
+        }
+    }
+
+    [Fact]
     public async Task A_table_name_containing_dollar_quotes_creates_and_drops_cleanly()
     {
         var odd = new TenantIsolationPolicy("odd$$name", "TenantId", "app.tenant_id", "integer", policyName: "odd_iso");

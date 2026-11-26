@@ -102,16 +102,20 @@ public sealed class TenantIsolationPolicyTests
 
         policy.GrantsAccess.ShouldBeFalse();
         var create = policy.GetCreateSql(SqlDialect.PostgreSql);
-        create.Count.ShouldBe(4);
-        create.ShouldNotContain(sql => sql.Contains("_access", StringComparison.Ordinal));
+        create.Count.ShouldBe(5);
+        create.ShouldNotContain(sql => sql.StartsWith("CREATE POLICY \"Orders_tenant_isolation_access\"", StringComparison.Ordinal));
+
+        // An earlier install with the grant left it behind; it is withdrawn, after the tenant policy is in place.
+        create[^1].ShouldBe("DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"");
 
         var drop = policy.GetDropSql(SqlDialect.PostgreSql);
         drop.Count.ShouldBe(2);
         drop.ShouldNotContain(sql => sql.Contains("_access", StringComparison.Ordinal));
 
-        // A name only the restrictive policy carries may use the whole limit.
+        // A name only the restrictive policy carries may use the whole limit — and then no "_access" name is
+        // dropped, since truncated to 63 bytes it would be the tenant policy's own.
         new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "integer", policyName: new string('p', 63), grantAccess: false)
-            .GetCreateSql(SqlDialect.PostgreSql).ShouldNotBeEmpty();
+            .GetCreateSql(SqlDialect.PostgreSql).ShouldNotContain(sql => sql.Contains("_access", StringComparison.Ordinal));
     }
 
     [Theory]

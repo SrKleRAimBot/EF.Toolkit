@@ -119,7 +119,7 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
             [
                 .. new RowLevelSecurityTable(Table, Schema, force: true).GetCreateSql(dialect),
                 .. PostgreSqlPolicy().GetCreateSql(dialect),
-                .. (GrantsAccess ? PostgreSqlAccessPolicy().GetCreateSql(dialect) : []),
+                .. (GrantsAccess ? PostgreSqlAccessPolicy().GetCreateSql(dialect) : WithdrawnAccess()),
             ],
             SqlDialect.SqlServer => SqlServerPolicy().GetCreateSql(dialect),
             _ => throw NotSupported(dialect),
@@ -138,6 +138,16 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
             SqlDialect.SqlServer => SqlServerPolicy().GetDropSql(dialect),
             _ => throw NotSupported(dialect),
         };
+
+    // Without the base grant, an earlier install with it may have left the "_access" policy behind, which
+    // would go on granting every row of the tenant over the table's own permissive policies — so it is
+    // removed. Only when its name fits: a longer one would be truncated to some other name (the tenant
+    // policy's own, for a 63-byte policyName), and an install with the grant refuses such a name anyway,
+    // so there is nothing of that name to remove.
+    private IReadOnlyList<string> WithdrawnAccess()
+        => System.Text.Encoding.UTF8.GetByteCount(AccessPolicyName) <= PostgreSqlIdentifierBytes
+            ? PostgreSqlAccessPolicy().GetDropSql(SqlDialect.PostgreSql)
+            : [];
 
     // PostgreSQL truncates identifiers past 63 bytes without an error. Two names that agree on their
     // first 63 bytes are then one policy — and since each create is preceded by DROP POLICY IF EXISTS,

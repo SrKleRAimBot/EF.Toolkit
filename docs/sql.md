@@ -300,6 +300,9 @@ policies keep deciding within each tenant:
 new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "integer", grantAccess: false)
 ```
 
+Applied over an earlier install that had the grant, it also drops that `_access` policy, which would
+otherwise go on granting every row of the tenant.
+
 PostgreSQL silently truncates identifiers past 63 bytes, which could merge the tenant policy with its
 `_access` counterpart. A name that would be truncated is refused; pass a shorter `policyName`.
 
