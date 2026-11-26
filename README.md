@@ -19,6 +19,7 @@ it alongside whatever EF Core version your app already uses.
 | `EF.Toolkit.Audit.Bulk` | Joins the two: audits the explicit bulk API, and writes audit entries in bulk. | [docs/audit-bulk.md](docs/audit-bulk.md) |
 | `EF.Toolkit.Conventions` | Soft delete — `Remove()` marks the row, a named query filter hides it, with restore, hard delete and set-based variants — and created/updated timestamps on every save. | [docs/conventions.md](docs/conventions.md) |
 | `EF.Toolkit.Query` | Offset and keyset pagination, sorting contracts with a guaranteed total order, composable filters, batched streaming and ambient tracking scopes — plus a development-time advisor for missing indexes. | [docs/query.md](docs/query.md) |
+| `EF.Toolkit.Sql` | Views, materialized views, stored procedures and functions rendered per engine for migrations and runtime, one-line tenant isolation through row-level security, and session context applied on every connection open. | [docs/sql.md](docs/sql.md) |
 
 The write-side capabilities have a provider package — `.PostgreSQL`, `.SqlServer`, `.MySql` or
 `.Sqlite` — which is the one you install. The bridge and `EF.Toolkit.Query` are provider-neutral.
@@ -29,6 +30,7 @@ dotnet add package EF.Toolkit.Audit.PostgreSQL
 dotnet add package EF.Toolkit.Audit.Bulk       # only if you use both
 dotnet add package EF.Toolkit.Query
 dotnet add package EF.Toolkit.Conventions
+dotnet add package EF.Toolkit.Sql
 ```
 
 Each provider package has its own notes on how the capability is executed on that engine, and what

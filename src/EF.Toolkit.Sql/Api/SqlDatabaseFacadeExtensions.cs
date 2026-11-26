@@ -1,0 +1,262 @@
+using EFToolkit.Sql;
+using EFToolkit.Sql.Definitions;
+using EFToolkit.Sql.Dialects;
+using EFToolkit.Sql.Execution;
+using EFToolkit.Sql.Sessions;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+
+// Deliberately in EF's own namespace so these are visible with the using any EF Core application
+// already has.
+namespace Microsoft.EntityFrameworkCore;
+
+/// <summary>Database objects, routine calls and session context at runtime.</summary>
+/// <remarks>
+///     Every value passed here reaches the database as a bound parameter through EF's own raw-SQL
+///     pipeline — <c>ExecuteSqlRawAsync</c> and <c>SqlQueryRaw</c> — so the context's transaction,
+///     interceptors, logging and execution strategy all apply. Only names are rendered into the SQL
+///     text, and those are quoted.
+/// </remarks>
+public static class SqlDatabaseFacadeExtensions
+{
+    /// <summary>The SQL dialect of the context's provider.</summary>
+    /// <param name="database">The context's database facade.</param>
+    /// <returns>The dialect.</returns>
+    /// <exception cref="SqlFeatureNotSupportedException">The provider is not one EF.Toolkit.Sql knows.</exception>
+    public static SqlDialect GetSqlDialect(this DatabaseFacade database)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        return SqlDialectDetector.FromProviderName(database.ProviderName);
+    }
+
+    /// <summary>Creates database objects, in order, on a database that does not run migrations.</summary>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="objects">The objects, dependencies first.</param>
+    /// <returns>A task that completes when every object exists.</returns>
+    /// <remarks>
+    ///     For databases built with <c>EnsureCreated</c> — test databases above all — which never run
+    ///     the migrations the objects would otherwise come from. Passing the same definitions the
+    ///     migrations use keeps the two from drifting.
+    /// </remarks>
+    /// <example>
+    ///     <code>
+    ///     await context.Database.EnsureCreatedAsync();
+    ///     await context.Database.CreateDatabaseObjectsAsync(Schema.ActiveCustomers, Schema.TenantIsolation);
+    ///     </code>
+    /// </example>
+    public static Task CreateDatabaseObjectsAsync(this DatabaseFacade database, params IDatabaseObject[] objects)
+        => CreateDatabaseObjectsAsync(database, (IEnumerable<IDatabaseObject>)objects, CancellationToken.None);
+
+    /// <summary>Creates database objects, in order, on a database that does not run migrations.</summary>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="objects">The objects, dependencies first.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>A task that completes when every object exists.</returns>
+    public static async Task CreateDatabaseObjectsAsync(
+        this DatabaseFacade database,
+        IEnumerable<IDatabaseObject> objects,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(objects);
+
+        var dialect = database.GetSqlDialect();
+        var statements = objects.SelectMany(o => (o ?? throw new ArgumentException("Objects cannot contain null.", nameof(objects))).GetCreateSql(dialect)).ToList();
+
+        await ExecuteAllAsync(database, statements, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Drops database objects, in reverse order, so dependents go before what they depend on.</summary>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="objects">The objects, in the order they were created.</param>
+    /// <returns>A task that completes when every object is gone.</returns>
+    public static Task DropDatabaseObjectsAsync(this DatabaseFacade database, params IDatabaseObject[] objects)
+        => DropDatabaseObjectsAsync(database, (IEnumerable<IDatabaseObject>)objects, CancellationToken.None);
+
+    /// <summary>Drops database objects, in reverse order, so dependents go before what they depend on.</summary>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="objects">The objects, in the order they were created.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>A task that completes when every object is gone.</returns>
+    public static async Task DropDatabaseObjectsAsync(
+        this DatabaseFacade database,
+        IEnumerable<IDatabaseObject> objects,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(objects);
+
+        var dialect = database.GetSqlDialect();
+        var statements = objects.Reverse().SelectMany(o => (o ?? throw new ArgumentException("Objects cannot contain null.", nameof(objects))).GetDropSql(dialect)).ToList();
+
+        await ExecuteAllAsync(database, statements, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Re-runs a PostgreSQL materialized view's query and replaces its contents.</summary>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="name">The materialized view name.</param>
+    /// <param name="concurrently">
+    ///     Refresh without locking out readers. PostgreSQL requires a unique index on the view for this,
+    ///     and refuses it on a view that has never been populated.
+    /// </param>
+    /// <param name="schema">The schema, or <see langword="null" /> for the default schema.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>A task that completes when the refresh has.</returns>
+    /// <exception cref="SqlFeatureNotSupportedException">The provider is not PostgreSQL.</exception>
+    public static async Task RefreshMaterializedViewAsync(
+        this DatabaseFacade database,
+        string name,
+        bool concurrently = false,
+        string? schema = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+
+        var sql = MaterializedViewDefinition.RefreshSql(database.GetSqlDialect(), name, schema, concurrently);
+        await database.ExecuteSqlRawAsync(SqlSyntax.EscapeFormat(sql), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Calls a stored procedure.</summary>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="name">The procedure name.</param>
+    /// <param name="args">
+    ///     The arguments: an object whose properties name them (<c>new { tenantId = 1 }</c>), or an
+    ///     <see cref="IReadOnlyDictionary{TKey, TValue}" />. A value that is a <c>DbParameter</c> is
+    ///     passed as is, so an output parameter can be read after the call. PostgreSQL matches
+    ///     arguments by name; MySQL by position, in the order given.
+    /// </param>
+    /// <param name="schema">The schema, or <see langword="null" /> for the default schema.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The rows affected, as the provider reports them for the call.</returns>
+    /// <exception cref="SqlFeatureNotSupportedException">The provider is SQLite.</exception>
+    public static Task<int> ExecuteProcedureAsync(
+        this DatabaseFacade database,
+        string name,
+        object? args = null,
+        string? schema = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+
+        var (sql, arguments) = RoutineCallSql.Procedure(database.GetSqlDialect(), name, schema, args);
+        return database.ExecuteSqlRawAsync(sql, Parameters(arguments), cancellationToken);
+    }
+
+    /// <summary>Calls a stored procedure and reads the rows it returns.</summary>
+    /// <typeparam name="T">
+    ///     The row type: an unmapped class whose properties match the result's column names, or a
+    ///     scalar, whose column must be named <c>Value</c>.
+    /// </typeparam>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="name">The procedure name.</param>
+    /// <param name="args">The arguments; see <see cref="ExecuteProcedureAsync" />.</param>
+    /// <param name="schema">The schema, or <see langword="null" /> for the default schema.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The rows.</returns>
+    /// <remarks>
+    ///     Materialised rather than returned as a query, because a procedure call cannot be composed
+    ///     over — SQL Server's <c>EXEC</c> cannot appear in a <c>FROM</c> clause, and neither can
+    ///     <c>CALL</c> — so a <c>Where</c> appended to it would fail at execution. On PostgreSQL the
+    ///     rows are the single row of <c>OUT</c> and <c>INOUT</c> parameters that <c>CALL</c> returns;
+    ///     on SQL Server and MySQL they are the procedure's first result set.
+    /// </remarks>
+    /// <exception cref="SqlFeatureNotSupportedException">The provider is SQLite.</exception>
+    public static Task<List<T>> QueryProcedureAsync<T>(
+        this DatabaseFacade database,
+        string name,
+        object? args = null,
+        string? schema = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+
+        var (sql, arguments) = RoutineCallSql.Procedure(database.GetSqlDialect(), name, schema, args);
+        return database.SqlQueryRaw<T>(sql, Parameters(arguments)).ToListAsync(cancellationToken);
+    }
+
+    /// <summary>Queries a table-valued function as a composable query.</summary>
+    /// <typeparam name="T">
+    ///     The row type: an unmapped class whose properties match the function's columns, or a scalar
+    ///     whose column is named <c>Value</c>.
+    /// </typeparam>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="name">The function name.</param>
+    /// <param name="args">
+    ///     The arguments; see <see cref="ExecuteProcedureAsync" />. PostgreSQL matches them by name, SQL
+    ///     Server by position.
+    /// </param>
+    /// <param name="schema">The schema, or <see langword="null" /> for the default schema.</param>
+    /// <returns>
+    ///     A query over <c>SELECT * FROM function(...)</c>. LINQ composed onto it — <c>Where</c>,
+    ///     <c>OrderBy</c>, <c>Take</c> — runs in the database.
+    /// </returns>
+    /// <exception cref="SqlFeatureNotSupportedException">The provider is MySQL or SQLite.</exception>
+    public static IQueryable<T> QueryFunction<T>(
+        this DatabaseFacade database,
+        string name,
+        object? args = null,
+        string? schema = null)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+
+        var (sql, arguments) = RoutineCallSql.Function(database.GetSqlDialect(), name, schema, args);
+        return database.SqlQueryRaw<T>(sql, Parameters(arguments));
+    }
+
+    /// <summary>Sets a session-context value on the context's connection.</summary>
+    /// <param name="database">The context's database facade.</param>
+    /// <param name="key">
+    ///     The key. On PostgreSQL a dotted custom setting name such as <c>app.tenant_id</c>; on MySQL a
+    ///     user variable name, without <c>@</c>.
+    /// </param>
+    /// <param name="value">The value; <see langword="null" /> clears it.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>A task that completes when the value is set.</returns>
+    /// <remarks>
+    ///     <para>
+    ///         Opens the context's connection and leaves it open, because the value belongs to the
+    ///         database session: had EF closed the connection after this command, as it does by default,
+    ///         the pool would reset the session and the next query would run without the value. The
+    ///         connection closes with the context, or with <c>CloseConnection</c>.
+    ///     </para>
+    ///     <para>
+    ///         For a value every connection needs — a tenant for row-level security — prefer
+    ///         <c>UseSessionContext</c> on the options, which cannot be forgotten.
+    ///     </para>
+    ///     <para>
+    ///         MySQL connectors treat <c>@name</c> as a parameter unless user variables are allowed:
+    ///         add <c>AllowUserVariables=True</c> (MySqlConnector, under Pomelo) or
+    ///         <c>Allow User Variables=True</c> (Oracle's provider) to the connection string.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="SqlFeatureNotSupportedException">The provider is SQLite.</exception>
+    public static async Task SetSessionContextAsync(
+        this DatabaseFacade database,
+        string key,
+        object? value,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+
+        var (sql, arguments) = SessionContextSql.ForRawSql(database.GetSqlDialect(), key, value);
+
+        await database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await database.ExecuteSqlRawAsync(sql, Parameters(arguments), cancellationToken).ConfigureAwait(false);
+    }
+
+    // EF maps a null argument to a typed null parameter itself; DBNull has no type mapping and is
+    // refused, so nulls are passed through as they are.
+    private static object[] Parameters(object?[] arguments) => arguments!;
+
+    private static async Task ExecuteAllAsync(
+        DatabaseFacade database,
+        List<string> statements,
+        CancellationToken cancellationToken)
+    {
+        foreach (var statement in statements)
+        {
+            // DDL has no parameters, but EF formats every raw statement, so braces in a body (a JSON
+            // literal, a SQL Server ODBC escape) must be escaped to arrive intact.
+            await database.ExecuteSqlRawAsync(SqlSyntax.EscapeFormat(statement), cancellationToken).ConfigureAwait(false);
+        }
+    }
+}
