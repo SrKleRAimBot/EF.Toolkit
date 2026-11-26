@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace EFToolkit.Conventions.Tests;
 
@@ -225,6 +226,44 @@ public sealed class SoftDeleteTests : IAsyncLifetime
         (await fresh.Posts.Where(p => p.AuthorId == 1).CountAsync(Ct)).ShouldBe(2);
         (await fresh.Authors.AnyAsync(Ct)).ShouldBeFalse();
         (await fresh.Authors.IncludeDeleted().AnyAsync(Ct)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Under_OnSaveChanges_timing_a_key_the_application_nulled_stays_null_when_its_principal_is_removed()
+    {
+        // The case Immediate timing cannot tell apart from Remove()'s own fixup.
+        await using (var context = _db.Context())
+        {
+            context.ChangeTracker.CascadeDeleteTiming = CascadeTiming.OnSaveChanges;
+            var author = await context.Authors.Include(a => a.Posts).SingleAsync(Ct);
+            author.Posts.Single(p => p.Id == 1).AuthorId = null;
+            context.ChangeTracker.DetectChanges();
+
+            context.Authors.Remove(author);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.SingleAsync(p => p.Id == 1, Ct)).AuthorId.ShouldBeNull();
+        (await fresh.Posts.SingleAsync(p => p.Id == 2, Ct)).AuthorId.ShouldBe(1);
+        (await fresh.Authors.AnyAsync(Ct)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Under_OnSaveChanges_timing_nothing_cascades_and_owned_data_is_kept()
+    {
+        await using (var context = _db.Context())
+        {
+            context.ChangeTracker.CascadeDeleteTiming = CascadeTiming.OnSaveChanges;
+            context.ChangeTracker.DeleteOrphansTiming = CascadeTiming.OnSaveChanges;
+            var author = await context.Authors.Include(a => a.Posts).SingleAsync(Ct);
+            context.Authors.Remove(author);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.CountAsync(p => p.AuthorId == 1, Ct)).ShouldBe(2);
+        (await fresh.Authors.IncludeDeleted().SingleAsync(Ct)).Profile!.Links.Count.ShouldBe(2);
     }
 
     [Fact]

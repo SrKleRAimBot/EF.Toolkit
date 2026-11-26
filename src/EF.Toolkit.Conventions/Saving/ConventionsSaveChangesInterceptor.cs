@@ -155,6 +155,16 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
             OwnedEntries.Keep(converted);
         }
 
+        // Under the default Immediate timing, Remove() has already nulled the foreign keys of loaded
+        // optional dependents, and a null left by that fixup looks exactly like one the application set.
+        // They are restored, since the principal is staying. Under OnSaveChanges nothing has cascaded
+        // before this point — EF's own cascade then finds the principal no longer deleted — so every
+        // null key is the application's, and none is touched.
+        if (context.ChangeTracker.CascadeDeleteTiming != CascadeTiming.Immediate)
+        {
+            return;
+        }
+
         foreach (var entry in entries)
         {
             if (entry.State == EntityState.Modified)

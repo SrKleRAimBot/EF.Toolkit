@@ -137,7 +137,22 @@ row is about to disappear. Since it is not, that work is undone where it would b
 | Marked cascade-delete dependents deleted, and they are **not** soft-deletable | Deletes them, as asked |
 
 A foreign key the application set to `null` itself is left alone — only one that pointed at a
-principal being soft-deleted is restored.
+principal being soft-deleted is restored. The one case that cannot be told apart is a key the
+application nulled **and** whose principal it then removed in the same unit of work: under EF's
+default `CascadeDeleteTiming.Immediate`, `Remove()`'s own fixup leaves exactly the same state, so that
+key is restored too.
+
+Set the context's cascade timing to `OnSaveChanges` to remove the ambiguity:
+
+```csharp
+context.ChangeTracker.CascadeDeleteTiming = CascadeTiming.OnSaveChanges;
+context.ChangeTracker.DeleteOrphansTiming = CascadeTiming.OnSaveChanges;
+```
+
+Then `Remove()` cascades nothing before the save, the soft delete turns the principal into an update
+before EF's own cascade runs, and EF finds nothing to cascade. Every foreign key the application set
+is kept exactly, owned data is kept, and loaded dependents are left as they are rather than
+soft-deleted alongside.
 
 ---
 
