@@ -49,6 +49,13 @@ public static class DatabaseResetExtensions
             {
                 var connection = database.GetDbConnection();
                 var transaction = database.CurrentTransaction?.GetDbTransaction();
+                if (engine == DatabaseEngine.SqlServer)
+                {
+                    plan = plan.WithResolvedSchemas(
+                        await ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.ResolveSchemas(plan), cancellationToken)
+                            .ConfigureAwait(false));
+                }
+
                 var state = await ReadStateAsync(engine, connection, transaction, options, cancellationToken)
                     .ConfigureAwait(false);
                 if (DatabaseForeignKeys.Query(engine) is { } query)
@@ -60,27 +67,11 @@ public static class DatabaseResetExtensions
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
 
-                foreach (var sql in script.Prologue)
-                {
-                    await ExecuteAsync(connection, transaction, database, sql, cancellationToken).ConfigureAwait(false);
-                }
-
-                try
-                {
-                    foreach (var sql in script.Body)
-                    {
-                        await ExecuteAsync(connection, transaction, database, sql, cancellationToken).ConfigureAwait(false);
-                    }
-                }
-                finally
-                {
-                    foreach (var sql in script.Epilogue)
-                    {
-                        // Not cancellable: abandoning the restore is the one outcome worse than waiting.
-                        await ExecuteAsync(connection, transaction, database, sql, CancellationToken.None)
-                            .ConfigureAwait(false);
-                    }
-                }
+                await ResetRunner.RunAsync(
+                        script,
+                        (sql, token) => ExecuteAsync(connection, transaction, database, sql, token),
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
             finally
             {
@@ -111,6 +102,12 @@ public static class DatabaseResetExtensions
             {
                 var connection = database.GetDbConnection();
                 var transaction = database.CurrentTransaction?.GetDbTransaction();
+                if (engine == DatabaseEngine.SqlServer)
+                {
+                    plan = plan.WithResolvedSchemas(
+                        ReadReferences(connection, transaction, DatabaseForeignKeys.ResolveSchemas(plan)));
+                }
+
                 var state = ReadState(engine, connection, transaction, options);
                 if (DatabaseForeignKeys.Query(engine) is { } query)
                 {
@@ -120,25 +117,7 @@ public static class DatabaseResetExtensions
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
 
-                foreach (var sql in script.Prologue)
-                {
-                    Execute(connection, transaction, database, sql);
-                }
-
-                try
-                {
-                    foreach (var sql in script.Body)
-                    {
-                        Execute(connection, transaction, database, sql);
-                    }
-                }
-                finally
-                {
-                    foreach (var sql in script.Epilogue)
-                    {
-                        Execute(connection, transaction, database, sql);
-                    }
-                }
+                ResetRunner.Run(script, sql => Execute(connection, transaction, database, sql));
             }
             finally
             {
@@ -255,7 +234,7 @@ public static class DatabaseResetExtensions
     }
 
     private const string SqliteSequenceExists =
-        "SELECT COUNT(*) FROM \"sqlite_master\" WHERE \"type\" = 'table' AND \"name\" = 'sqlite_sequence';";
+        "SELECT COUNT(*) FROM \"main\".\"sqlite_master\" WHERE \"type\" = 'table' AND \"name\" = 'sqlite_sequence';";
 
     // Straight to the ADO.NET connection rather than through ExecuteSqlRaw. The SQL carries braces
     // and identifiers that must not be read as format placeholders, and a reset is housekeeping:

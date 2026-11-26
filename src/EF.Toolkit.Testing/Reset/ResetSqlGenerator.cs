@@ -29,18 +29,36 @@ internal sealed record ResetConnectionState(
     bool SqliteDeferForeignKeys = false);
 
 /// <summary>The statements a reset runs, in three parts.</summary>
-/// <param name="Prologue">Suspends whatever has to be suspended.</param>
-/// <param name="Body">Empties the tables and restarts their counters.</param>
-/// <param name="Epilogue">
-///     Restores what the prologue suspended. Run even when the body fails: the settings it restores
-///     are per connection, and a pooled connection handed back with foreign-key checks off would
-///     silently disable them for whichever test opened it next.
-/// </param>
-internal sealed record ResetScript(
-    IReadOnlyList<string> Prologue,
-    IReadOnlyList<string> Body,
-    IReadOnlyList<string> Epilogue)
+internal sealed record ResetScript
 {
+    /// <summary>Initializes a new instance of the <see cref="ResetScript" /> record.</summary>
+    /// <param name="prologue">Suspends whatever has to be suspended.</param>
+    /// <param name="body">Empties the tables and restarts their counters.</param>
+    /// <param name="epilogue">
+    ///     Restores what the prologue suspended, one statement per prologue statement. Run even when the
+    ///     body fails — or the prologue part way through — for the statements that took effect: the
+    ///     settings they restore are per connection or per table, and a pooled connection handed back with
+    ///     foreign-key checks off would silently disable them for whichever test opened it next.
+    /// </param>
+    public ResetScript(IReadOnlyList<string> prologue, IReadOnlyList<string> body, IReadOnlyList<string> epilogue)
+    {
+        // The runner undoes Prologue[i] with Epilogue[i], and only for the statements that ran.
+        if (prologue.Count != epilogue.Count)
+        {
+            throw new ArgumentException("Every prologue statement needs exactly one epilogue statement to undo it.", nameof(epilogue));
+        }
+
+        Prologue = prologue;
+        Body = body;
+        Epilogue = epilogue;
+    }
+
+    public IReadOnlyList<string> Prologue { get; }
+
+    public IReadOnlyList<string> Body { get; }
+
+    public IReadOnlyList<string> Epilogue { get; }
+
     public static ResetScript Empty { get; } = new([], [], []);
 
     /// <summary>Every statement, in execution order.</summary>
@@ -174,14 +192,17 @@ internal static class ResetSqlGenerator
     /// </remarks>
     private static ResetScript Sqlite(ResetPlan plan, ResetConnectionState state)
     {
+        // Qualified with main, where EF creates every table: unqualified, a temporary table of the same
+        // name would shadow it and be emptied instead — one the foreign-key check, which reads main,
+        // never looked at.
         var body = plan.Tables
-            .Select(t => $"DELETE FROM {Quote(t, '"', '"')};")
+            .Select(t => $"DELETE FROM \"main\".{Quote(t.Name, '"', '"')};")
             .ToList();
 
         if (state.RestartIdentity && state.SqliteHasSequenceTable)
         {
             var names = string.Join(", ", plan.Tables.Select(t => SqlLiteral(t.Name)));
-            body.Add($"DELETE FROM \"sqlite_sequence\" WHERE \"name\" IN ({names});");
+            body.Add($"DELETE FROM \"main\".\"sqlite_sequence\" WHERE \"name\" IN ({names});");
         }
 
         if (state.InTransaction)

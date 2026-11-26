@@ -188,6 +188,28 @@ public sealed class ResetDataTests
     }
 
     [Fact]
+    public async Task A_temporary_table_shadowing_a_mapped_one_is_not_what_the_reset_empties()
+    {
+        // Unqualified, DELETE FROM "Customers" would empty temp."Customers" and orphan its temporary
+        // child, which the catalog check — reading main — never saw.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.OpenConnectionAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE TEMP TABLE \"Customers\" (\"Id\" INTEGER PRIMARY KEY)", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TEMP TABLE \"Child\" (\"Id\" INTEGER PRIMARY KEY, \"CustomerId\" INTEGER REFERENCES \"Customers\" (\"Id\") ON DELETE CASCADE)", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO temp.\"Customers\" VALUES (1)", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO temp.\"Child\" VALUES (1, 1)", Ct);
+
+        await context.Database.ResetDataAsync(cancellationToken: Ct);
+
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM main.\"Customers\"")).ShouldBe(0);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM temp.\"Customers\"")).ShouldBe(1);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM temp.\"Child\"")).ShouldBe(1);
+    }
+
+    [Fact]
     public async Task A_table_outside_the_model_with_no_foreign_key_into_it_does_not_stop_the_reset()
     {
         await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);

@@ -289,6 +289,57 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
             "CREATE TABLE Unmapped (Id int PRIMARY KEY, CustomerId int NOT NULL REFERENCES Customers (Id))",
             "DROP TABLE Unmapped");
 
+    [Fact]
+    public async Task Under_a_non_dbo_default_schema_the_check_follows_the_table_the_delete_resolves_to()
+    {
+        // For a user whose default schema is app, unqualified Customers is app.Customers. Checking
+        // dbo.Customers instead missed app.Unmapped, and its ON DELETE CASCADE emptied it.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.OpenConnectionAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE SCHEMA app", Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE app.Customers (Id int PRIMARY KEY);
+                CREATE TABLE app.Unmapped (Id int PRIMARY KEY, CustomerId int NOT NULL REFERENCES app.Customers (Id) ON DELETE CASCADE);
+                INSERT INTO app.Customers VALUES (1);
+                INSERT INTO app.Unmapped VALUES (1, 1);
+                CREATE USER reset_user WITHOUT LOGIN WITH DEFAULT_SCHEMA = app;
+                GRANT CONTROL ON SCHEMA::app TO reset_user;
+                GRANT CONTROL ON SCHEMA::dbo TO reset_user;
+                """,
+                Ct);
+
+            await context.Database.ExecuteSqlRawAsync("EXECUTE AS USER = 'reset_user'", Ct);
+            try
+            {
+                (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                    .Message.ShouldContain("'Unmapped', which the reset does not empty");
+            }
+            finally
+            {
+                await context.Database.ExecuteSqlRawAsync("REVERT", Ct);
+            }
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM app.Unmapped")).ShouldBe(1);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM app.Customers")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                """
+                IF USER_ID('reset_user') IS NOT NULL DROP USER reset_user;
+                DROP TABLE IF EXISTS app.Unmapped;
+                DROP TABLE IF EXISTS app.Customers;
+                """,
+                Ct);
+            await context.Database.ExecuteSqlRawAsync("DROP SCHEMA app", Ct);
+        }
+    }
+
     /// <summary>The cyclic tables' constraints are back on, and trusted — re-checked, not merely re-enabled.</summary>
     protected override async Task AssertConstraintsRestoredAsync(ShopContext context)
         => (await ScalarAsync(context, "SELECT COUNT(*) FROM sys.foreign_keys WHERE is_disabled = 1 OR is_not_trusted = 1"))

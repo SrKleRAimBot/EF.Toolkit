@@ -122,6 +122,22 @@ internal sealed class ResetPlan
         => new(tables, new HashSet<ResetTable>(cyclicTables ?? []), hasExclusions);
 
     /// <summary>
+    ///     A copy of this plan with every unqualified table given the schema the database resolved it to,
+    ///     from rows produced by <see cref="DatabaseForeignKeys.ResolveSchemas" />.
+    /// </summary>
+    internal ResetPlan WithResolvedSchemas(IEnumerable<DatabaseReference> resolved)
+    {
+        var schemas = resolved
+            .Where(r => !string.IsNullOrEmpty(r.TableSchema))
+            .ToDictionary(r => r.Table, r => r.TableSchema!, StringComparer.OrdinalIgnoreCase);
+
+        ResetTable Qualify(ResetTable table)
+            => table.Schema is null && schemas.TryGetValue(table.Name, out var schema) ? table with { Schema = schema } : table;
+
+        return new ResetPlan([.. Tables.Select(Qualify)], new HashSet<ResetTable>(CyclicTables.Select(Qualify)), HasExclusions);
+    }
+
+    /// <summary>
     ///     Refuses the reset if the database has a foreign key, from a table outside the reset, into one
     ///     the reset empties — the catalog's view, covering tables the model does not map.
     /// </summary>

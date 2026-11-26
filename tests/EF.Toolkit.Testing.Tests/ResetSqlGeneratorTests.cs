@@ -125,9 +125,9 @@ public sealed class ResetSqlGeneratorTests
         script.Prologue.ShouldBe(["PRAGMA foreign_keys = OFF;"]);
         script.Body.ShouldBe(
         [
-            "DELETE FROM \"Lines\";",
-            "DELETE FROM \"O'Brien\";",
-            "DELETE FROM \"sqlite_sequence\" WHERE \"name\" IN ('Lines', 'O''Brien');",
+            "DELETE FROM \"main\".\"Lines\";",
+            "DELETE FROM \"main\".\"O'Brien\";",
+            "DELETE FROM \"main\".\"sqlite_sequence\" WHERE \"name\" IN ('Lines', 'O''Brien');",
         ]);
         script.Epilogue.ShouldBe(["PRAGMA foreign_keys = ON;"]);
     }
@@ -135,7 +135,7 @@ public sealed class ResetSqlGeneratorTests
     [Fact]
     public void Sqlite_does_not_name_a_sequence_table_that_does_not_exist()
         => Generate(DatabaseEngine.Sqlite, ResetPlan.Create([Lines]), Default with { SqliteHasSequenceTable = false })
-            .Body.ShouldBe(["DELETE FROM \"Lines\";"]);
+            .Body.ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
 
     [Fact]
     public void Sqlite_leaves_the_sequence_alone_when_identity_continues()
@@ -143,7 +143,7 @@ public sealed class ResetSqlGeneratorTests
                 DatabaseEngine.Sqlite,
                 ResetPlan.Create([Lines]),
                 Default with { RestartIdentity = false, SqliteHasSequenceTable = true })
-            .Body.ShouldBe(["DELETE FROM \"Lines\";"]);
+            .Body.ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
 
     [Fact]
     public void Sqlite_leaves_foreign_keys_off_when_they_were_off()
@@ -183,6 +183,47 @@ public sealed class ResetSqlGeneratorTests
     public void Identifiers_are_quoted_with_the_engine_quote_doubled(string engine, string quoted)
         => Generate(Enum.Parse<DatabaseEngine>(engine), ResetPlan.Create([Odd]), Default with { RestartIdentity = false })
             .Body[0].ShouldContain(quoted);
+
+    [Fact]
+    public void Every_engine_pairs_each_prologue_statement_with_the_one_that_undoes_it()
+    {
+        var cyclic = ResetPlan.Create([Lines, Odd], [Lines, Odd]);
+        foreach (var engine in Enum.GetValues<DatabaseEngine>())
+        {
+            foreach (var state in new[]
+            {
+                Default, Default with { InTransaction = true }, Default with { SqliteForeignKeysEnabled = false },
+                Default with { MySqlForeignKeyChecks = false }, Default with { InTransaction = true, SqliteDeferForeignKeys = true },
+            })
+            {
+                var script = Generate(engine, cyclic, state);
+                script.Epilogue.Count.ShouldBe(script.Prologue.Count, $"{engine} {state}");
+            }
+        }
+
+        Should.Throw<ArgumentException>(() => new ResetScript(["a"], [], []));
+    }
+
+    [Fact]
+    public void SqlServer_resolution_query_covers_only_unqualified_tables_and_escapes_names()
+    {
+        var sql = DatabaseForeignKeys.ResolveSchemas(ResetPlan.Create([Odd, new ResetTable("sales", "Orders")]));
+
+        sql.ShouldContain("OBJECT_ID(N'[Odd]]\"`''Name]')");
+        sql.ShouldNotContain("Orders");
+        DatabaseForeignKeys.ResolveSchemas(ResetPlan.Create([new ResetTable("sales", "Orders")])).ShouldContain("WHERE 1 = 0");
+    }
+
+    [Fact]
+    public void Resolved_schemas_qualify_the_plan_and_its_cycles()
+    {
+        var plan = ResetPlan.Create([Lines, new ResetTable("sales", "Orders")], [Lines])
+            .WithResolvedSchemas([new DatabaseReference("Lines", "", TableSchema: "app"), new DatabaseReference("Missing", "", TableSchema: "")]);
+
+        plan.Tables.ShouldBe([new ResetTable("app", "Lines"), new ResetTable("sales", "Orders")]);
+        plan.CyclicTables.ShouldBe([new ResetTable("app", "Lines")]);
+        Generate(DatabaseEngine.SqlServer, plan).Body[0].ShouldBe("DELETE FROM [app].[Lines];");
+    }
 
     [Fact]
     public void SqlServer_literals_double_single_quotes()

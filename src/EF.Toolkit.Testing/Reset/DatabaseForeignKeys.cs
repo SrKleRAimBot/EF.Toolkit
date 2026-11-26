@@ -36,8 +36,8 @@ internal static class DatabaseForeignKeys
         {
             DatabaseEngine.Sqlite => """
                 SELECT m."name", f."table", 0
-                FROM "sqlite_master" AS m
-                JOIN pragma_foreign_key_list(m."name") AS f
+                FROM "main"."sqlite_master" AS m
+                JOIN pragma_foreign_key_list(m."name", 'main') AS f
                 WHERE m."type" = 'table';
                 """,
             DatabaseEngine.SqlServer => """
@@ -52,6 +52,31 @@ internal static class DatabaseForeignKeys
                 """,
             _ => null,
         };
+
+    /// <summary>
+    ///     SQL Server: the schema each unqualified table in <paramref name="plan" /> resolves to, as rows
+    ///     shaped like <see cref="DatabaseReference" /> — the name, unused, unused, and the schema.
+    /// </summary>
+    /// <remarks>
+    ///     <c>OBJECT_ID</c> resolves an unqualified name the way the reset's <c>DELETE</c> would — the
+    ///     login's default schema first, then <c>dbo</c> — so the foreign-key check and the statements
+    ///     that follow are guaranteed to be about the same table.
+    /// </remarks>
+    internal static string ResolveSchemas(ResetPlan plan)
+    {
+        var unqualified = plan.Tables.Where(t => t.Schema is null).Select(t => t.Name).Distinct().ToList();
+        if (unqualified.Count == 0)
+        {
+            return "SELECT N'' AS n, N'' AS r, 0 AS o, N'' AS s WHERE 1 = 0;";
+        }
+
+        return string.Join("\nUNION ALL\n", unqualified.Select(name =>
+        {
+            var literal = "N'" + name.Replace("'", "''", StringComparison.Ordinal) + "'";
+            var quoted = "N'[" + name.Replace("]", "]]", StringComparison.Ordinal).Replace("'", "''", StringComparison.Ordinal) + "]'";
+            return $"SELECT {literal}, N'', 0, COALESCE(OBJECT_SCHEMA_NAME(OBJECT_ID({quoted})), N'')";
+        })) + ";";
+    }
 
     /// <summary>The schema of a model table that names none, where the catalog reports schemas.</summary>
     /// <remarks>
