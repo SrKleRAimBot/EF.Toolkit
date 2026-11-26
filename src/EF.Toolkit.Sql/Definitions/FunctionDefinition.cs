@@ -171,7 +171,11 @@ public sealed class FunctionDefinition : IDatabaseObject
             throw NotOnMySql();
         }
 
-        return DropSql(dialect, Name, Schema);
+        // By signature on PostgreSQL, which overloads by argument types: by name alone, dropping a
+        // lookup(integer) that was never created would drop the lookup(text) that was, the only match.
+        return dialect == SqlDialect.PostgreSql
+            ? [$"DROP FUNCTION IF EXISTS {SqlSyntax.Qualify(dialect, Name, Schema)}({RoutineSyntax.PostgreSqlSignature(Parameters, withDirection: false)})"]
+            : DropSql(dialect, Name, Schema);
     }
 
     /// <remarks>Dropped by name alone; see <see cref="StoredProcedureDefinition" />.</remarks>

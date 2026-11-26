@@ -115,7 +115,7 @@ public sealed class FunctionDefinitionTests
     }
 
     [Theory]
-    [InlineData(SqlDialect.PostgreSql, "DROP FUNCTION IF EXISTS \"math\".\"add\"")]
+    [InlineData(SqlDialect.PostgreSql, "DROP FUNCTION IF EXISTS \"math\".\"add\"(integer, integer)")]
     [InlineData(SqlDialect.SqlServer, "DROP FUNCTION IF EXISTS [math].[add]")]
     [InlineData(SqlDialect.MySql, "DROP FUNCTION IF EXISTS `math`.`add`")]
     public void Drop_is_by_name_and_if_exists(SqlDialect dialect, string expected)

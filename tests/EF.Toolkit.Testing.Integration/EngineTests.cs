@@ -530,6 +530,33 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
     }
 
     [Fact]
+    public async Task A_soft_deleting_trigger_that_keeps_the_rows_fails_the_reset_and_rolls_it_back()
+    {
+        // The trigger marks customers inactive instead of deleting them and returns normally: the reset
+        // reported success with every customer, and every unique email, still there.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER SoftDeleteCustomers ON Customers INSTEAD OF DELETE AS "
+                + "UPDATE Customers SET IsActive = 0 WHERE Id IN (SELECT Id FROM deleted);",
+            Ct);
+        try
+        {
+            (await Should.ThrowAsync<DbException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("The reset left rows in 'dbo.Customers'");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            await AssertConstraintsRestoredAsync(context);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS SoftDeleteCustomers", Ct);
+        }
+    }
+
+    [Fact]
     public async Task A_decimal_identity_seeded_past_the_bigint_range_restarts_at_its_seed()
     {
         // The reseed arithmetic was bigint: assigning this seed overflowed and the reset failed.

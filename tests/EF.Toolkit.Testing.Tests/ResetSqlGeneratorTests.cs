@@ -11,6 +11,10 @@ public sealed class ResetSqlGeneratorTests
 
     private static readonly ResetConnectionState Default = new(RestartIdentity: true, InTransaction: false);
 
+    private static string KeptRows(string quoted, string display)
+        => $"IF EXISTS (SELECT 1 FROM {quoted}) THROW 50000, N'The reset left rows in ''{display}'': an INSTEAD OF DELETE trigger, "
+            + "such as a soft delete, kept them. It has been rolled back. Exclude the table from the reset, or disable the trigger for it.', 1;";
+
     private static ResetScript Generate(DatabaseEngine engine, ResetPlan plan, ResetConnectionState? state = null)
         => ResetSqlGenerator.Generate(engine, plan, state ?? Default, "ef_toolkit_reset");
 
@@ -54,10 +58,12 @@ public sealed class ResetSqlGeneratorTests
 
         script.Prologue.ShouldBeEmpty();
         script.Epilogue.ShouldBeEmpty();
-        script.Body.Count.ShouldBe(4);
+        script.Body.Count.ShouldBe(6);
         script.Body[0].ShouldBe("DELETE FROM [Lines];");
         script.Body[1].ShouldBe("DELETE FROM [sales].[Orders];");
-        script.Body[3].ShouldBe(
+        script.Body[2].ShouldBe(KeptRows("[Lines]", "Lines"));
+        script.Body[3].ShouldBe(KeptRows("[sales].[Orders]", "sales.Orders"));
+        script.Body[5].ShouldBe(
             """
             IF OBJECTPROPERTY(OBJECT_ID(N'[sales].[Orders]'), 'TableHasIdentity') = 1
             BEGIN
@@ -84,6 +90,8 @@ public sealed class ResetSqlGeneratorTests
             "ALTER TABLE [sales].[Orders] NOCHECK CONSTRAINT ALL;",
             "DELETE FROM [Lines];",
             "DELETE FROM [sales].[Orders];",
+            KeptRows("[Lines]", "Lines"),
+            KeptRows("[sales].[Orders]", "sales.Orders"),
             "ALTER TABLE [sales].[Orders] WITH CHECK CHECK CONSTRAINT ALL;",
         ]);
     }
@@ -91,7 +99,7 @@ public sealed class ResetSqlGeneratorTests
     [Fact]
     public void SqlServer_skips_the_reseed_when_identity_continues()
         => Generate(DatabaseEngine.SqlServer, ResetPlan.Create([Lines]), Default with { RestartIdentity = false })
-            .Body.ShouldBe(["DELETE FROM [Lines];"]);
+            .Body.ShouldBe(["DELETE FROM [Lines];", KeptRows("[Lines]", "Lines")]);
 
     [Fact]
     public void MySql_deletes_with_checks_on_in_one_unit_and_restarts_counters_after_the_commit()
@@ -404,7 +412,7 @@ public sealed class ResetSqlGeneratorTests
 
     [Fact]
     public void SqlServer_literals_double_single_quotes()
-        => Generate(DatabaseEngine.SqlServer, ResetPlan.Create([Odd])).Body[1]
+        => Generate(DatabaseEngine.SqlServer, ResetPlan.Create([Odd])).Body[2]
             .ShouldContain("N'[Odd]]\"`''Name]'");
 
     // From real models on each provider, so the plan and the generator are checked together.

@@ -69,6 +69,32 @@ public sealed class RoutineTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Dropping_an_overload_that_was_never_created_leaves_its_sibling()
+    {
+        // By name alone, DROP FUNCTION IF EXISTS lookup dropped lookup(text), the only match.
+        var text = FunctionDefinition.Scalar("lookup_kind", [new("v", "text")], "integer", "SELECT 1", language: "sql");
+        var number = FunctionDefinition.Scalar("lookup_kind", [new("v", "integer")], "integer", "SELECT 2", language: "sql");
+        var textProc = new StoredProcedureDefinition("touch_kind", [new("v", "text")], "BEGIN END;");
+        var numberProc = new StoredProcedureDefinition("touch_kind", [new("v", "integer")], "BEGIN END;");
+
+        await using var context = fixture.CreateAdminContext();
+        await context.Database.CreateDatabaseObjectsAsync(text, textProc);
+        try
+        {
+            await context.Database.DropDatabaseObjectsAsync(number, numberProc);
+
+            (await context.Database.SqlQueryRaw<int>("SELECT lookup_kind('x'::text) AS \"Value\"").SingleAsync(Token)).ShouldBe(1);
+            (await context.Database.SqlQueryRaw<long>(
+                    "SELECT COUNT(*) AS \"Value\" FROM pg_proc WHERE proname = 'touch_kind'")
+                .SingleAsync(Token)).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(text, textProc);
+        }
+    }
+
+    [Fact]
     public async Task A_procedure_runs_with_its_arguments_bound_by_name()
     {
         await using var context = fixture.CreateAdminContext();

@@ -227,6 +227,14 @@ internal static class ResetSqlGenerator
 
         body.AddRange(plan.Tables.Select(t => $"DELETE FROM {Quote(t, '[', ']')};"));
 
+        // An INSTEAD OF DELETE trigger runs in place of the delete — a soft delete marks the rows and keeps
+        // them, unique keys and all — and the reset would report success with the table still full. Every
+        // table must be empty before the unit commits; one that is not fails it, and it is rolled back.
+        body.AddRange(plan.Tables.Select(t =>
+            $"IF EXISTS (SELECT 1 FROM {Quote(t, '[', ']')}) THROW 50000, {SqlServerLiteral(
+                $"The reset left rows in '{t}': an INSTEAD OF DELETE trigger, such as a soft delete, kept them. "
+                + "It has been rolled back. Exclude the table from the reset, or disable the trigger for it.")}, 1;"));
+
         if (state.RestartIdentity)
         {
             body.AddRange(plan.Tables.Select(t =>

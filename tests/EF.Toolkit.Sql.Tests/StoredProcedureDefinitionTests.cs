@@ -89,11 +89,17 @@ public sealed class StoredProcedureDefinitionTests
     }
 
     [Theory]
-    [InlineData(SqlDialect.PostgreSql, "DROP PROCEDURE IF EXISTS \"billing\".\"close_month\"")]
+    [InlineData(SqlDialect.PostgreSql, "DROP PROCEDURE IF EXISTS \"billing\".\"close_month\"()")]
     [InlineData(SqlDialect.SqlServer, "DROP PROCEDURE IF EXISTS [billing].[close_month]")]
     [InlineData(SqlDialect.MySql, "DROP PROCEDURE IF EXISTS `billing`.`close_month`")]
     public void Drop_is_by_name_and_if_exists(SqlDialect dialect, string expected)
         => new StoredProcedureDefinition("close_month", null, "x", "billing").GetDropSql(dialect).ShouldBe([expected]);
+
+    [Fact]
+    public void PostgreSql_drops_by_its_whole_signature_modes_included()
+        // OUT arguments are part of a procedure's identity, so every argument is listed with its mode.
+        => new StoredProcedureDefinition("close_month", Parameters, "x", "billing").GetDropSql(SqlDialect.PostgreSql)
+            .ShouldBe(["DROP PROCEDURE IF EXISTS \"billing\".\"close_month\"(IN integer, OUT numeric(10,2), INOUT integer)"]);
 
     [Fact]
     public void Sqlite_refuses_both_directions()

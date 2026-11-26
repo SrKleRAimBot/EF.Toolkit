@@ -95,11 +95,19 @@ public sealed class StoredProcedureDefinition : IDatabaseObject
     }
 
     /// <inheritdoc />
-    public IReadOnlyList<string> GetDropSql(SqlDialect dialect) => DropSql(dialect, Name, Schema);
+    /// <remarks>
+    ///     By signature on PostgreSQL, which overloads by argument types: by name alone, dropping one
+    ///     overload that was never created would drop a sibling that was.
+    /// </remarks>
+    public IReadOnlyList<string> GetDropSql(SqlDialect dialect)
+        => dialect == SqlDialect.PostgreSql
+            ? [$"DROP PROCEDURE IF EXISTS {SqlSyntax.Qualify(dialect, Name, Schema)}({RoutineSyntax.PostgreSqlSignature(Parameters, withDirection: true)})"]
+            : DropSql(dialect, Name, Schema);
 
     /// <remarks>
-    ///     Dropped by name alone, without an argument list: that is the only form all three engines
-    ///     share, and on PostgreSQL it is unambiguous as long as the procedure is not overloaded.
+    ///     Dropped by name alone, without an argument list: that is the only form all three engines share,
+    ///     and on PostgreSQL it is unambiguous as long as the routine is not overloaded. A definition drops
+    ///     by its own signature there instead.
     /// </remarks>
     internal static IReadOnlyList<string> DropSql(SqlDialect dialect, string name, string? schema)
     {
