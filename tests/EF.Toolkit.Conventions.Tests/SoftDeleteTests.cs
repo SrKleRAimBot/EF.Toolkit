@@ -588,6 +588,84 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_pooled_context_still_restores_a_lost_concurrency_race_on_its_second_lease()
+    {
+        // EF puts a pooled context's event handlers back on every lease; the interceptor, scoped to the
+        // context, lives on. Subscribing only once left the second lease with no restore at all.
+        var options = new DbContextOptionsBuilder<PooledCommentsContext>()
+            .UseSqlite(_db.Connection)
+            .UseEntityConventions(c => c.Clock(_db.Clock))
+            .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.ManyServiceProvidersCreatedWarning))
+            .Options;
+        var factory = new Microsoft.EntityFrameworkCore.Infrastructure.PooledDbContextFactory<PooledCommentsContext>(options, poolSize: 1);
+
+        await using (var first = factory.CreateDbContext())
+        {
+            (await first.Comments.SingleAsync(c => c.Id == 1, Ct)).Text = "edited";
+            await first.SaveChangesAsync(Ct);
+        }
+
+        await using var second = factory.CreateDbContext();
+        var comment = await second.Comments.SingleAsync(c => c.Id == 2, Ct);
+        await using (var other = _db.Context())
+        {
+            (await other.Comments.SingleAsync(c => c.Id == 2, Ct)).Version = 1;
+            await other.SaveChangesAsync(Ct);
+        }
+
+        second.Comments.Remove(comment);
+        await Should.ThrowAsync<DbUpdateConcurrencyException>(() => second.SaveChangesAsync(Ct));
+
+        second.Entry(comment).State.ShouldBe(EntityState.Deleted);
+        comment.DeletedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task After_a_failed_save_a_restored_principal_lets_its_cascaded_dependents_be_soft_deleted()
+    {
+        // The cascaded comments were marked for a hard delete in a save that failed. Kept, the marks
+        // made the retry delete them for real even though their post was restored.
+        await using var context = _db.Context();
+        var post = await context.Posts.Include(p => p.Comments).SingleAsync(p => p.Id == 1, Ct);
+        context.HardDelete(post);
+        var duplicate = new Post { Id = 50, Title = "two", Tenant = 1 };   // unique index violation
+        context.Posts.Add(duplicate);
+
+        await Should.ThrowAsync<DbUpdateException>(() => context.SaveChangesAsync(Ct));
+
+        context.Entry(duplicate).State = EntityState.Detached;
+        context.Restore(post);
+        await context.SaveChangesAsync(Ct);
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.AnyAsync(p => p.Id == 1, Ct)).ShouldBeTrue();
+        var comments = await fresh.Comments.IncludeDeleted().ToListAsync(Ct);
+        comments.Count.ShouldBe(2);
+        comments.ShouldAllBe(c => c.DeletedAt != null);
+    }
+
+    [Fact]
+    public async Task Restore_after_an_unaccepted_soft_delete_wins_over_replaying_it()
+    {
+        await using var context = _db.Context();
+        var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+        context.Comments.Remove(comment);
+
+        await using (var transaction = await context.Database.BeginTransactionAsync(Ct))
+        {
+            await context.SaveChangesAsync(acceptAllChangesOnSuccess: false, Ct);
+            await transaction.RollbackAsync(Ct);
+        }
+
+        context.Restore(comment);
+        await context.SaveChangesAsync(Ct);
+
+        context.Entry(comment).State.ShouldBe(EntityState.Unchanged);
+        await using var fresh = _db.Context();
+        (await fresh.Comments.SingleAsync(c => c.Id == 2, Ct)).DeletedAt.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_soft_delete_saved_without_accepting_is_still_a_soft_delete_on_the_retry()
     {
         // SaveChanges(false), roll back, save again: the retry used to send a plain update and leave the

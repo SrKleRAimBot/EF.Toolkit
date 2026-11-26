@@ -13,14 +13,25 @@ internal sealed class SoftDeleteState
     /// <summary>Conversions a save wrote without accepting, carried to the next save.</summary>
     internal List<(EntityEntry Entry, string Property, object? Before)> Pending { get; } = [];
 
-    /// <summary>Whether the interceptor has subscribed to this context's <c>SaveChangesFailed</c> event.</summary>
-    internal bool SubscribedToFailures { get; set; }
+    private readonly HashSet<object> _propagated = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>Marks <paramref name="entity" /> to be deleted for real by the next save.</summary>
     internal void MarkHardDelete(object entity) => _hardDeletes.Add(entity);
 
-    /// <summary>Whether <paramref name="entity" /> was marked with <see cref="MarkHardDelete" />.</summary>
-    internal bool IsHardDelete(object entity) => _hardDeletes.Contains(entity);
+    /// <summary>
+    ///     Whether <paramref name="entity" /> is to be deleted for real: marked with
+    ///     <see cref="MarkHardDelete" />, or reached this save by cascade from one that was.
+    /// </summary>
+    internal bool IsHardDelete(object entity) => _hardDeletes.Contains(entity) || _propagated.Contains(entity);
+
+    /// <summary>Marks a dependent cascaded from a hard-deleted principal, for the current save only.</summary>
+    internal void MarkPropagatedHardDelete(object entity) => _propagated.Add(entity);
+
+    /// <summary>Forgets every cascaded mark; each save recomputes them.</summary>
+    internal void ClearPropagatedHardDeletes() => _propagated.Clear();
+
+    /// <summary>Forgets a pending, unaccepted soft delete of <paramref name="entity" />.</summary>
+    internal void ClearPending(object entity) => Pending.RemoveAll(p => ReferenceEquals(p.Entry.Entity, entity));
 
     /// <summary>Forgets the hard-delete mark on <paramref name="entity" />, if it has one.</summary>
     internal void ClearHardDelete(object entity) => _hardDeletes.Remove(entity);

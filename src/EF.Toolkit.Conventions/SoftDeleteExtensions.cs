@@ -79,7 +79,12 @@ public static class SoftDeleteExtensions
         // instance would delete the row for real instead of marking it.
         if (context.GetService<IDbContextOptions>().FindExtension<ConventionsOptionsExtension>() is not null)
         {
-            context.GetService<SoftDeleteState>().ClearHardDelete(entity);
+            var state = context.GetService<SoftDeleteState>();
+            state.ClearHardDelete(entity);
+
+            // And a soft delete an unaccepted SaveChanges(false) left pending, which the next save would
+            // otherwise replay over the live value set below.
+            state.ClearPending(entity);
         }
 
         if (entry.State == EntityState.Detached)

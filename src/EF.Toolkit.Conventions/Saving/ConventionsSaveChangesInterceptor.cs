@@ -28,6 +28,8 @@ namespace EFToolkit.Conventions.Saving;
 internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions options, SoftDeleteState state)
     : SaveChangesInterceptor
 {
+    private EventHandler<SaveChangesFailedEventArgs>? _onFailed;
+
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
         Apply(eventData.Context);
@@ -84,11 +86,12 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
         // EF raises an optimistic-concurrency failure through DbContext.SaveChangesFailed but not through
         // the interceptor's SaveChangesFailed — and only once nothing has suppressed it, which is the
         // point: restoring the tracker any earlier would undo a save that went on to succeed.
-        if (!state.SubscribedToFailures)
-        {
-            context.SaveChangesFailed += (_, _) => Failed();
-            state.SubscribedToFailures = true;
-        }
+        // Re-attached on every save rather than once: a pooled context has its event handlers put back
+        // to what it was created with each time it is leased, while this scoped interceptor lives on.
+        // Detaching first keeps it to one subscription on a context that was not reset.
+        _onFailed ??= (_, _) => Failed();
+        context.SaveChangesFailed -= _onFailed;
+        context.SaveChangesFailed += _onFailed;
 
         if (context.ChangeTracker.AutoDetectChangesEnabled)
         {
@@ -102,7 +105,10 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
         // they are still soft deletes, to be stamped afresh and detached once a save accepts them.
         foreach (var (entry, property, before) in state.Pending)
         {
-            if (entry.State == EntityState.Modified && ConventionMetadata.FindSoftDelete(entry.Metadata) is { } mapping)
+            // Skipped once the application has changed its mind: a Restore() put the live value back.
+            if (entry.State == EntityState.Modified
+                && ConventionMetadata.FindSoftDelete(entry.Metadata) is { } mapping
+                && !Equals(entry.Property(property).CurrentValue, ConventionMetadata.LiveValue(mapping)))
             {
                 var value = entry.Property(property);
                 value.CurrentValue = ConventionMetadata.DeletedValue(mapping, now);
@@ -200,6 +206,9 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
     // down.
     private void PropagateHardDeletes(List<EntityEntry> entries)
     {
+        // Recomputed from the explicit HardDelete() marks on every save, never kept: after a failed save
+        // the application may restore the principal, and its dependents must then be soft-deleted.
+        state.ClearPropagatedHardDeletes();
         var hard = entries.Where(e => e.State == EntityState.Deleted && state.IsHardDelete(e.Entity)).ToList();
         for (var changed = hard.Count > 0; changed;)
         {
@@ -222,7 +231,7 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
                     var values = foreignKey.Properties.Select(p => entry.Property(p.Name).CurrentValue).ToArray();
                     if (CascadeRepair.Find(foreignKey, values, hard) is not null)
                     {
-                        state.MarkHardDelete(entry.Entity);
+                        state.MarkPropagatedHardDelete(entry.Entity);
                         hard.Add(entry);
                         changed = true;
                         break;

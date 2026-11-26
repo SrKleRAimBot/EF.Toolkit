@@ -137,6 +137,9 @@ public sealed class BlogDatabase : IAsyncDisposable
 
     public List<string> Commands { get; } = [];
 
+    /// <summary>The shared connection, for contexts built outside <see cref="Context" />.</summary>
+    public SqliteConnection Connection => _connection;
+
     public static async Task<BlogDatabase> CreateAsync()
     {
         var database = new BlogDatabase();
@@ -212,4 +215,21 @@ public sealed class BlogDatabase : IAsyncDisposable
             return base.NonQueryExecuting(command, eventData, result);
         }
     }
+}
+
+/// <summary>
+///     Comments alone, on the same table, in a context EF can pool: pooling needs a constructor taking
+///     only the options, which BlogContext's tenant parameter rules out.
+/// </summary>
+public sealed class PooledCommentsContext(DbContextOptions<PooledCommentsContext> options) : DbContext(options)
+{
+    public DbSet<Comment> Comments => Set<Comment>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+        => modelBuilder.Entity<Comment>(b =>
+        {
+            b.ToTable("Comments");
+            b.HasSoftDelete(c => c.DeletedAt);
+            b.Property(c => c.Version).IsConcurrencyToken();
+        });
 }
