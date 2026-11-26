@@ -25,6 +25,10 @@ namespace EFToolkit.Testing;
 ///     off, since a <c>DELETE</c> trigger on a reset table could write anywhere. <see langword="null" />
 ///     when not read.
 /// </param>
+/// <param name="PostgreSqlTruncateTriggered">
+///     PostgreSQL: the reset tables with a <c>TRUNCATE</c> trigger, the one kind that can write after the
+///     <c>TRUNCATE</c> — and put rows back — so these are checked empty before the commit.
+/// </param>
 /// <param name="MySqlNoBackslashEscapes">
 ///     Whether the session's <c>sql_mode</c> has <c>NO_BACKSLASH_ESCAPES</c>, under which a backslash
 ///     in a string literal is itself rather than an escape — so the catalog queries' table names are
@@ -38,7 +42,8 @@ internal sealed record ResetConnectionState(
     bool MySqlForeignKeyChecks = true,
     bool SqliteDeferForeignKeys = false,
     IReadOnlyList<MySqlForeignKey>? MySqlForeignKeys = null,
-    bool MySqlNoBackslashEscapes = false);
+    bool MySqlNoBackslashEscapes = false,
+    IReadOnlyList<ResetTable>? PostgreSqlTruncateTriggered = null);
 
 /// <summary>A MySQL foreign key from a reset table, as the catalog records it.</summary>
 /// <param name="Table">The referencing table.</param>
@@ -191,13 +196,30 @@ internal static class ResetSqlGenerator
         // One statement needs no unit of its own — but inside the caller's transaction, any error aborts
         // the whole transaction on PostgreSQL. A savepoint keeps a refused reset from costing the caller
         // the work it did before.
-        return state.InTransaction
-            ? script with
+        // Row triggers do not fire for TRUNCATE, but a statement-level TRUNCATE trigger runs after it and
+        // can insert rows straight back; those tables are counted inside a unit, so a non-empty one rolls
+        // the TRUNCATE back too.
+        var triggered = state.PostgreSqlTruncateTriggered ?? [];
+        if (triggered.Count > 0)
+        {
+            script = script with
+            {
+                VerifyEmpty = [.. triggered.Select(t => ($"SELECT COUNT(*) FROM {Quote(t, '"', '"')};", t.ToString()))],
+            };
+        }
+
+        if (state.InTransaction)
+        {
+            return script with
             {
                 Begin = [$"SAVEPOINT {savepoint};"],
                 Commit = [$"RELEASE SAVEPOINT {savepoint};"],
                 Rollback = [$"ROLLBACK TO SAVEPOINT {savepoint};"],
-            }
+            };
+        }
+
+        return triggered.Count > 0
+            ? script with { Begin = ["BEGIN;"], Commit = ["COMMIT;"], Rollback = ["ROLLBACK;"] }
             : script;
     }
 
@@ -306,6 +328,13 @@ internal static class ResetSqlGenerator
         {
             script = script with { Verify = MySqlOrphans(state.MySqlForeignKeys ?? []) };
         }
+
+        // A trigger on a table deleted later can write into one already emptied — an audit log, say —
+        // so every table is counted before the unit closes.
+        script = script with
+        {
+            VerifyEmpty = [.. plan.Tables.Select(t => ($"SELECT COUNT(*) FROM {Quote(t, '`', '`')};", t.ToString()))],
+        };
 
         if (state.InTransaction)
         {

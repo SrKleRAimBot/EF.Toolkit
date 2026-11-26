@@ -96,6 +96,16 @@ public static class DatabaseResetExtensions
                             token => ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan), token),
                             cancellationToken)
                         .ConfigureAwait(false));
+                    state = state with
+                    {
+                        PostgreSqlTruncateTriggered = TruncateTriggered(plan, await GuardedAsync(
+                                connection,
+                                transaction,
+                                state.InTransaction,
+                                token => ReadRowsAsync(connection, transaction, DatabaseForeignKeys.PostgreSqlTruncateTriggers(plan), token),
+                                cancellationToken)
+                            .ConfigureAwait(false)),
+                    };
                 }
 
                 if (engine == DatabaseEngine.MySql)
@@ -193,6 +203,14 @@ public static class DatabaseResetExtensions
                         transaction,
                         state.InTransaction,
                         () => ReadReferences(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan))));
+                    state = state with
+                    {
+                        PostgreSqlTruncateTriggered = TruncateTriggered(plan, Guarded(
+                            connection,
+                            transaction,
+                            state.InTransaction,
+                            () => ReadRows(connection, transaction, DatabaseForeignKeys.PostgreSqlTruncateTriggers(plan)))),
+                    };
                 }
 
                 if (engine == DatabaseEngine.MySql)
@@ -480,6 +498,29 @@ public static class DatabaseResetExtensions
                 + "to check them. Grant the login a privilege on the database itself (for example "
                 + "GRANT SELECT ON `db`.* TO it) or run the reset as the database's owner.");
         }
+    }
+
+    // A TRUNCATE trigger can put rows back, so such a table is counted before the commit — but under
+    // row-level security the count sees only what the session may, and could be zero with rows left.
+    internal static List<ResetTable> TruncateTriggered(ResetPlan plan, List<string[]> rows)
+    {
+        var tables = new List<ResetTable>();
+        foreach (var row in rows)
+        {
+            var table = plan.Tables[int.Parse(row[0], System.Globalization.CultureInfo.InvariantCulture)];
+            if (row[1] != "0")
+            {
+                throw new InvalidOperationException(
+                    $"Cannot reset '{table}': it has a TRUNCATE trigger, which could put rows back, and row-level "
+                    + "security applies to this login on it, so the reset could not see whether the table was left "
+                    + "empty. Run the reset as the table's owner (without FORCE ROW LEVEL SECURITY), as a role with "
+                    + "BYPASSRLS, or drop the trigger.");
+            }
+
+            tables.Add(table);
+        }
+
+        return tables;
     }
 
     private const string MySqlNoBackslashEscapes = "SELECT FIND_IN_SET('NO_BACKSLASH_ESCAPES', @@SESSION.sql_mode) > 0;";

@@ -182,6 +182,37 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
+    public void PostgreSql_counts_tables_with_a_truncate_trigger_inside_a_unit_of_its_own()
+    {
+        var state = Default with { PostgreSqlTruncateTriggered = [Orders] };
+
+        var script = Generate(DatabaseEngine.PostgreSql, ResetPlan.Create([Lines, Orders]), state);
+
+        script.Begin.ShouldBe(["BEGIN;"]);
+        script.VerifyEmpty.ShouldBe([("SELECT COUNT(*) FROM \"sales\".\"Orders\";", "sales.Orders")]);
+        script.Commit.ShouldBe(["COMMIT;"]);
+        Generate(DatabaseEngine.PostgreSql, ResetPlan.Create([Lines])).Begin.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void PostgreSql_refuses_a_truncate_trigger_under_row_level_security_it_could_not_check_past()
+    {
+        var plan = ResetPlan.Create([Lines, Orders]);
+
+        DatabaseResetExtensions.TruncateTriggered(plan, [["1", "0"]]).ShouldBe([Orders]);
+        Should.Throw<InvalidOperationException>(() => DatabaseResetExtensions.TruncateTriggered(plan, [["0", "1"]]))
+            .Message.ShouldContain("'Lines': it has a TRUNCATE trigger");
+    }
+
+    [Fact]
+    public void MySql_counts_every_table_before_the_unit_closes()
+        => Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines, Orders])).VerifyEmpty.ShouldBe(
+        [
+            ("SELECT COUNT(*) FROM `Lines`;", "Lines"),
+            ("SELECT COUNT(*) FROM `sales`.`Orders`;", "sales.Orders"),
+        ]);
+
+    [Fact]
     public void MySql_verifies_when_the_session_already_had_checks_off()
     {
         var state = Default with { InTransaction = true, MySqlForeignKeyChecks = false, MySqlForeignKeys = [new MySqlForeignKey("Lines", ["OrderId"], "shop", "Orders", ["Id"])] };

@@ -206,7 +206,13 @@ The deletes run as **one unit**: a transaction, or a savepoint inside yours when
 reset that fails part way — a trigger, a lock timeout, a cancellation — rolls back every table it had
 already emptied, so it never leaves some tables empty and others not. MySQL's counter restart is the
 one step outside the unit, after the commit, since `ALTER TABLE` commits on its own: if it fails, the
-rows are already gone and the error says so. The unit's savepoint gets a fresh name for every reset,
+rows are already gone and the error says so. Before the unit closes, every table is checked empty wherever a
+trigger could have kept a row or put one back — an `INSTEAD OF DELETE` soft delete on SQL Server, a
+`RAISE(IGNORE)` on SQLite, an audit trigger writing into a table MySQL already emptied, an `AFTER
+TRUNCATE` trigger on PostgreSQL — and a table left with rows fails the reset, names the table and rolls
+it back. On PostgreSQL that check covers the tables with a `TRUNCATE` trigger, the only kind that runs;
+one under row-level security that applies to the login is refused, since a count it filters could not
+show what is left. The unit's savepoint gets a fresh name for every reset,
 so it can never take the place of one of yours.
 
 Whatever is suspended is restored even when a statement fails, and every restore is attempted even if

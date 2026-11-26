@@ -291,6 +291,43 @@ public sealed class MySqlCollectionDefinition : ICollectionFixture<MySqlFixture>
 [Collection("testing-postgres")]
 public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_truncate_trigger_that_puts_rows_back_fails_the_reset_and_rolls_it_back(bool inTransaction)
+    {
+        // A statement-level AFTER TRUNCATE trigger inserted a row straight back; TRUNCATE succeeded and the
+        // reset reported success with it there.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE FUNCTION refill_tags() RETURNS trigger LANGUAGE plpgsql AS "
+                + "$$ BEGIN INSERT INTO \"Tags\" (\"Code\", \"Label\") VALUES ('back', 'put back'); RETURN NULL; END $$; "
+                + "CREATE TRIGGER refill_tags AFTER TRUNCATE ON \"Tags\" FOR EACH STATEMENT EXECUTE FUNCTION refill_tags();",
+            Ct);
+        try
+        {
+            await using (var transaction = inTransaction ? await context.Database.BeginTransactionAsync(Ct) : null)
+            {
+                (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                    .Message.ShouldContain("Tags'");
+                if (transaction is not null)
+                {
+                    await transaction.CommitAsync(Ct);
+                }
+            }
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await context.Tags.CountAsync(t => t.Code == "back", Ct)).ShouldBe(0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS refill_tags ON \"Tags\"; DROP FUNCTION IF EXISTS refill_tags();", Ct);
+        }
+    }
+
     [Fact]
     public async Task A_refused_reset_inside_a_transaction_leaves_it_usable()
     {
@@ -1008,6 +1045,36 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
             // The connection goes back to the pool with its session, temporary tables included.
             await context.Database.ExecuteSqlRawAsync("DROP TEMPORARY TABLE IF EXISTS Customers", Ct);
             await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_trigger_writing_into_a_table_already_emptied_fails_the_reset()
+    {
+        // An audit trigger on a table deleted later wrote into one the reset had already emptied, and the
+        // reset reported success with the row in it.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        var order = DatabaseResetExtensions.GenerateResetScript(context.Database, o => o.RestartIdentity = false).Body
+            .Select(b => b["DELETE FROM `".Length..b.IndexOf('`', "DELETE FROM `".Length)])
+            .ToList();
+        var later = order[order.IndexOf("Tags") + 1];
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        var trigger = "CREATE TRIGGER AuditInto AFTER DELETE ON `" + later + "` FOR EACH ROW "
+            + "INSERT IGNORE INTO Tags (Code, Label) VALUES ('audit', 'written during the reset')";
+        await context.Database.ExecuteSqlRawAsync(trigger, Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct)))
+                .Message.ShouldContain("The reset left rows in 'Tags'");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS AuditInto", Ct);
         }
     }
 

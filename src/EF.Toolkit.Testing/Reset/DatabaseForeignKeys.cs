@@ -264,6 +264,32 @@ internal static class DatabaseForeignKeys
     ///     go through <c>to_regclass</c>, resolving exactly as the <c>TRUNCATE</c> will; a table that does
     ///     not exist resolves to nothing rather than failing here.
     /// </remarks>
+    /// <summary>
+    ///     PostgreSQL: each reset table with a user <c>TRUNCATE</c> trigger — rows of (its index in the plan,
+    ///     whether row-level security applies to this session on it).
+    /// </summary>
+    /// <remarks>
+    ///     pg_trigger is readable by every role, so no such trigger is hidden. Row-level security would hide
+    ///     rows from the emptiness check that follows, which then could not be trusted.
+    /// </remarks>
+    internal static string PostgreSqlTruncateTriggers(ResetPlan plan)
+    {
+        var classes = string.Join(", ", plan.Tables.Select(t =>
+        {
+            var quoted = (t.Schema is null ? "" : PgQuote(t.Schema) + ".") + PgQuote(t.Name);
+            return "to_regclass('" + quoted.Replace("'", "''", StringComparison.Ordinal) + "')";
+        }));
+        return $"""
+            SELECT (t.n - 1)::int, CASE WHEN pg_catalog.row_security_active(t.r) THEN 1 ELSE 0 END
+            FROM unnest(ARRAY[{classes}]::regclass[]) WITH ORDINALITY AS t(r, n)
+            WHERE t.r IS NOT NULL
+              AND EXISTS (SELECT 1 FROM pg_catalog.pg_trigger AS g
+                          WHERE g.tgrelid = t.r AND NOT g.tgisinternal AND (g.tgtype & 32) <> 0);
+            """;
+    }
+
+    private static string PgQuote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
     internal static string PostgreSqlDescendants(ResetPlan plan)
     {
         static string RegClasses(IEnumerable<ResetTable> tables)
