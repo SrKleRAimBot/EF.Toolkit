@@ -1,0 +1,165 @@
+using System.Data.Common;
+using EFToolkit.Conventions.Configuration;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+
+namespace EFToolkit.Conventions.Tests;
+
+public sealed class Author
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public List<Post> Posts { get; } = [];
+}
+
+public class Post
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = "";
+    public int Tenant { get; set; }
+    public bool IsDeleted { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? UpdatedAt { get; set; }
+    public int? AuthorId { get; set; }
+    public Author? Author { get; set; }
+    public Seo Seo { get; set; } = new();
+    public List<Comment> Comments { get; } = [];
+}
+
+public sealed class FeaturedPost : Post
+{
+    public int Rank { get; set; }
+}
+
+/// <summary>Owned and table-split: its columns live in the Posts row.</summary>
+public sealed class Seo
+{
+    public string Slug { get; set; } = "";
+}
+
+public sealed class Comment
+{
+    public int Id { get; set; }
+    public int PostId { get; set; }
+    public string Text { get; set; } = "";
+    public DateTime? DeletedAt { get; set; }
+}
+
+/// <summary>No soft delete, shadow timestamps.</summary>
+public sealed class Note
+{
+    public int Id { get; set; }
+    public string Body { get; set; } = "";
+}
+
+public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tenant = null) : DbContext(options)
+{
+    public DbSet<Author> Authors => Set<Author>();
+    public DbSet<Post> Posts => Set<Post>();
+    public DbSet<Comment> Comments => Set<Comment>();
+    public DbSet<Note> Notes => Set<Note>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Author>().HasSoftDelete();
+
+        modelBuilder.Entity<Post>(b =>
+        {
+            b.HasSoftDelete(p => p.IsDeleted);
+            b.HasCreatedAt(p => p.CreatedAt);
+            b.HasUpdatedAt(p => p.UpdatedAt);
+            b.HasQueryFilter("Tenant", p => tenant == null || p.Tenant == tenant);
+            b.OwnsOne(p => p.Seo);
+            b.HasIndex(p => p.Title).IsUnique();
+            b.HasOne(p => p.Author).WithMany(a => a.Posts).HasForeignKey(p => p.AuthorId).IsRequired(false);
+        });
+
+        modelBuilder.Entity<FeaturedPost>();
+        modelBuilder.Entity<Comment>().HasSoftDelete(c => c.DeletedAt);
+        modelBuilder.Entity<Note>().HasTimestamps();
+    }
+}
+
+/// <summary>A clock the test moves by hand.</summary>
+public sealed class FakeClock(DateTimeOffset start) : TimeProvider
+{
+    public DateTimeOffset Now { get; set; } = start;
+
+    public override DateTimeOffset GetUtcNow() => Now;
+}
+
+/// <summary>One in-memory database per test, with contexts that share its open connection.</summary>
+public sealed class BlogDatabase : IAsyncDisposable
+{
+    private readonly SqliteConnection _connection = new("Data Source=:memory:");
+
+    public static readonly DateTimeOffset Start = new(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+
+    public FakeClock Clock { get; } = new(Start);
+
+    public List<string> Commands { get; } = [];
+
+    public static async Task<BlogDatabase> CreateAsync()
+    {
+        var database = new BlogDatabase();
+        await database._connection.OpenAsync();
+        await using var context = database.Context();
+        await context.Database.EnsureCreatedAsync();
+        return database;
+    }
+
+    public BlogContext Context(int? tenant = null, Action<ConventionsOptionsBuilder>? configure = null, bool conventions = true)
+    {
+        var builder = new DbContextOptionsBuilder<BlogContext>()
+            .UseSqlite(_connection)
+            .AddInterceptors(new CommandRecorder(Commands))
+            // Every test has a clock of its own, and the clock is part of the options EF caches
+            // service providers by — so this suite creates far more of them than an application would.
+            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));
+
+        if (conventions)
+        {
+            builder.UseEntityConventions(c =>
+            {
+                c.Clock(Clock);
+                configure?.Invoke(c);
+            });
+        }
+
+        return new BlogContext(builder.Options, tenant);
+    }
+
+    public async ValueTask DisposeAsync() => await _connection.DisposeAsync();
+
+    private sealed class CommandRecorder(List<string> commands) : DbCommandInterceptor
+    {
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result)
+        {
+            commands.Add(command.CommandText);
+            return base.NonQueryExecuting(command, eventData, result);
+        }
+    }
+}

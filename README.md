@@ -17,6 +17,7 @@ it alongside whatever EF Core version your app already uses.
 | `EF.Toolkit.Bulk` | Makes `SaveChanges()` faster with no call-site changes, and adds an explicit `BulkInsert` / `Update` / `Delete` / `Merge` / `Synchronize` API — up to **10x faster and 44x less memory** — plus set-based `UpdateWhere` / `DeleteWhere`. | [docs/bulk.md](docs/bulk.md) |
 | `EF.Toolkit.Audit` | Records who changed what and when, with old and new values per column, into one audit table whose payload is queryable JSON — `jsonb` on PostgreSQL. | [docs/audit.md](docs/audit.md) |
 | `EF.Toolkit.Audit.Bulk` | Joins the two: audits the explicit bulk API, and writes audit entries in bulk. | [docs/audit-bulk.md](docs/audit-bulk.md) |
+| `EF.Toolkit.Conventions` | Soft delete — `Remove()` marks the row, a named query filter hides it, with restore, hard delete and set-based variants — and created/updated timestamps on every save. | [docs/conventions.md](docs/conventions.md) |
 | `EF.Toolkit.Query` | Offset and keyset pagination, sorting contracts with a guaranteed total order, composable filters, batched streaming and ambient tracking scopes — plus a development-time advisor for missing indexes. | [docs/query.md](docs/query.md) |
 
 The write-side capabilities have a provider package — `.PostgreSQL`, `.SqlServer`, `.MySql` or
@@ -27,6 +28,7 @@ dotnet add package EF.Toolkit.Bulk.PostgreSQL
 dotnet add package EF.Toolkit.Audit.PostgreSQL
 dotnet add package EF.Toolkit.Audit.Bulk       # only if you use both
 dotnet add package EF.Toolkit.Query
+dotnet add package EF.Toolkit.Conventions
 ```
 
 Each provider package has its own notes on how the capability is executed on that engine, and what

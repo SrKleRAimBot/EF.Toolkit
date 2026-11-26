@@ -16,6 +16,7 @@
     <Project Path="src/EF.Toolkit.Bulk.Sqlite/EF.Toolkit.Bulk.Sqlite.csproj" />
     <Project Path="src/EF.Toolkit.Bulk.SqlServer/EF.Toolkit.Bulk.SqlServer.csproj" />
     <Project Path="src/EF.Toolkit.Bulk/EF.Toolkit.Bulk.csproj" />
+    <Project Path="src/EF.Toolkit.Conventions/EF.Toolkit.Conventions.csproj" />
     <Project Path="src/EF.Toolkit.Query/EF.Toolkit.Query.csproj" />
   </Folder>
   <Folder Name="/tests/">
@@ -24,6 +25,7 @@
     <Project Path="tests/EF.Toolkit.Bulk.Benchmarks/EF.Toolkit.Bulk.Benchmarks.csproj" />
     <Project Path="tests/EF.Toolkit.Bulk.Equivalence/EF.Toolkit.Bulk.Equivalence.csproj" />
     <Project Path="tests/EF.Toolkit.Bulk.Tests/EF.Toolkit.Bulk.Tests.csproj" />
+    <Project Path="tests/EF.Toolkit.Conventions.Tests/EF.Toolkit.Conventions.Tests.csproj" />
     <Project Path="tests/EF.Toolkit.Query.Equivalence/EF.Toolkit.Query.Equivalence.csproj" />
     <Project Path="tests/EF.Toolkit.Query.Tests/EF.Toolkit.Query.Tests.csproj" />
   </Folder>
