@@ -1,12 +1,22 @@
+using System.Runtime.ExceptionServices;
+
 namespace EFToolkit.Testing;
 
-/// <summary>Runs a <see cref="ResetScript" />, restoring exactly what its prologue changed.</summary>
+/// <summary>Runs a <see cref="ResetScript" />, as one unit where the engine allows, and restores what it changed.</summary>
 /// <remarks>
-///     <c>Epilogue[i]</c> undoes <c>Prologue[i]</c>, and runs only if <c>Prologue[i]</c> did: a
-///     prologue that fails or is cancelled half way — the second of two <c>NOCHECK CONSTRAINT ALL</c>,
-///     say — still restores the first, instead of leaving that table's constraints off in the database.
-///     Restores run in reverse, and are not cancellable: abandoning a restore is the one outcome worse
-///     than waiting for it.
+///     <para>
+///         The order is prologue, begin, body, commit. If anything fails after the unit began, it is
+///         rolled back first — the rows come back before any check is switched on again, so no
+///         half-emptied state is ever committed. Then <c>Epilogue[i]</c> undoes <c>Prologue[i]</c>, for
+///         every prologue statement that ran, in reverse.
+///     </para>
+///     <para>
+///         Every cleanup statement is attempted even if an earlier one fails: one table whose
+///         constraints cannot be re-enabled is no reason to leave the rest disabled. Cleanup is not
+///         cancellable — abandoning it is the one outcome worse than waiting. The original failure is
+///         rethrown as it was when cleanup succeeded; when cleanup failed too, all of them are raised
+///         together, the original first.
+///     </para>
 /// </remarks>
 internal static class ResetRunner
 {
@@ -16,6 +26,10 @@ internal static class ResetRunner
         CancellationToken cancellationToken)
     {
         var applied = 0;
+        var begun = false;
+        var committed = false;
+        ExceptionDispatchInfo? failure = null;
+
         try
         {
             foreach (var sql in script.Prologue)
@@ -24,23 +38,56 @@ internal static class ResetRunner
                 applied++;
             }
 
+            foreach (var sql in script.Begin)
+            {
+                await execute(sql, cancellationToken).ConfigureAwait(false);
+                begun = true;
+            }
+
             foreach (var sql in script.Body)
             {
                 await execute(sql, cancellationToken).ConfigureAwait(false);
             }
-        }
-        finally
-        {
-            for (var i = applied - 1; i >= 0; i--)
+
+            foreach (var sql in script.Commit)
             {
-                await execute(script.Epilogue[i], CancellationToken.None).ConfigureAwait(false);
+                await execute(sql, cancellationToken).ConfigureAwait(false);
+            }
+
+            committed = true;
+        }
+#pragma warning disable CA1031 // Captured and rethrown below, after cleanup.
+        catch (Exception e)
+#pragma warning restore CA1031
+        {
+            failure = ExceptionDispatchInfo.Capture(e);
+        }
+
+        var cleanupFailures = new List<Exception>();
+        foreach (var sql in Cleanup(script, applied, begun && !committed && failure is not null))
+        {
+            try
+            {
+                await execute(sql, CancellationToken.None).ConfigureAwait(false);
+            }
+#pragma warning disable CA1031 // Every cleanup statement is attempted; failures are reported together.
+            catch (Exception e)
+#pragma warning restore CA1031
+            {
+                cleanupFailures.Add(e);
             }
         }
+
+        Report(failure, cleanupFailures);
     }
 
     internal static void Run(ResetScript script, Action<string> execute)
     {
         var applied = 0;
+        var begun = false;
+        var committed = false;
+        ExceptionDispatchInfo? failure = null;
+
         try
         {
             foreach (var sql in script.Prologue)
@@ -49,17 +96,82 @@ internal static class ResetRunner
                 applied++;
             }
 
+            foreach (var sql in script.Begin)
+            {
+                execute(sql);
+                begun = true;
+            }
+
             foreach (var sql in script.Body)
             {
                 execute(sql);
             }
-        }
-        finally
-        {
-            for (var i = applied - 1; i >= 0; i--)
+
+            foreach (var sql in script.Commit)
             {
-                execute(script.Epilogue[i]);
+                execute(sql);
+            }
+
+            committed = true;
+        }
+#pragma warning disable CA1031 // Captured and rethrown below, after cleanup.
+        catch (Exception e)
+#pragma warning restore CA1031
+        {
+            failure = ExceptionDispatchInfo.Capture(e);
+        }
+
+        var cleanupFailures = new List<Exception>();
+        foreach (var sql in Cleanup(script, applied, begun && !committed && failure is not null))
+        {
+            try
+            {
+                execute(sql);
+            }
+#pragma warning disable CA1031 // Every cleanup statement is attempted; failures are reported together.
+            catch (Exception e)
+#pragma warning restore CA1031
+            {
+                cleanupFailures.Add(e);
             }
         }
+
+        Report(failure, cleanupFailures);
+    }
+
+    private static IEnumerable<string> Cleanup(ResetScript script, int applied, bool rollBack)
+    {
+        if (rollBack)
+        {
+            foreach (var sql in script.Rollback)
+            {
+                yield return sql;
+            }
+        }
+
+        for (var i = applied - 1; i >= 0; i--)
+        {
+            yield return script.Epilogue[i];
+        }
+    }
+
+    private static void Report(ExceptionDispatchInfo? failure, List<Exception> cleanupFailures)
+    {
+        if (cleanupFailures.Count == 0)
+        {
+            failure?.Throw();
+            return;
+        }
+
+        if (failure is null && cleanupFailures.Count == 1)
+        {
+            ExceptionDispatchInfo.Capture(cleanupFailures[0]).Throw();
+        }
+
+        throw new AggregateException(
+            failure is null
+                ? "Restoring the connection's settings after a reset failed."
+                : "The reset failed, and restoring the connection's settings afterwards failed too.",
+            failure is null ? cleanupFailures : [failure.SourceException, .. cleanupFailures]);
     }
 }

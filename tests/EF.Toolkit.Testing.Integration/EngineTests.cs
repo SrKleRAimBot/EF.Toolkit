@@ -56,6 +56,48 @@ public abstract class EngineTests(EngineFixture fixture) : IAsyncLifetime
         }
     }
 
+    /// <summary>
+    ///     Makes the delete of Customers fail with a trigger — after the tables ahead of it are already
+    ///     emptied — and checks the reset rolled every one of them back and restored its settings.
+    /// </summary>
+    protected async Task AssertPartialFailureChangesNothingAsync(
+        string createTrigger, string dropTrigger, bool inTransaction, Action<ResetDataOptions>? configure = null)
+    {
+        SkipIfUnavailable();
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(createTrigger, Ct);
+        try
+        {
+            await using (var transaction = inTransaction ? await context.Database.BeginTransactionAsync(Ct) : null)
+            {
+                await Should.ThrowAsync<DbException>(() => context.Database.ResetDataAsync(configure, Ct));
+                if (transaction is not null)
+                {
+                    // Some engines end the caller's transaction on the error itself; commit what is left.
+                    try
+                    {
+                        await transaction.CommitAsync(Ct);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                    catch (DbException)
+                    {
+                    }
+                }
+            }
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            await AssertConstraintsRestoredAsync(context);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(dropTrigger, Ct);
+        }
+    }
+
     private void SkipIfUnavailable() => Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
 
     protected static async Task<long> ScalarAsync(DbContext context, string sql)
@@ -289,6 +331,15 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
             "CREATE TABLE Unmapped (Id int PRIMARY KEY, CustomerId int NOT NULL REFERENCES Customers (Id))",
             "DROP TABLE Unmapped");
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task A_reset_that_fails_part_way_changes_nothing(bool inTransaction)
+        => AssertPartialFailureChangesNothingAsync(
+            "CREATE TRIGGER KeepCustomers ON Customers INSTEAD OF DELETE AS THROW 50000, 'kept', 1;",
+            "DROP TRIGGER IF EXISTS KeepCustomers",
+            inTransaction);
+
     [Fact]
     public async Task Under_a_non_dbo_default_schema_the_check_follows_the_table_the_delete_resolves_to()
     {
@@ -350,6 +401,17 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
 [Collection("testing-mysql")]
 public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task A_reset_that_fails_part_way_changes_nothing(bool inTransaction)
+        // Deleting rather than truncating: TRUNCATE fires no trigger, and commits on its own anyway.
+        => AssertPartialFailureChangesNothingAsync(
+            "CREATE TRIGGER KeepCustomers BEFORE DELETE ON Customers FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'kept'",
+            "DROP TRIGGER IF EXISTS KeepCustomers",
+            inTransaction,
+            o => o.RestartIdentity = false);
+
     [Fact]
     public Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset()
         // FOREIGN_KEY_CHECKS = 0 would let the truncate through, so the catalog check refuses first.

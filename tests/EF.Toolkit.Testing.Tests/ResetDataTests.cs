@@ -187,6 +187,35 @@ public sealed class ResetDataTests
         (await ScalarAsync(context, "PRAGMA foreign_keys;")).ShouldBe(1);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_reset_that_fails_part_way_leaves_every_table_as_it_was(bool inTransaction)
+    {
+        // A trigger rejects the delete of one table after others in the cycle are already emptied.
+        // Without a unit to roll back, the outer transaction committed the orphans the deferred
+        // checks were switched back off for.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER \"KeepCustomers\" BEFORE DELETE ON \"Customers\" BEGIN SELECT RAISE(ABORT, 'kept'); END", Ct);
+
+        await using (var transaction = inTransaction ? await context.Database.BeginTransactionAsync(Ct) : null)
+        {
+            await Should.ThrowAsync<Microsoft.Data.Sqlite.SqliteException>(() => context.Database.ResetDataAsync(cancellationToken: Ct));
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(Ct);
+            }
+        }
+
+        (await ShopData.CountsAsync(context)).ShouldBe(before);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM pragma_foreign_key_check")).ShouldBe(0);
+        (await ScalarAsync(context, "PRAGMA foreign_keys;")).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_temporary_table_shadowing_a_mapped_one_is_not_what_the_reset_empties()
     {

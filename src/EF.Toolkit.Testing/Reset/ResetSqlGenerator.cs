@@ -59,10 +59,26 @@ internal sealed record ResetScript
 
     public IReadOnlyList<string> Epilogue { get; }
 
+    /// <summary>
+    ///     Opens the unit the body runs in — a transaction, or a savepoint inside the caller's — after
+    ///     the prologue, since some settings (SQLite's <c>foreign_keys</c>) cannot change inside one.
+    /// </summary>
+    public IReadOnlyList<string> Begin { get; init; } = [];
+
+    /// <summary>Closes the unit once the body has succeeded.</summary>
+    public IReadOnlyList<string> Commit { get; init; } = [];
+
+    /// <summary>
+    ///     Undoes the body if it failed, before the epilogue restores anything — so a reset that fails
+    ///     part way never leaves some tables emptied and others not, with the checks that would have
+    ///     caught the orphans switched back on only after the fact.
+    /// </summary>
+    public IReadOnlyList<string> Rollback { get; init; } = [];
+
     public static ResetScript Empty { get; } = new([], [], []);
 
-    /// <summary>Every statement, in execution order.</summary>
-    public IEnumerable<string> All => Prologue.Concat(Body).Concat(Epilogue);
+    /// <summary>Every statement of a successful run, in execution order.</summary>
+    public IEnumerable<string> All => Prologue.Concat(Begin).Concat(Body).Concat(Commit).Concat(Epilogue.Reverse());
 }
 
 /// <summary>Turns a <see cref="ResetPlan" /> into SQL for one engine.</summary>
@@ -74,6 +90,9 @@ internal sealed record ResetScript
 /// </remarks>
 internal static class ResetSqlGenerator
 {
+    /// <summary>The savepoint a reset inside the caller's transaction runs under.</summary>
+    internal const string Savepoint = "ef_toolkit_reset";
+
     public static ResetScript Generate(DatabaseEngine engine, ResetPlan plan, ResetConnectionState state)
     {
         if (plan.Tables.Count == 0)
@@ -157,7 +176,18 @@ internal static class ResetSqlGenerator
             .Select(t => $"ALTER TABLE {Quote(t, '[', ']')} WITH CHECK CHECK CONSTRAINT ALL;")
             .ToList();
 
-        return new ResetScript(prologue, body, epilogue);
+        return new ResetScript(prologue, body, epilogue) with
+        {
+            // NOCHECK sits outside the unit, so a rollback restores the rows first and the epilogue
+            // then re-checks constraints against data that is whole again.
+            Begin = [state.InTransaction ? $"SAVE TRANSACTION {Savepoint};" : "BEGIN TRANSACTION;"],
+            Commit = state.InTransaction ? [] : ["COMMIT TRANSACTION;"],
+            // An error can end the caller's transaction outright (a trigger's THROW rolls it all back) or
+            // doom it; the savepoint is then gone or unusable, and only the caller can roll back.
+            Rollback = [state.InTransaction
+                ? $"IF XACT_STATE() = 1 ROLLBACK TRANSACTION {Savepoint};"
+                : "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;"],
+        };
     }
 
     /// <remarks>
@@ -177,9 +207,24 @@ internal static class ResetSqlGenerator
                 : $"DELETE FROM {Quote(t, '`', '`')};")
             .ToList();
 
-        return state.MySqlForeignKeyChecks
+        var script = state.MySqlForeignKeyChecks
             ? new ResetScript(["SET FOREIGN_KEY_CHECKS = 0;"], body, ["SET FOREIGN_KEY_CHECKS = 1;"])
             : new ResetScript([], body, []);
+
+        // TRUNCATE commits implicitly, so a truncating reset cannot be one unit; a deleting one can.
+        if (truncate)
+        {
+            return script;
+        }
+
+        return state.InTransaction
+            ? script with
+            {
+                Begin = [$"SAVEPOINT {Savepoint};"],
+                Commit = [$"RELEASE SAVEPOINT {Savepoint};"],
+                Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};"],
+            }
+            : script with { Begin = ["START TRANSACTION;"], Commit = ["COMMIT;"], Rollback = ["ROLLBACK;"] };
     }
 
     /// <remarks>
@@ -210,12 +255,19 @@ internal static class ResetSqlGenerator
             return new ResetScript(
                 state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = ON;"],
                 body,
-                state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = OFF;"]);
+                state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = OFF;"])
+            {
+                Begin = [$"SAVEPOINT {Savepoint};"],
+                Commit = [$"RELEASE SAVEPOINT {Savepoint};"],
+                Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};", $"RELEASE SAVEPOINT {Savepoint};"],
+            };
         }
 
-        return state.SqliteForeignKeysEnabled
+        var script = state.SqliteForeignKeysEnabled
             ? new ResetScript(["PRAGMA foreign_keys = OFF;"], body, ["PRAGMA foreign_keys = ON;"])
             : new ResetScript([], body, []);
+
+        return script with { Begin = ["BEGIN;"], Commit = ["COMMIT;"], Rollback = ["ROLLBACK;"] };
     }
 
     private static string Quote(ResetTable table, char open, char close)

@@ -198,9 +198,16 @@ What each engine is sent:
 | MySQL | `SET FOREIGN_KEY_CHECKS = 0`, `TRUNCATE TABLE` each, then checks back on. |
 | SQLite | `PRAGMA foreign_keys = OFF`, `DELETE` each, clear `sqlite_sequence` for those tables, then back on. |
 
-Whatever is suspended is restored even when a statement fails — those settings belong to the
-connection, and a pooled connection handed back with foreign-key checks off would disable them for
-whichever test opened it next. A setting that was already off is left off.
+The deletes run as **one unit**: a transaction, or a savepoint inside yours when one is open. A
+reset that fails part way — a trigger, a lock timeout, a cancellation — rolls back every table it had
+already emptied, so it never leaves some tables empty and others not. The exception is MySQL outside
+a transaction, where `TRUNCATE` commits on its own; there the reset can stop part way.
+
+Whatever is suspended is restored even when a statement fails, and every restore is attempted even if
+one of them fails — those settings belong to the connection or the table, and a pooled connection
+handed back with foreign-key checks off would disable them for whichever test opened it next. A
+setting that was already off is left off. If a restore fails too, the reset's own error and the
+restore's are raised together in an `AggregateException`, the original first.
 
 The SQL Server reseed reads the table's own seed and increment and whether it has ever generated a
 value — `RESEED, n` means "next is `n`" on a table that never has, and "next is `n` plus the

@@ -184,6 +184,41 @@ public sealed class ResetSqlGeneratorTests
         => Generate(Enum.Parse<DatabaseEngine>(engine), ResetPlan.Create([Odd]), Default with { RestartIdentity = false })
             .Body[0].ShouldContain(quoted);
 
+    [Theory]
+    [InlineData("SqlServer", false, "BEGIN TRANSACTION;", "COMMIT TRANSACTION;", "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;")]
+    [InlineData("SqlServer", true, "SAVE TRANSACTION ef_toolkit_reset;", "", "IF XACT_STATE() = 1 ROLLBACK TRANSACTION ef_toolkit_reset;")]
+    [InlineData("Sqlite", false, "BEGIN;", "COMMIT;", "ROLLBACK;")]
+    [InlineData("Sqlite", true, "SAVEPOINT ef_toolkit_reset;", "RELEASE SAVEPOINT ef_toolkit_reset;", "ROLLBACK TO SAVEPOINT ef_toolkit_reset;|RELEASE SAVEPOINT ef_toolkit_reset;")]
+    [InlineData("MySql", true, "SAVEPOINT ef_toolkit_reset;", "RELEASE SAVEPOINT ef_toolkit_reset;", "ROLLBACK TO SAVEPOINT ef_toolkit_reset;")]
+    public void Each_engine_runs_the_reset_as_one_unit(string engine, bool inTransaction, string begin, string commit, string rollback)
+    {
+        var script = Generate(Enum.Parse<DatabaseEngine>(engine), ResetPlan.Create([Lines]), Default with { InTransaction = inTransaction });
+
+        script.Begin.ShouldBe([begin]);
+        script.Commit.ShouldBe(commit.Length == 0 ? [] : [commit]);
+        script.Rollback.ShouldBe(rollback.Split('|'));
+    }
+
+    [Fact]
+    public void MySql_deletes_as_a_unit_when_it_cannot_truncate_and_truncates_without_one()
+    {
+        Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]), Default with { RestartIdentity = false })
+            .Begin.ShouldBe(["START TRANSACTION;"]);
+
+        // TRUNCATE commits implicitly, so a unit around it would promise a rollback it cannot give.
+        var truncating = Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines]));
+        truncating.Begin.ShouldBeEmpty();
+        truncating.Rollback.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void PostgreSql_needs_no_unit_for_its_single_statement()
+    {
+        var script = Generate(DatabaseEngine.PostgreSql, ResetPlan.Create([Lines]));
+        script.Begin.ShouldBeEmpty();
+        script.Rollback.ShouldBeEmpty();
+    }
+
     [Fact]
     public void Every_engine_pairs_each_prologue_statement_with_the_one_that_undoes_it()
     {

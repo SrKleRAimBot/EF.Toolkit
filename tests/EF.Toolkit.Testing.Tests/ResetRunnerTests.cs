@@ -4,6 +4,94 @@ public sealed class ResetRunnerTests
 {
     private static readonly ResetScript Script = new(["off a", "off b"], ["delete"], ["on a", "on b"]);
 
+    private static readonly ResetScript Unit = Script with { Begin = ["begin"], Commit = ["commit"], Rollback = ["rollback"] };
+
+    private static Action<string> Recording(List<string> ran, params string[] failOn)
+        => sql =>
+        {
+            ran.Add(sql);
+            if (failOn.Contains(sql))
+            {
+                throw new InvalidOperationException(sql);
+            }
+        };
+
+    [Fact]
+    public void A_successful_unit_commits_and_never_rolls_back()
+    {
+        var ran = new List<string>();
+        ResetRunner.Run(Unit, Recording(ran));
+
+        ran.ShouldBe(["off a", "off b", "begin", "delete", "commit", "on b", "on a"]);
+        Unit.All.ShouldBe(ran);
+    }
+
+    [Fact]
+    public void A_failing_body_is_rolled_back_before_any_setting_is_restored()
+    {
+        var ran = new List<string>();
+        Should.Throw<InvalidOperationException>(() => ResetRunner.Run(Unit, Recording(ran, "delete"))).Message.ShouldBe("delete");
+
+        ran.ShouldBe(["off a", "off b", "begin", "delete", "rollback", "on b", "on a"]);
+    }
+
+    [Fact]
+    public void A_failing_commit_is_rolled_back_too()
+    {
+        var ran = new List<string>();
+        Should.Throw<InvalidOperationException>(() => ResetRunner.Run(Unit, Recording(ran, "commit")));
+
+        ran.ShouldBe(["off a", "off b", "begin", "delete", "commit", "rollback", "on b", "on a"]);
+    }
+
+    [Fact]
+    public void Nothing_is_rolled_back_if_the_unit_never_began()
+    {
+        var ran = new List<string>();
+        Should.Throw<InvalidOperationException>(() => ResetRunner.Run(Unit, Recording(ran, "begin")));
+
+        ran.ShouldBe(["off a", "off b", "begin", "on b", "on a"]);
+    }
+
+    [Fact]
+    public void One_failed_restore_does_not_stop_the_others_and_both_errors_are_reported()
+    {
+        var ran = new List<string>();
+        var error = Should.Throw<AggregateException>(() => ResetRunner.Run(Unit, Recording(ran, "delete", "on b")));
+
+        ran.ShouldBe(["off a", "off b", "begin", "delete", "rollback", "on b", "on a"]);
+        error.InnerExceptions.Select(e => e.Message).ShouldBe(["delete", "on b"]);
+    }
+
+    [Fact]
+    public void A_restore_failing_after_a_clean_run_is_raised_on_its_own()
+    {
+        var ran = new List<string>();
+        Should.Throw<InvalidOperationException>(() => ResetRunner.Run(Unit, Recording(ran, "on a"))).Message.ShouldBe("on a");
+
+        Should.Throw<AggregateException>(() => ResetRunner.Run(Unit, Recording([], "on a", "on b")))
+            .InnerExceptions.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task The_async_runner_follows_the_same_order()
+    {
+        var ran = new List<string>();
+        var record = Recording(ran, "delete", "on b");
+        var error = await Should.ThrowAsync<AggregateException>(() => ResetRunner.RunAsync(
+            Unit,
+            (sql, _) =>
+            {
+                record(sql);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None));
+
+        error.InnerExceptions.Select(e => e.Message).ShouldBe(["delete", "on b"]);
+
+        ran.ShouldBe(["off a", "off b", "begin", "delete", "rollback", "on b", "on a"]);
+    }
+
     [Fact]
     public void A_clean_run_restores_everything_in_reverse()
     {
