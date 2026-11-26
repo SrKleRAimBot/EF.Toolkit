@@ -88,6 +88,30 @@ public sealed class ResetPlanTests
     }
 
     [Fact]
+    public void Keeping_a_table_that_references_a_reset_one_is_refused()
+    {
+        // Every engine suspends or defers foreign-key enforcement while it deletes, so a kept
+        // dependent would be cascade-deleted (SQLite, in a transaction) or orphaned (everywhere else).
+        using var context = Contexts.Sqlite();
+
+        var error = Should.Throw<InvalidOperationException>(() => Plan(context, o => o.ExcludeEntity<OrderLine>()));
+
+        error.Message.ShouldContain("Cannot reset 'Orders' while keeping 'OrderLines'");
+        error.Message.ShouldContain("Exclude 'Orders' as well");
+    }
+
+    [Fact]
+    public void Keeping_the_principal_too_makes_the_exclusion_valid()
+    {
+        using var context = Contexts.Sqlite();
+
+        var plan = Plan(context, o => o.ExcludeEntity<OrderLine>().ExcludeEntity<Order>().ExcludeEntity<Product>().ExcludeEntity<Customer>());
+
+        Names(plan).ShouldNotContain("OrderLines");
+        Names(plan).ShouldNotContain("Orders");
+    }
+
+    [Fact]
     public void Schemas_are_carried_through()
     {
         using var context = new SchemaContext(

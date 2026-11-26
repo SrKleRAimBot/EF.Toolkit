@@ -29,13 +29,13 @@ public sealed class ResetSqlGeneratorTests
 
         script.Prologue.ShouldBeEmpty();
         script.Epilogue.ShouldBeEmpty();
-        script.Body.ShouldBe(["TRUNCATE TABLE \"Lines\", \"sales\".\"Orders\" RESTART IDENTITY CASCADE;"]);
+        script.Body.ShouldBe(["TRUNCATE TABLE \"Lines\", \"sales\".\"Orders\" RESTART IDENTITY;"]);
     }
 
     [Fact]
     public void PostgreSql_continues_identity_when_asked()
         => Generate(DatabaseEngine.PostgreSql, ResetPlan.Create([Lines]), Default with { RestartIdentity = false })
-            .Body.ShouldBe(["TRUNCATE TABLE \"Lines\" CASCADE;"]);
+            .Body.ShouldBe(["TRUNCATE TABLE \"Lines\";"]);
 
     [Fact]
     public void PostgreSql_does_not_cascade_once_anything_is_excluded()
@@ -45,7 +45,7 @@ public sealed class ResetSqlGeneratorTests
     [Fact]
     public void PostgreSql_is_the_same_inside_a_transaction()
         => Generate(DatabaseEngine.PostgreSql, ResetPlan.Create([Lines]), Default with { InTransaction = true })
-            .Body.ShouldBe(["TRUNCATE TABLE \"Lines\" RESTART IDENTITY CASCADE;"]);
+            .Body.ShouldBe(["TRUNCATE TABLE \"Lines\" RESTART IDENTITY;"]);
 
     [Fact]
     public void SqlServer_deletes_in_order_and_reseeds_from_the_table_itself()
@@ -163,6 +163,18 @@ public sealed class ResetSqlGeneratorTests
         script.Epilogue.ShouldBe(["PRAGMA defer_foreign_keys = OFF;"]);
     }
 
+    [Fact]
+    public void Sqlite_leaves_a_transaction_that_already_deferred_foreign_keys_deferred()
+    {
+        var script = Generate(
+            DatabaseEngine.Sqlite,
+            ResetPlan.Create([Lines]),
+            Default with { InTransaction = true, SqliteDeferForeignKeys = true });
+
+        script.Prologue.ShouldBeEmpty();
+        script.Epilogue.ShouldBeEmpty();
+    }
+
     [Theory]
     [InlineData("PostgreSql", "\"Odd]\"\"`'Name\"")]
     [InlineData("SqlServer", "[Odd]]\"`'Name]")]
@@ -187,7 +199,7 @@ public sealed class ResetSqlGeneratorTests
         var sql = DatabaseResetExtensions.GenerateResetScript(context.Database).Body.ShouldHaveSingleItem();
 
         sql.ShouldStartWith("TRUNCATE TABLE ");
-        sql.ShouldEndWith(" RESTART IDENTITY CASCADE;");
+        sql.ShouldEndWith(" RESTART IDENTITY;");
         foreach (var table in new[] { "Categories", "Customers", "OrderLines", "Orders", "Players", "Products", "Tags", "Teams" })
         {
             sql.ShouldContain($"\"{table}\"");

@@ -219,7 +219,35 @@ public sealed class MySqlCollectionDefinition : ICollectionFixture<MySqlFixture>
 
 [Trait("Engine", "postgres17")]
 [Collection("testing-postgres")]
-public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture);
+public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture)
+{
+    [Fact]
+    public async Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset()
+    {
+        // Without CASCADE the TRUNCATE refuses, rather than emptying a table nobody asked it to touch.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"UnmappedAudit\" (\"Id\" int PRIMARY KEY, \"CustomerId\" int NOT NULL REFERENCES \"Customers\" (\"Id\"))",
+            Ct);
+        try
+        {
+            var customer = await context.Customers.Select(c => c.Id).FirstAsync(Ct);
+            await context.Database.ExecuteSqlAsync($"INSERT INTO \"UnmappedAudit\" VALUES (1, {customer})", Ct);
+
+            await Should.ThrowAsync<DbException>(() => context.Database.ResetDataAsync(cancellationToken: Ct));
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM \"UnmappedAudit\"")).ShouldBe(1);
+            (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v > 0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE \"UnmappedAudit\"", Ct);
+        }
+    }
+}
 
 [Trait("Engine", "sqlserver")]
 [Collection("testing-sqlserver")]

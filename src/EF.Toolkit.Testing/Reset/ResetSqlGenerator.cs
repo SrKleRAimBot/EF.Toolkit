@@ -11,6 +11,10 @@ namespace EFToolkit.Testing;
 ///     Whether <c>sqlite_sequence</c> exists. SQLite creates it on the first <c>AUTOINCREMENT</c> table
 ///     and refuses to name it before then.
 /// </param>
+/// <param name="SqliteDeferForeignKeys">
+///     The current value of SQLite's <c>PRAGMA defer_foreign_keys</c>, restored after a reset inside a
+///     transaction rather than switched off regardless.
+/// </param>
 /// <param name="MySqlForeignKeyChecks">
 ///     The session's <c>@@FOREIGN_KEY_CHECKS</c>, read beforehand so it can be restored as a literal.
 ///     A user variable would save the round trip, but both MySQL client libraries refuse
@@ -21,7 +25,8 @@ internal sealed record ResetConnectionState(
     bool InTransaction,
     bool SqliteForeignKeysEnabled = true,
     bool SqliteHasSequenceTable = false,
-    bool MySqlForeignKeyChecks = true);
+    bool MySqlForeignKeyChecks = true,
+    bool SqliteDeferForeignKeys = false);
 
 /// <summary>The statements a reset runs, in three parts.</summary>
 /// <param name="Prologue">Suspends whatever has to be suspended.</param>
@@ -71,17 +76,17 @@ internal static class ResetSqlGenerator
     /// <remarks>
     ///     One statement for every table: <c>TRUNCATE</c> takes the whole list at once, checks the
     ///     foreign keys between them as a set, and is transactional on PostgreSQL, so it needs no
-    ///     ordering and works inside an isolated scope. <c>CASCADE</c> is left off once anything is
-    ///     excluded — it would otherwise empty an excluded table that references a reset one, quietly
-    ///     undoing the exclusion. Without it, that case is an error instead.
+    ///     ordering and works inside an isolated scope. There is no <c>CASCADE</c>: see the comment below.
     /// </remarks>
     private static ResetScript PostgreSql(ResetPlan plan, ResetConnectionState state)
     {
         var tables = string.Join(", ", plan.Tables.Select(t => Quote(t, '"', '"')));
         var identity = state.RestartIdentity ? " RESTART IDENTITY" : "";
-        var cascade = plan.HasExclusions ? "" : " CASCADE";
 
-        return new ResetScript([], [$"TRUNCATE TABLE {tables}{identity}{cascade};"], []);
+        // No CASCADE: it would also empty any table outside the model that references one of these,
+        // which a reset of the mapped tables was never asked to touch. Without it, such a table makes
+        // the TRUNCATE fail and names itself, and the tables listed are still checked as one set.
+        return new ResetScript([], [$"TRUNCATE TABLE {tables}{identity};"], []);
     }
 
     /// <remarks>
@@ -163,7 +168,7 @@ internal static class ResetSqlGenerator
     ///     <c>PRAGMA foreign_keys</c> is a no-op inside a transaction, so there the checks are
     ///     deferred to commit instead — by which time every row is gone and there is nothing to
     ///     violate — and switched back to immediate afterwards, so the rest of the transaction is
-    ///     checked as usual. Counters live in <c>sqlite_sequence</c>, and only for
+    ///     checked as usual; a transaction that had already deferred them keeps them deferred. Counters live in <c>sqlite_sequence</c>, and only for
     ///     <c>AUTOINCREMENT</c> tables; a plain <c>INTEGER PRIMARY KEY</c> restarts on its own once
     ///     the table is empty.
     /// </remarks>
@@ -182,9 +187,9 @@ internal static class ResetSqlGenerator
         if (state.InTransaction)
         {
             return new ResetScript(
-                ["PRAGMA defer_foreign_keys = ON;"],
+                state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = ON;"],
                 body,
-                ["PRAGMA defer_foreign_keys = OFF;"]);
+                state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = OFF;"]);
         }
 
         return state.SqliteForeignKeysEnabled

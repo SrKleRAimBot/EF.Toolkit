@@ -193,7 +193,7 @@ What each engine is sent:
 
 | Engine | Statements |
 | --- | --- |
-| PostgreSQL | One `TRUNCATE TABLE a, b, ... RESTART IDENTITY CASCADE`. `TRUNCATE` checks the foreign keys between the listed tables as a set, so no order is needed. |
+| PostgreSQL | One `TRUNCATE TABLE a, b, ... RESTART IDENTITY`, without `CASCADE`. `TRUNCATE` checks the foreign keys between the listed tables as a set, so no order is needed. |
 | SQL Server | `DELETE` in dependency order, then `DBCC CHECKIDENT ... RESEED` for each table with an identity column. Tables on a foreign-key cycle — self-references included — have `NOCHECK CONSTRAINT ALL` for the delete and `WITH CHECK CHECK CONSTRAINT ALL` after, so the constraints come back trusted. |
 | MySQL | `SET FOREIGN_KEY_CHECKS = 0`, `TRUNCATE TABLE` each, then checks back on. |
 | SQLite | `PRAGMA foreign_keys = OFF`, `DELETE` each, clear `sqlite_sequence` for those tables, then back on. |
@@ -407,9 +407,12 @@ backing field EF maps.
   database directly rather than from the scope cannot run a command: the shared connection has a
   transaction that context is not enlisted in.
 - **The reset only knows the model.** A table the model does not map is not emptied, and a foreign
-  key from one into a mapped table makes the delete fail — except on PostgreSQL, where `CASCADE`
-  truncates the referencing table too. `CASCADE` is dropped as soon as anything is excluded, so an
-  excluded table that references a reset one is an error instead of being emptied anyway.
+  key from one into a mapped table makes the reset fail on PostgreSQL and SQL Server. On MySQL and
+  SQLite, which suspend foreign-key checks while they delete, it leaves that table's rows pointing at
+  rows that are gone — map the table, or empty it yourself first.
+- **Excluding a table that references a reset one is refused** before anything runs, on every engine:
+  the reset would either delete the kept rows with their principals or orphan them. Exclude the
+  principal too, or stop excluding the dependent.
 - **MySQL cannot restart identity inside a transaction.** `TRUNCATE` and `ALTER TABLE` both commit
   implicitly, so inside an isolated scope the reset deletes and the counters carry on.
 - **SQL Server re-enables every constraint on a cyclic table**, including one that was disabled on

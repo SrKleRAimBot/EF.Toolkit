@@ -199,8 +199,12 @@ public static class DatabaseResetExtensions
         var sequence = Convert.ToInt64(
             await ScalarAsync(connection, transaction, SqliteSequenceExists, cancellationToken).ConfigureAwait(false),
             System.Globalization.CultureInfo.InvariantCulture) != 0;
+        var deferred = Convert.ToInt64(
+            await ScalarAsync(connection, transaction, "PRAGMA defer_foreign_keys;", cancellationToken).ConfigureAwait(false),
+            System.Globalization.CultureInfo.InvariantCulture) != 0;
 
-        return new ResetConnectionState(options.RestartIdentity, inTransaction, foreignKeys, sequence);
+        return new ResetConnectionState(
+            options.RestartIdentity, inTransaction, foreignKeys, sequence, SqliteDeferForeignKeys: deferred);
     }
 
     private static ResetConnectionState ReadState(
@@ -229,8 +233,12 @@ public static class DatabaseResetExtensions
         var sequence = Convert.ToInt64(
             Scalar(connection, transaction, SqliteSequenceExists),
             System.Globalization.CultureInfo.InvariantCulture) != 0;
+        var deferred = Convert.ToInt64(
+            Scalar(connection, transaction, "PRAGMA defer_foreign_keys;"),
+            System.Globalization.CultureInfo.InvariantCulture) != 0;
 
-        return new ResetConnectionState(options.RestartIdentity, inTransaction, foreignKeys, sequence);
+        return new ResetConnectionState(
+            options.RestartIdentity, inTransaction, foreignKeys, sequence, SqliteDeferForeignKeys: deferred);
     }
 
     private const string SqliteSequenceExists =

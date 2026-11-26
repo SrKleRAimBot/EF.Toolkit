@@ -55,6 +55,8 @@ internal sealed class ResetPlan
             .Where(t => !IsExcluded(t, excluded, options))
             .ToDictionary(t => new ResetTable(t.Schema, t.Name), t => t);
 
+        RefuseRetainedDependents(relational, included);
+
         // Edges run dependent -> principal: the principal is the one that has to wait. A principal
         // outside the reset imposes no ordering — its rows stay, so references to it stay valid.
         var (ordered, cyclic) = Order(
@@ -118,6 +120,37 @@ internal sealed class ResetPlan
         IEnumerable<ResetTable>? cyclicTables = null,
         bool hasExclusions = false)
         => new(tables, new HashSet<ResetTable>(cyclicTables ?? []), hasExclusions);
+
+    // Every engine's reset suspends or defers foreign-key enforcement while it deletes, so a table
+    // left out of the reset that references one being emptied would not stop the delete: on SQLite its
+    // rows could be cascade-deleted at commit, and everywhere else they would be left pointing at rows
+    // that no longer exist. Neither is what "exclude this table" asks for, so the plan refuses it.
+    private static void RefuseRetainedDependents(
+        IRelationalModel relational,
+        Dictionary<ResetTable, ITable> included)
+    {
+        foreach (var table in relational.Tables)
+        {
+            var name = new ResetTable(table.Schema, table.Name);
+            if (included.ContainsKey(name))
+            {
+                continue;
+            }
+
+            foreach (var foreignKey in table.ForeignKeyConstraints)
+            {
+                var principal = new ResetTable(foreignKey.PrincipalTable.Schema, foreignKey.PrincipalTable.Name);
+                if (included.ContainsKey(principal))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot reset '{principal}' while keeping '{name}': the kept table references it "
+                        + $"through '{foreignKey.Name}', so its rows would be deleted with it or left "
+                        + $"pointing at rows that no longer exist. Exclude '{principal}' as well, or stop "
+                        + $"excluding '{name}'.");
+                }
+            }
+        }
+    }
 
     private static HashSet<ResetTable> ExcludedTables(IModel model, ResetDataOptions options)
     {

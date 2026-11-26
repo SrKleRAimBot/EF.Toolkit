@@ -135,6 +135,32 @@ public sealed class ResetDataTests
     }
 
     [Fact]
+    public async Task A_reset_inside_a_transaction_keeps_the_callers_deferred_foreign_keys()
+    {
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var scope = await db.BeginIsolatedScopeAsync(cancellationToken: Ct);
+        var context = scope.CreateContext();
+
+        await context.Database.ExecuteSqlRawAsync("PRAGMA defer_foreign_keys = ON;", Ct);
+        await context.Database.ResetDataAsync(cancellationToken: Ct);
+
+        (await ScalarAsync(context, "PRAGMA defer_foreign_keys;")).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_refused_exclusion_deletes_nothing()
+    {
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+
+        await Should.ThrowAsync<InvalidOperationException>(
+            () => context.Database.ResetDataAsync(o => o.ExcludeEntity<OrderLine>(), Ct));
+
+        (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v > 0);
+    }
+
+    [Fact]
     public async Task A_reset_inside_a_transaction_is_rolled_back_with_it()
     {
         await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
