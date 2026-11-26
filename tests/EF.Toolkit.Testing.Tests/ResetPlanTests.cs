@@ -60,11 +60,25 @@ public sealed class ResetPlanTests
     }
 
     [Fact]
-    public void A_table_exclusion_with_a_schema_matches_only_that_schema()
+    public void A_table_exclusion_with_a_schema_still_matches_a_model_table_with_none()
     {
+        // The model's Tags has no schema — it lives wherever the connection defaults to, public on
+        // PostgreSQL — so naming that schema must not leave it in the reset.
         using var context = Contexts.Sqlite();
 
-        Names(Plan(context, o => o.ExcludeTable("Tags", "other"))).ShouldContain("Tags");
+        Names(Plan(context, o => o.ExcludeTable("Tags", "public"))).ShouldNotContain("Tags");
+    }
+
+    [Fact]
+    public void A_table_exclusion_with_a_schema_matches_only_that_schema_where_the_model_gives_one()
+    {
+        using var context = new SchemaContext(
+            new DbContextOptionsBuilder<SchemaContext>().UseNpgsql("Host=unused").Options);
+
+        Plan(context, o => o.ExcludeTable("Invoices", "other")).Tables.ShouldContain(new ResetTable("sales", "Invoices"));
+        // Invoices references Clients, so keeping it means keeping that too.
+        Plan(context, o => o.ExcludeTable("Invoices", "sales").ExcludeTable("Clients")).Tables
+            .ShouldNotContain(new ResetTable("sales", "Invoices"));
     }
 
     [Fact]

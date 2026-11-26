@@ -131,7 +131,19 @@ internal static class ResetSqlGenerator
         // No CASCADE: it would also empty any table outside the model that references one of these,
         // which a reset of the mapped tables was never asked to touch. Without it, such a table makes
         // the TRUNCATE fail and names itself, and the tables listed are still checked as one set.
-        return new ResetScript([], [$"TRUNCATE TABLE {tables}{identity};"], []);
+        var script = new ResetScript([], [$"TRUNCATE TABLE {tables}{identity};"], []);
+
+        // One statement needs no unit of its own — but inside the caller's transaction, any error aborts
+        // the whole transaction on PostgreSQL. A savepoint keeps a refused reset from costing the caller
+        // the work it did before.
+        return state.InTransaction
+            ? script with
+            {
+                Begin = [$"SAVEPOINT {Savepoint};"],
+                Commit = [$"RELEASE SAVEPOINT {Savepoint};"],
+                Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};"],
+            }
+            : script;
     }
 
     /// <remarks>

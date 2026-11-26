@@ -292,6 +292,37 @@ public sealed class MySqlCollectionDefinition : ICollectionFixture<MySqlFixture>
 public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture)
 {
     [Fact]
+    public async Task A_refused_reset_inside_a_transaction_leaves_it_usable()
+    {
+        // PostgreSQL aborts the whole transaction on any error. Without a savepoint, a TRUNCATE refused
+        // because of an unmapped referencing table cost the caller everything it had done before.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Unmapped\" (\"Id\" int PRIMARY KEY, \"CustomerId\" int NOT NULL REFERENCES \"Customers\" (\"Id\"))", Ct);
+        try
+        {
+            var before = (await ShopData.CountsAsync(context))["Categories"];
+            await using (var transaction = await context.Database.BeginTransactionAsync(Ct))
+            {
+                context.Add(new Category { Name = "written before the reset" });
+                await context.SaveChangesAsync(Ct);
+
+                await Should.ThrowAsync<DbException>(() => context.Database.ResetDataAsync(cancellationToken: Ct));
+
+                await transaction.CommitAsync(Ct);
+            }
+
+            (await ShopData.CountsAsync(context))["Categories"].ShouldBe(before + 1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE \"Unmapped\"", Ct);
+        }
+    }
+
+    [Fact]
     public async Task A_partition_named_in_ExcludeTable_is_refused_while_other_partitions_are_allowed()
     {
         // TRUNCATE Events empties every partition. That is the reset's job — unless one of them was

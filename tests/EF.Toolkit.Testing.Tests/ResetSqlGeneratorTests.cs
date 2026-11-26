@@ -221,11 +221,16 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
-    public void PostgreSql_needs_no_unit_for_its_single_statement()
+    public void PostgreSql_needs_no_unit_for_its_single_statement_but_takes_a_savepoint_in_a_transaction()
     {
         var script = Generate(DatabaseEngine.PostgreSql, ResetPlan.Create([Lines]));
         script.Begin.ShouldBeEmpty();
         script.Rollback.ShouldBeEmpty();
+
+        var inside = Generate(DatabaseEngine.PostgreSql, ResetPlan.Create([Lines]), Default with { InTransaction = true });
+        inside.Begin.ShouldBe(["SAVEPOINT ef_toolkit_reset;"]);
+        inside.Commit.ShouldBe(["RELEASE SAVEPOINT ef_toolkit_reset;"]);
+        inside.Rollback.ShouldBe(["ROLLBACK TO SAVEPOINT ef_toolkit_reset;"]);
     }
 
     [Fact]

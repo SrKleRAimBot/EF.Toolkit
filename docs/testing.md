@@ -183,6 +183,10 @@ await context.Database.ResetDataAsync(o =>
 });
 ```
 
+`ExcludeTable` matches by name, and by schema when you give one. A model table with no schema of its
+own lives in the connection's default schema, which the model cannot know, so a schema-qualified
+exclusion still matches it — erring toward keeping rows.
+
 Every table the model maps is emptied: tables only, not views, `ToSqlQuery` entities or keyless types
 without a table, and only this context's — a migrations history table, or the tables of another
 context sharing the database, are left alone. The order comes from the model's foreign keys,

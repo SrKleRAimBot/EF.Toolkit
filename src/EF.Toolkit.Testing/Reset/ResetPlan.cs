@@ -247,11 +247,14 @@ internal sealed class ResetPlan
         return excluded;
     }
 
+    // A model table with no schema lives in whatever schema the connection defaults to, which the model
+    // cannot know, so an exclusion that names a schema still matches it. Erring that way can only keep
+    // rows; the other way, ExcludeTable("EventsArchive", "public") reset the very table it named.
     private static bool IsExcluded(ITable table, HashSet<ResetTable> excluded, ResetDataOptions options)
         => excluded.Contains(new ResetTable(table.Schema, table.Name))
             || options.ExcludedTables.Any(x =>
                 string.Equals(x.Name, table.Name, StringComparison.Ordinal)
-                && (x.Schema is null || string.Equals(x.Schema, table.Schema, StringComparison.Ordinal)));
+                && (x.Schema is null || table.Schema is null || string.Equals(x.Schema, table.Schema, StringComparison.Ordinal)));
 
     /// <summary>Tarjan's algorithm, iteratively, over a graph small enough that recursion would do.</summary>
     /// <remarks>
