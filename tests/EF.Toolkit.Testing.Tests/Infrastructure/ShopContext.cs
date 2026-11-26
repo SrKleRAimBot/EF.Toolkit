@@ -136,6 +136,7 @@ public sealed class Player
 /// <summary>A natural, client-supplied string key.</summary>
 public sealed class Tag
 {
+    [System.ComponentModel.DataAnnotations.Key]
     public string Code { get; set; } = null!;
 
     public string Label { get; set; } = null!;

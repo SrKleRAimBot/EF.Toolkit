@@ -345,17 +345,20 @@ public sealed class TestData
             return GenerateString(property?.Name ?? "Value", n, property?.GetMaxLength());
         }
 
+        // Neither an enum nor a bool can be unique, and stepping through them with the counter would
+        // land on the same member whenever an entity has a multiple of that many values — so these
+        // are drawn from the seeded generator instead, which varies them and stays deterministic.
         if (type.IsEnum)
         {
             var values = Enum.GetValuesAsUnderlyingType(type);
             return values.Length == 0
                 ? null
-                : Enum.ToObject(type, values.GetValue((int)(n % values.Length))!);
+                : Enum.ToObject(type, values.GetValue(_random.Next(values.Length))!);
         }
 
         return type switch
         {
-            _ when type == typeof(bool) => n % 2 == 0,
+            _ when type == typeof(bool) => _random.Next(2) == 0,
             _ when type == typeof(byte) => (byte)(n % byte.MaxValue),
             _ when type == typeof(sbyte) => (sbyte)(n % sbyte.MaxValue),
             _ when type == typeof(short) => (short)(n % short.MaxValue),

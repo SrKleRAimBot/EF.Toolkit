@@ -165,8 +165,10 @@ public static class DbContextModelAssertions
     /// <remarks>The same comparison <c>HasPendingModelChanges</c> makes, kept for its answer rather than a bool.</remarks>
     private static IReadOnlyList<MigrationOperation> Differences(DbContext context, IMigrationsAssembly migrationsAssembly)
     {
+        // The snapshot's model is built once and cached, and HasPendingModelChanges has just
+        // finalized it — finalizing again would throw, so only a model still mutable is finalized.
         var snapshot = migrationsAssembly.ModelSnapshot?.Model;
-        if (snapshot is IMutableModel mutable)
+        if (snapshot is IMutableModel mutable and not Annotatable { IsReadOnly: true })
         {
             snapshot = mutable.FinalizeModel();
         }
