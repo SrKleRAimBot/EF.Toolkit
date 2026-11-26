@@ -42,6 +42,50 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task Another_permissive_policy_cannot_widen_a_tenant_past_its_own_rows()
+    {
+        // PostgreSQL ORs permissive policies together. With the tenant check permissive, this
+        // reporting policy would let every session — even one with no tenant — read every row.
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE POLICY reporting ON \"Documents\" AS PERMISSIVE FOR SELECT USING (true)", Token);
+        try
+        {
+            await using (var none = AppContext(() => null))
+            {
+                (await none.Documents.CountAsync(Token)).ShouldBe(0);
+            }
+
+            await using var one = AppContext(() => 1);
+            (await TitlesAsync(one)).ShouldBe(["one-a", "one-b"]);
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP POLICY IF EXISTS reporting ON \"Documents\"", Token);
+        }
+    }
+
+    [Fact]
+    public async Task Dropping_isolation_leaves_another_policy_on_the_table_enforced()
+    {
+        // A policy the table already had must not be left defined but switched off by a rollback.
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE POLICY tenant_one_only ON \"Documents\" AS PERMISSIVE USING (\"TenantId\" = 1)", Token);
+        try
+        {
+            await admin.Database.DropDatabaseObjectsAsync(Isolation);
+
+            await using var context = AppContext(() => null);
+            (await TitlesAsync(context)).ShouldBe(["one-a", "one-b"]);
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP POLICY IF EXISTS tenant_one_only ON \"Documents\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

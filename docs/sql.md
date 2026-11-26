@@ -238,10 +238,25 @@ On **PostgreSQL** this renders:
 ALTER TABLE "Orders" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "Orders" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "Orders_tenant_isolation" ON "Orders"
-    AS PERMISSIVE FOR ALL TO PUBLIC
+    AS RESTRICTIVE FOR ALL TO PUBLIC
     USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
     WITH CHECK ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer));
+CREATE POLICY "Orders_tenant_isolation_access" ON "Orders"
+    AS PERMISSIVE FOR ALL TO PUBLIC
+    USING (true) WITH CHECK (true);
 ```
+
+The tenant check is **restrictive**. PostgreSQL ORs permissive policies together, so a permissive
+tenant check would be bypassed by any other permissive policy on the table — a reporting policy with
+`USING (true)` would read across tenants. A restrictive policy is ANDed onto whatever the permissive
+ones allow, so nothing else on the table can widen a session past its tenant. Restrictive policies
+only ever remove rows, though, and with no permissive policy PostgreSQL grants nothing; the
+`_access` policy is that grant. It makes any other permissive policy on the table redundant within a
+tenant, but other restrictive policies still apply on top.
+
+`DropTenantIsolation` removes both policies and switches row-level security off again **only if no
+other policy remains on the table**, so a rollback never leaves someone else's policy defined but
+unenforced.
 
 `FORCE` is the line that is easy to miss: without it the table's **owner** bypasses every policy, and
 the owner is usually the role the application connects as. Superusers and `BYPASSRLS` roles bypass

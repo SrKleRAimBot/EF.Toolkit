@@ -11,9 +11,12 @@ namespace EFToolkit.Sql.Security;
 /// <remarks>
 ///     <para>
 ///         On PostgreSQL this enables and <em>forces</em> row-level security on the table (so the
-///         owning role the application usually connects as is not exempt) and creates a policy for all
-///         commands comparing the tenant column with <c>current_setting('&lt;key&gt;', true)</c>, cast
-///         to the column's type. On SQL Server it creates a schema-bound predicate function comparing
+///         owning role the application usually connects as is not exempt) and creates a
+///         <em>restrictive</em> policy for all commands comparing the tenant column with
+///         <c>current_setting('&lt;key&gt;', true)</c>, cast to the column's type, over a permissive
+///         policy (<see cref="AccessPolicyName" />) granting every row. Restrictive, so that no other
+///         permissive policy on the table can widen a session past its tenant. Dropping it switches
+///         row-level security off only if no other policy is left on the table. On SQL Server it creates a schema-bound predicate function comparing
 ///         the column with <c>SESSION_CONTEXT(N'&lt;key&gt;')</c> and a security policy that filters
 ///         reads and blocks inserts and updates into another tenant.
 ///     </para>
@@ -103,6 +106,7 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
             [
                 .. new RowLevelSecurityTable(Table, Schema, force: true).GetCreateSql(dialect),
                 .. PostgreSqlPolicy().GetCreateSql(dialect),
+                .. PostgreSqlAccessPolicy().GetCreateSql(dialect),
             ],
             SqlDialect.SqlServer => SqlServerPolicy().GetCreateSql(dialect),
             _ => throw NotSupported(dialect),
@@ -114,8 +118,9 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
         {
             SqlDialect.PostgreSql =>
             [
+                .. PostgreSqlAccessPolicy().GetDropSql(dialect),
                 .. PostgreSqlPolicy().GetDropSql(dialect),
-                .. new RowLevelSecurityTable(Table, Schema, force: true).GetDropSql(dialect),
+                DisableIfUnpoliced(),
             ],
             SqlDialect.SqlServer => SqlServerPolicy().GetDropSql(dialect),
             _ => throw NotSupported(dialect),
@@ -130,7 +135,45 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
         var tenant = $"CAST(NULLIF(current_setting({SqlSyntax.Literal(SqlDialect.PostgreSql, SessionKey)}, true), '') AS {ColumnStoreType})";
         var condition = $"{SqlSyntax.Quote(SqlDialect.PostgreSql, TenantColumn)} = {tenant}";
 
-        return new RowLevelSecurityPolicy(PolicyName, Table, condition, condition, Schema);
+        // Restrictive: PostgreSQL ORs permissive policies together, so a permissive tenant check
+        // would be bypassed by any other permissive policy on the table — a reporting policy with
+        // USING (true) would read across tenants. Restrictive policies are ANDed onto the result.
+        return new RowLevelSecurityPolicy(
+            PolicyName, Table, condition, condition, Schema, kind: PolicyKind.Restrictive);
+    }
+
+    /// <summary>The name of the permissive policy that grants access the tenant policy then narrows.</summary>
+    public string AccessPolicyName => PolicyName + "_access";
+
+    // A restrictive policy only ever removes rows: with no permissive policy at all, PostgreSQL grants
+    // nothing. This one grants every row, for the restrictive tenant policy to narrow. Any other
+    // permissive policy on the table is subsumed by it — which loses nothing, because permissive
+    // policies only ever add access — while restrictive ones still apply on top.
+    private RowLevelSecurityPolicy PostgreSqlAccessPolicy()
+        => new(AccessPolicyName, Table, "true", "true", Schema);
+
+    // Row-level security is switched off again only if nothing else depends on it. Disabling it
+    // unconditionally would leave any other policy on the table defined but no longer enforced.
+    private string DisableIfUnpoliced()
+    {
+        var target = SqlSyntax.Qualify(SqlDialect.PostgreSql, Table, Schema);
+        var schema = Schema is null
+            ? "current_schema()"
+            : SqlSyntax.Literal(SqlDialect.PostgreSql, Schema);
+
+        return $$"""
+            DO $tenant_isolation$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = {{schema}} AND tablename = {{SqlSyntax.Literal(SqlDialect.PostgreSql, Table)}})
+                THEN
+                    ALTER TABLE {{target}} NO FORCE ROW LEVEL SECURITY;
+                    ALTER TABLE {{target}} DISABLE ROW LEVEL SECURITY;
+                END IF;
+            END
+            $tenant_isolation$
+            """;
     }
 
     private SqlServerSecurityPolicy SqlServerPolicy()

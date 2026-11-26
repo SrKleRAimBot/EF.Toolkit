@@ -7,7 +7,7 @@ public sealed class TenantIsolationPolicyTests
     private static readonly TenantIsolationPolicy Policy = new("Orders", "TenantId", "app.tenant_id", "integer");
 
     [Fact]
-    public void PostgreSql_enables_forces_and_creates_a_fail_closed_policy()
+    public void PostgreSql_enables_forces_and_creates_a_restrictive_policy_over_a_base_grant()
         => Policy.GetCreateSql(SqlDialect.PostgreSql).ShouldBe(
         [
             "ALTER TABLE \"Orders\" ENABLE ROW LEVEL SECURITY",
@@ -15,22 +15,40 @@ public sealed class TenantIsolationPolicyTests
             "DROP POLICY IF EXISTS \"Orders_tenant_isolation\" ON \"Orders\"",
             """
             CREATE POLICY "Orders_tenant_isolation" ON "Orders"
-                AS PERMISSIVE
+                AS RESTRICTIVE
                 FOR ALL
                 TO PUBLIC
                 USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
                 WITH CHECK ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
             """,
+            "DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"",
+            """
+            CREATE POLICY "Orders_tenant_isolation_access" ON "Orders"
+                AS PERMISSIVE
+                FOR ALL
+                TO PUBLIC
+                USING (true)
+                WITH CHECK (true)
+            """,
         ]);
 
     [Fact]
-    public void PostgreSql_drop_removes_the_policy_and_turns_rls_off()
-        => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "uuid", "shop", "iso").GetDropSql(SqlDialect.PostgreSql).ShouldBe(
-        [
-            "DROP POLICY IF EXISTS \"iso\" ON \"shop\".\"Orders\"",
-            "ALTER TABLE \"shop\".\"Orders\" NO FORCE ROW LEVEL SECURITY",
-            "ALTER TABLE \"shop\".\"Orders\" DISABLE ROW LEVEL SECURITY",
-        ]);
+    public void PostgreSql_drop_removes_both_policies_and_turns_rls_off_only_if_no_other_policy_remains()
+    {
+        var drop = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "uuid", "shop", "iso")
+            .GetDropSql(SqlDialect.PostgreSql);
+
+        drop.Count.ShouldBe(3);
+        drop[0].ShouldBe("DROP POLICY IF EXISTS \"iso_access\" ON \"shop\".\"Orders\"");
+        drop[1].ShouldBe("DROP POLICY IF EXISTS \"iso\" ON \"shop\".\"Orders\"");
+        drop[2].ShouldContain("IF NOT EXISTS (");
+        drop[2].ShouldContain("WHERE schemaname = 'shop' AND tablename = 'Orders'");
+        drop[2].ShouldContain("ALTER TABLE \"shop\".\"Orders\" DISABLE ROW LEVEL SECURITY;");
+    }
+
+    [Fact]
+    public void PostgreSql_drop_in_the_default_schema_checks_the_current_one()
+        => Policy.GetDropSql(SqlDialect.PostgreSql)[2].ShouldContain("schemaname = current_schema()");
 
     [Theory]
     [InlineData("tenant_id")]

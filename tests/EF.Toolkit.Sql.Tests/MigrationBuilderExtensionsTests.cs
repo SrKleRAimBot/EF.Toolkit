@@ -135,7 +135,7 @@ public sealed class MigrationBuilderExtensionsTests
     }
 
     [Theory]
-    [InlineData(PostgreSql, 4, 3)]
+    [InlineData(PostgreSql, 6, 3)]
     [InlineData(SqlServer, 3, 2)]
     public void Tenant_isolation(string provider, int createCount, int dropCount)
     {
