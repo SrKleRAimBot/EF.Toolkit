@@ -540,6 +540,35 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     // ---------------------------------------------------------------------------------------
 
     [Fact]
+    public async Task A_concurrency_conflict_leaves_the_delete_as_the_application_made_it_and_a_retry_converts_it_again()
+    {
+        // EF reports a concurrency conflict through its own hook, not SaveChangesFailed.
+        await using var context = _db.Context();
+        var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+
+        await using (var other = _db.Context())
+        {
+            (await other.Comments.SingleAsync(c => c.Id == 2, Ct)).Version = 1;
+            await other.SaveChangesAsync(Ct);
+        }
+
+        context.Comments.Remove(comment);
+        await Should.ThrowAsync<DbUpdateConcurrencyException>(() => context.SaveChangesAsync(Ct));
+
+        var entry = context.Entry(comment);
+        entry.State.ShouldBe(EntityState.Deleted);
+        comment.DeletedAt.ShouldBeNull();
+
+        // The usual resolution: take the database's token, and save again.
+        entry.OriginalValues.SetValues((await entry.GetDatabaseValuesAsync(Ct))!);
+        await context.SaveChangesAsync(Ct);
+
+        entry.State.ShouldBe(EntityState.Detached);
+        await using var fresh = _db.Context();
+        (await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct)).DeletedAt.ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task A_failed_save_leaves_the_delete_as_the_application_made_it()
     {
         await using var context = _db.Context();

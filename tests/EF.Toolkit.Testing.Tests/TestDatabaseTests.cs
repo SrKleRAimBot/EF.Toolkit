@@ -13,6 +13,48 @@ public sealed class TestDatabaseTests
     private static string TempFile() => Path.Combine(Path.GetTempPath(), $"eftoolkit-testing-{Guid.NewGuid():N}.db");
 
     [Fact]
+    public void The_synchronous_factory_does_not_deadlock_an_async_seeder_under_a_single_threaded_context()
+    {
+        // A UI-style context that only runs continuations when pumped — and the creating thread, blocked
+        // in Create(), never pumps. A seeder awaiting without ConfigureAwait(false) used to wait forever.
+        Exception? failure = null;
+        var created = false;
+        var thread = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new NeverPumpedContext());
+            try
+            {
+                using var db = SqliteTestDatabase<ShopContext>.Create(o => o.Seed(async (context, _) =>
+                {
+                    await Task.Yield();
+                    context.Tags.Add(new Tag { Code = "y", Label = "yielded" });
+                }));
+                using var context = db.CreateContext();
+                created = context.Tags.Count() == 1;
+            }
+#pragma warning disable CA1031 // Surfaced on the test thread below.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                failure = ex;
+            }
+        });
+
+        thread.Start();
+        thread.Join(TimeSpan.FromSeconds(30)).ShouldBeTrue("Create() deadlocked on the async seeder.");
+        failure.ShouldBeNull();
+        created.ShouldBeTrue();
+    }
+
+    private sealed class NeverPumpedContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            // Queued for a pump that never comes.
+        }
+    }
+
+    [Fact]
     public async Task An_in_memory_database_is_created_with_its_schema_and_shared_between_contexts()
     {
         await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);

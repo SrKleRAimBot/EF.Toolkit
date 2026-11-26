@@ -56,6 +56,23 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
 
     public override void SaveChangesFailed(DbContextErrorEventData eventData) => Failed();
 
+    // EF reports an optimistic-concurrency conflict here rather than through SaveChangesFailed, so
+    // without these the tracker kept the half-converted update: a caller refreshing the token and
+    // retrying then sent it as a plain update, and the soft-deleted entity stayed tracked.
+    public override InterceptionResult ThrowingConcurrencyException(
+        ConcurrencyExceptionEventData eventData, InterceptionResult result)
+    {
+        Failed();
+        return result;
+    }
+
+    public override ValueTask<InterceptionResult> ThrowingConcurrencyExceptionAsync(
+        ConcurrencyExceptionEventData eventData, InterceptionResult result, CancellationToken cancellationToken = default)
+    {
+        Failed();
+        return ValueTask.FromResult(result);
+    }
+
     public override Task SaveChangesFailedAsync(
         DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
     {

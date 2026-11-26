@@ -58,6 +58,9 @@ public sealed class Comment
     public int PostId { get; set; }
     public string Text { get; set; } = "";
     public DateTime? DeletedAt { get; set; }
+
+    /// <summary>An optimistic-concurrency token, so a soft delete can lose a race.</summary>
+    public int Version { get; set; }
 }
 
 /// <summary>No soft delete, shadow timestamps.</summary>
@@ -98,7 +101,11 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
         });
 
         modelBuilder.Entity<FeaturedPost>();
-        modelBuilder.Entity<Comment>().HasSoftDelete(c => c.DeletedAt);
+        modelBuilder.Entity<Comment>(b =>
+        {
+            b.HasSoftDelete(c => c.DeletedAt);
+            b.Property(c => c.Version).IsConcurrencyToken();
+        });
         modelBuilder.Entity<Note>(b =>
         {
             b.HasTimestamps();

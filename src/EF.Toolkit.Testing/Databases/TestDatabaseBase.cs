@@ -160,9 +160,11 @@ public abstract class TestDatabaseBase<TContext> : IAsyncDisposable, IDisposable
             }
         }
 
-        // Seeders are asynchronous by contract. Blocking here is the price of a synchronous factory,
-        // and safe: nothing in a test host's seeding path needs a synchronization context back.
-        SeedAsync(CancellationToken.None).GetAwaiter().GetResult();
+        // Seeders are asynchronous by contract, and a seeder is user code that may await without
+        // ConfigureAwait(false). Blocking on it directly under a single-threaded synchronization context
+        // (a UI or legacy test runner) would deadlock: its continuation waits for the very thread blocked
+        // here. Run on the thread pool, no context is captured to wait for.
+        Task.Run(() => SeedAsync(CancellationToken.None)).GetAwaiter().GetResult();
     }
 
     private async Task SeedAsync(CancellationToken cancellationToken)
