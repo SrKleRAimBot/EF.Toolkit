@@ -9,6 +9,8 @@ install it alongside whatever EF Core version your app already uses.
 - **Transparent.** `SaveChanges()` gets faster with no call-site changes.
 - **Explicit when you want it.** `BulkInsert` / `BulkUpdate` / `BulkDelete` / `BulkMerge` /
   `BulkSynchronize` for large sets, up to **10x faster and 44x less memory**.
+- **Set-based when there is nothing to load.** `UpdateWhere` / `DeleteWhere` write every row
+  matching a condition in one statement.
 - **Change tracking preserved.** Store-generated keys are propagated and entities end in the state
   stock EF would have left them in.
 - **Correct by construction.** Foreign-key ordering is inherited from EF's own dependency analysis;
@@ -25,6 +27,7 @@ install it alongside whatever EF Core version your app already uses.
 - [Transparent mode](#transparent-mode)
 - [Explicit API](#explicit-api) — [insert](#insert) · [update](#update) · [delete](#delete) ·
   [merge](#merge-upsert) · [synchronize](#synchronize) · [graphs](#writing-a-whole-graph)
+- [Set-based update and delete](#set-based-update-and-delete)
 - [Change tracking](#change-tracking) · [Options](#options) · [Diagnostics](#diagnostics)
 - [Performance](#performance)
 - [How it works](#how-it-works) — [observing a write](#observing-a-write) · [correctness](#correctness)
@@ -261,6 +264,73 @@ which `SaveChanges()` does and this does not.
 
 The whole graph goes in one transaction — a half-written graph would leave dependents pointing at
 principals that were never inserted.
+
+---
+
+## Set-based update and delete
+
+When the rows to change are described by a condition rather than held as objects, nothing needs to
+be loaded at all. `UpdateWhere` and `DeleteWhere` take the condition and the new values as
+arguments of their own, so the call reads like the statement it runs:
+
+```csharp
+// UPDATE orders SET status = 'Expired', total = total * 0.9 WHERE status = 'Pending' AND placed_at < @cutoff
+int expired = await db.Orders.UpdateWhereAsync(
+    o => o.Status == OrderStatus.Pending && o.PlacedAt < cutoff,
+    o => new Order { Status = OrderStatus.Expired, Total = o.Total * 0.9m });
+
+// DELETE FROM orders WHERE status = 'Expired'
+int removed = await db.Orders.DeleteWhereAsync(o => o.Status == OrderStatus.Expired);
+```
+
+The new values are an **object initializer**: each assignment inside the braces names a column and
+its value. That is what gives the call site IntelliSense on both sides — the condition is an
+ordinary predicate over the entity, and inside `new Order { … }` the editor lists exactly the
+members that can be assigned. A value may read the row it replaces (`o.Total * 0.9m`), and captured
+variables are sent as parameters, never pasted into the SQL.
+
+A nested initializer sets columns of a [complex property](https://learn.microsoft.com/ef/core/modeling/complex-types)
+without replacing the rest of it:
+
+```csharp
+await db.Customers.UpdateWhereAsync(
+    c => c.Address.City == "Bombay",
+    c => new Customer { Address = { City = "Mumbai" } });
+```
+
+Where an initializer cannot be written — an entity with `required` members, or with no accessible
+setters — the same methods accept EF's own setter syntax:
+
+```csharp
+await db.Orders.UpdateWhereAsync(
+    o => o.Id == id,
+    s => s.SetProperty(o => o.Status, OrderStatus.Shipped));
+```
+
+Every method has a synchronous overload and an overload on the context —
+`db.UpdateWhereAsync<Order>(…)`, `db.DeleteWhereAsync<Order>(…)` — and on a query, they compose with
+what the query already says:
+
+```csharp
+await db.Orders.Where(o => o.TenantId == tenantId).DeleteWhereAsync(o => o.Archived);
+```
+
+These are EF Core's `ExecuteUpdate` and `ExecuteDelete` underneath, with their semantics:
+
+- They run **immediately**, not at the next `SaveChanges()`, and inside the ambient transaction if
+  there is one.
+- [Global query filters](https://learn.microsoft.com/ef/core/querying/filters) apply to the condition.
+  Use `IgnoreQueryFilters()` first to reach the rows they hide.
+- The **change tracker is not consulted or updated.** An entity the context already tracks keeps the
+  values it was loaded with; reload it, or clear the tracker, if it is read again afterwards.
+- `UseBulkOperations()` is not required, and neither `ISaveChangesInterceptor` nor
+  [`IBulkWriteObserver`](#observing-a-write) sees the statement — so the audit trail does not
+  record it either.
+
+An initializer the translation cannot represent faithfully is refused with an `ArgumentException`
+before anything runs: one that assigns nothing, passes constructor arguments, constructs a derived
+type (filter with `OfType<TDerived>()` instead) or uses a collection initializer. Each of those
+would otherwise drop an assignment silently.
 
 ---
 
