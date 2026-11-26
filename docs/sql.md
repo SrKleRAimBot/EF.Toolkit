@@ -159,7 +159,12 @@ List<MonthTotal> rows = await context.Database.QueryProcedureAsync<MonthTotal>(
 
 Arguments are an object whose properties name them, or an `IReadOnlyDictionary<string, object?>`.
 Every value is bound as a parameter through `ExecuteSqlRawAsync` / `SqlQueryRaw`, so the context's
-transaction, interceptors and logging apply. A value that is already a `DbParameter` is passed through
+transaction, interceptors, logging and execution strategy apply. That includes retries: under a retrying
+strategy (`EnableRetryOnFailure`), a call that fails with a transient error is run again, exactly as EF
+runs any raw SQL again — even if the procedure had already committed its writes before the connection
+dropped. For a procedure that is not safe to repeat, run the call inside
+`CreateExecutionStrategy().ExecuteAsync(...)` with a transaction and a check that it has not already
+happened, or use a non-retrying strategy for that context. A value that is already a `DbParameter` is passed through
 as is — which is how an output parameter comes back:
 
 ```csharp
@@ -274,8 +279,9 @@ equality ignores trailing spaces. There the converted value must either equal th
 `sql_variant`, which compares a typed value by value (`decimal` 12.5 equals `decimal(10,2)` 12.50, but
 never a string with a GUID), or — for a string session value only — read back as its exact text,
 compared as bytes. A typed value never takes the text route, since a `float` 1.00000001 and the `real`
-1 it rounds to both print as `1`. A character tenant column is compared byte for byte, lengths included, and
-only by text: the predicate's parameter takes the database's default collation rather than the
+1 it rounds to both print as `1`. A character tenant column is passed to the predicate as `nvarchar`, so a UTF-8 `varchar` column
+keeps its characters under a Latin-1 database default, and is compared byte for byte with the session
+string, lengths included, and only by text: the predicate's parameter takes the database's default collation rather than the
 column's, so a case-insensitive default would otherwise give `acme` the rows of `ACME` too, and a
 string's `sql_variant` comparison ignores trailing spaces, so `acme ` truncated into an `nvarchar(4)`
 column would have read `acme`'s rows. (It also keeps `nvarchar(max)` columns working, which cannot be

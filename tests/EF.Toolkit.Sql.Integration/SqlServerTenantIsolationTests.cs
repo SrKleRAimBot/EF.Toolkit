@@ -196,4 +196,34 @@ public sealed class SqlServerTenantIsolationTests(SqlServerFixture fixture)
             await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Shelves", Token);
         }
     }
+
+    [Fact]
+    public async Task A_UTF8_tenant_column_in_a_Latin1_database_keeps_its_characters()
+    {
+        // A varchar predicate parameter took the database's Latin-1 code page: 東京 arrived as ?? and the
+        // tenant could no longer read its own rows.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        var policy = new TenantIsolationPolicy("Offices", "Tenant", "TenantCity", "varchar(20)", policyName: "offices_iso");
+
+        await using var admin = fixture.CreateContext();
+        (await admin.Database.SqlQueryRaw<string>("SELECT CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS nvarchar(128)) AS Value")
+            .SingleAsync(Token)).ShouldNotContain("UTF8");
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE Offices (Id int PRIMARY KEY, Tenant varchar(20) COLLATE Latin1_General_100_CI_AS_SC_UTF8 NOT NULL); "
+                + "INSERT INTO Offices VALUES (1, N'東京'), (2, N'大阪');",
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(policy);
+
+            (await CountAsync("Offices", "TenantCity", "東京")).ShouldBe(1);
+            (await CountAsync("Offices", "TenantCity", "大阪")).ShouldBe(1);
+            (await CountAsync("Offices", "TenantCity", "??")).ShouldBe(0);
+        }
+        finally
+        {
+            await admin.Database.DropDatabaseObjectsAsync(policy);
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Offices", Token);
+        }
+    }
 }

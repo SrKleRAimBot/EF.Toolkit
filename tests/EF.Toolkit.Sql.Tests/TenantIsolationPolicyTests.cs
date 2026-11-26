@@ -187,17 +187,25 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("sysname")]
     [InlineData("national character varying (20)")]
     public void SqlServer_compares_a_character_tenant_byte_for_byte_whatever_the_database_collation(string storeType)
-        => new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1]
-            .ShouldContain($"AND CAST(@tenant AS varbinary(max)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS {storeType}) AS varbinary(max)) "
-                + $"AND DATALENGTH(@tenant) = DATALENGTH(CAST(SESSION_CONTEXT(N'TenantId') AS {storeType}))");
+    {
+        var sql = new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1];
+
+        sql.ShouldContain("(@tenant nvarchar(4000))");
+        sql.ShouldContain("AND CAST(@tenant AS varbinary(max)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(max)) "
+            + "AND DATALENGTH(@tenant) = DATALENGTH(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)))");
+    }
 
     [Theory]
     [InlineData("nvarchar(max)")]
     [InlineData("varchar(10)")]
     public void SqlServer_never_converts_a_character_tenant_to_sql_variant(string storeType)
+    {
         // nvarchar(max) cannot be converted to sql_variant at all, and for a string the variant comparison pads.
-        => new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1]
-            .ShouldNotContain("AS sql_variant)");
+        var sql = new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1];
+
+        sql.ShouldNotContain("AS sql_variant)");
+        sql.ShouldContain(storeType == "nvarchar(max)" ? "(@tenant nvarchar(max))" : "(@tenant nvarchar(4000))");
+    }
 
     [Theory]
     [InlineData("int")]

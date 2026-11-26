@@ -245,7 +245,7 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
             PolicyName,
             Table,
             PolicyName + "_predicate",
-            [new SqlServerPredicateParameter("tenant", ColumnStoreType, TenantColumn)],
+            [new SqlServerPredicateParameter("tenant", SqlServerParameterType(), TenantColumn)],
             SqlServerCondition(),
             Schema,
             block: SqlServerBlockOperations.AfterInsert | SqlServerBlockOperations.AfterUpdate);
@@ -285,14 +285,26 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
             + $"AND CAST({asText} AS varbinary(8000)) = CAST({valueText} AS varbinary(8000)) "
             + $"AND DATALENGTH({asText}) = DATALENGTH({valueText}))";
 
+        // A character tenant arrives as nvarchar (see SqlServerParameterType), so it holds the row's own
+        // characters, and its UTF-16 bytes are compared with the session string's directly. No cast to the
+        // column's type is needed: comparing with the row's text as it is cannot be fooled by truncation.
         if (IsSqlServerCharacter(ColumnStoreType))
         {
-            return $"@tenant = {tenant} AND CAST(@tenant AS varbinary(max)) = CAST({tenant} AS varbinary(max)) "
-                + $"AND DATALENGTH(@tenant) = DATALENGTH({tenant}) AND {text}";
+            return $"@tenant = {valueText} AND SQL_VARIANT_PROPERTY({value}, 'BaseType') IN ('nvarchar', 'varchar', 'nchar', 'char') "
+                + $"AND CAST(@tenant AS varbinary(max)) = CAST({valueText} AS varbinary(max)) "
+                + $"AND DATALENGTH(@tenant) = DATALENGTH({valueText})";
         }
 
         return $"@tenant = {tenant} AND (CAST({tenant} AS sql_variant) = {value} OR {text})";
     }
+
+    // A varchar parameter would take the database's default collation, and with it its code page: a UTF-8
+    // column's 東京 passed into it under a Latin-1 default becomes ?? before anything is compared. nvarchar
+    // holds every character any varchar column can, so a character tenant is passed in as that.
+    private string SqlServerParameterType()
+        => !IsSqlServerCharacter(ColumnStoreType)
+            ? ColumnStoreType
+            : MaxModifier().IsMatch(ColumnStoreType) ? "nvarchar(max)" : "nvarchar(4000)";
 
     private static bool IsSqlServerCharacter(string storeType)
     {
