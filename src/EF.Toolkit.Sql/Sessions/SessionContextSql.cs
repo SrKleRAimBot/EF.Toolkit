@@ -156,6 +156,12 @@ internal static partial class SessionContextSql
             bool b => b ? "true" : "false",
             DateTime d => d.ToString("O", CultureInfo.InvariantCulture),
             DateTimeOffset d => d.ToString("O", CultureInfo.InvariantCulture),
+
+            // Their invariant defaults are 03/04/2026 — April 3 under DateStyle DMY — and 12:30, without
+            // the seconds: either would name another tenant's key. ISO 8601 reads the same under every
+            // DateStyle.
+            DateOnly d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            TimeOnly t => t.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
             IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
             _ => value.ToString() ?? "",
         };

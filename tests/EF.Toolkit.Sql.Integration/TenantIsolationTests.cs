@@ -387,6 +387,45 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task Date_and_time_tenants_are_sent_as_ISO_8601_whatever_the_DateStyle()
+    {
+        // DateOnly went out as 03/04/2026, which DateStyle DMY reads as April 3, and TimeOnly as 12:30,
+        // without its seconds: each session reached the other row.
+        var days = new TenantIsolationPolicy("Days", "Tenant", "app.tenant_day", "date", policyName: "days_iso");
+        var shifts = new TenantIsolationPolicy("Shifts", "Tenant", "app.tenant_shift", "time", policyName: "shifts_iso");
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Days\" (\"Id\" int PRIMARY KEY, \"Tenant\" date NOT NULL); "
+                + "INSERT INTO \"Days\" VALUES (1, '2026-03-04'), (2, '2026-04-03'); "
+                + "CREATE TABLE \"Shifts\" (\"Id\" int PRIMARY KEY, \"Tenant\" time NOT NULL); "
+                + "INSERT INTO \"Shifts\" VALUES (1, '12:30:45'), (2, '12:30:00'); "
+                + $"ALTER TABLE \"Days\" OWNER TO {PostgreSqlFixture.AppUser}; ALTER TABLE \"Shifts\" OWNER TO {PostgreSqlFixture.AppUser};",
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(days, shifts);
+
+            async Task<List<int>> IdsAs(string table, string key, object tenant)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set(key, () => tenant))
+                    .Options);
+                await context.Database.OpenConnectionAsync(Token);
+                await context.Database.ExecuteSqlRawAsync("SET DateStyle = 'ISO, DMY'", Token);
+                var sql = "SELECT \"Id\" AS \"Value\" FROM \"" + table + "\"";
+                return await context.Database.SqlQueryRaw<int>(sql).ToListAsync(Token);
+            }
+
+            (await IdsAs("Days", "app.tenant_day", new DateOnly(2026, 3, 4))).ShouldBe([1]);
+            (await IdsAs("Shifts", "app.tenant_shift", new TimeOnly(12, 30, 45))).ShouldBe([1]);
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Days\"; DROP TABLE IF EXISTS \"Shifts\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

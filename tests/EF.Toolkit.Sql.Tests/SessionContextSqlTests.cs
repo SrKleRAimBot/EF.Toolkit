@@ -130,6 +130,10 @@ public sealed class SessionContextSqlTests
                 .ShouldBe("2026-03-04T05:06:07.0000000Z");
             SessionContextSql.ConvertValue(SqlDialect.PostgreSql, new DateTimeOffset(2026, 3, 4, 5, 6, 7, TimeSpan.FromHours(2)))
                 .ShouldBe("2026-03-04T05:06:07.0000000+02:00");
+
+            // Not 03/04/2026, which DateStyle DMY reads as April 3, nor 12:30 without its seconds.
+            SessionContextSql.ConvertValue(SqlDialect.PostgreSql, new DateOnly(2026, 3, 4)).ShouldBe("2026-03-04");
+            SessionContextSql.ConvertValue(SqlDialect.PostgreSql, new TimeOnly(12, 30, 45)).ShouldBe("12:30:45.0000000");
         }
         finally
         {
