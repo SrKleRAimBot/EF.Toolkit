@@ -227,7 +227,7 @@ public sealed class ResetSqlGeneratorTests
         [
             "DELETE FROM \"main\".\"Lines\";",
             "DELETE FROM \"main\".\"O'Brien\";",
-            "DELETE FROM \"main\".\"sqlite_sequence\" WHERE \"name\" IN ('Lines', 'O''Brien');",
+            "DELETE FROM \"main\".\"sqlite_sequence\" WHERE \"name\" COLLATE NOCASE IN ('Lines', 'O''Brien');",
         ]);
         script.Epilogue.ShouldBe(["PRAGMA foreign_keys = ON;"]);
     }

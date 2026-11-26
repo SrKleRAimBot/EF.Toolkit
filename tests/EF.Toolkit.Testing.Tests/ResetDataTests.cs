@@ -337,6 +337,37 @@ public sealed class ResetDataTests
         (await context.Customers.CountAsync(Ct)).ShouldBeGreaterThan(0);
     }
 
+    private sealed class Widget
+    {
+        public int Id { get; set; }
+    }
+
+    private sealed class WidgetContext(DbContextOptions<WidgetContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder) => modelBuilder.Entity<Widget>().ToTable("widgets");
+    }
+
+    [Fact]
+    public async Task A_counter_restarts_when_the_model_names_its_table_in_another_case()
+    {
+        // SQLite found Widgets under the model's widgets for the DELETE, but the sequence row was compared
+        // exactly, so the counter kept going and the next id was 2.
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(Ct);
+        await using (var create = connection.CreateCommand())
+        {
+            create.CommandText = "CREATE TABLE \"Widgets\" (\"Id\" INTEGER PRIMARY KEY AUTOINCREMENT); INSERT INTO \"Widgets\" DEFAULT VALUES;";
+            await create.ExecuteNonQueryAsync(Ct);
+        }
+
+        await using var context = new WidgetContext(new DbContextOptionsBuilder<WidgetContext>().UseSqlite(connection).Options);
+        await context.Database.ResetDataAsync(cancellationToken: Ct);
+
+        context.Add(new Widget());
+        await context.SaveChangesAsync(Ct);
+        (await context.Set<Widget>().SingleAsync(Ct)).Id.ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_temporary_table_of_the_caller_s_keeps_its_rows_whatever_it_is_called()
     {

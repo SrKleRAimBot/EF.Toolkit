@@ -167,7 +167,9 @@ internal static class DatabaseForeignKeys
     ///         Only table privileges count. A global <c>PROCESS</c> or <c>RELOAD</c> makes no table
     ///         visible. A global table privilege counts only without <c>partial_revokes</c>: with it, a
     ///         global grant can be revoked for this one database, and that restriction is not visible
-    ///         here. A database grant may use wildcards, matched by <c>LIKE</c> as MySQL matches them.
+    ///         here. A database grant may use wildcards, matched by <c>LIKE</c> as MySQL matches them —
+    ///         except under <c>partial_revokes</c>, where MySQL takes <c>_</c> and <c>%</c> literally and the
+    ///         name must match exactly (under the catalog's collation, which follows <c>lower_case_table_names</c>).
     ///         Privileges held through a role are not listed in these views either, so such a login is
     ///         refused too, which is the safe way to be wrong.
     ///     </para>
@@ -180,7 +182,7 @@ internal static class DatabaseForeignKeys
             + "'ALTER', 'CREATE VIEW', 'SHOW VIEW', 'TRIGGER')";
         var escape = noBackslashEscapes ? @"'\'" : @"'\\'";
         return "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES AS d "
-            + $"WHERE d.GRANTEE = {grantee} AND d.PRIVILEGE_TYPE IN {tablePrivileges} AND DATABASE() LIKE d.TABLE_SCHEMA ESCAPE {escape}) "
+            + $"WHERE d.GRANTEE = {grantee} AND d.PRIVILEGE_TYPE IN {tablePrivileges} AND (CASE WHEN @@GLOBAL.partial_revokes = 1 THEN d.TABLE_SCHEMA = DATABASE() ELSE DATABASE() LIKE d.TABLE_SCHEMA ESCAPE {escape} END)) "
             + "OR (@@GLOBAL.partial_revokes = 0 AND EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES AS u "
             + $"WHERE u.GRANTEE = {grantee} AND u.PRIVILEGE_TYPE IN {tablePrivileges})) THEN 1 ELSE 0 END;";
     }

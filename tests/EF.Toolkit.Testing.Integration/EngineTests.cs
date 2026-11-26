@@ -1133,6 +1133,48 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
     }
 
     [Fact]
+    public async Task Under_partial_revokes_a_database_grant_s_underscore_is_not_a_wildcard()
+    {
+        // With partial_revokes on, MySQL reads `eftestin_` as that literal name: the grant covers nothing
+        // here, though LIKE matched it to this database and let the hidden cascade child through.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        var customer = await context.Customers.Select(c => c.Id).FirstAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE HiddenChild (Id int PRIMARY KEY, CustomerId int NOT NULL, FOREIGN KEY (CustomerId) REFERENCES Customers (Id) ON DELETE CASCADE)", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO HiddenChild VALUES (1, {0})", [customer], Ct);
+        var tables = await context.Database.SqlQueryRaw<string>(
+                "SELECT TABLE_NAME AS Value FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME <> 'HiddenChild'")
+            .ToListAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("SET GLOBAL partial_revokes = ON", Ct);
+        try
+        {
+            string[] grants =
+            [
+                "GRANT SELECT ON `" + DatabaseName[..^1] + "_`.*",
+                .. tables.Select(t => "GRANT SELECT, INSERT, UPDATE, DELETE, ALTER ON `{db}`.`" + t + "`"),
+            ];
+            await using var limited = await LimitedUserAsync(context, "literal_grant", grants);
+
+            (await ScalarAsync(limited, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_NAME = 'HiddenChild'")).ShouldBe(0);
+            (await Should.ThrowAsync<InvalidOperationException>(() => limited.Database.ResetDataAsync(
+                    o => o.ExcludeEntity<Category>().ExcludeEntity<Team>().ExcludeEntity<Player>(), Ct)))
+                .Message.ShouldContain("holds no privilege on the whole database");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM HiddenChild")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'literal_grant'@'%'", Ct);
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS HiddenChild", Ct);
+            await context.Database.ExecuteSqlRawAsync("SET GLOBAL partial_revokes = OFF", Ct);
+        }
+    }
+
+    [Fact]
     public async Task A_view_under_a_mapped_table_s_name_is_refused_and_its_base_table_keeps_its_rows()
     {
         Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");

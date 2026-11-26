@@ -366,7 +366,9 @@ internal static class ResetSqlGenerator
         if (state.RestartIdentity && state.SqliteHasSequenceTable)
         {
             var names = string.Join(", ", plan.Tables.Select(t => SqlLiteral(t.Name)));
-            body.Add($"DELETE FROM \"main\".\"sqlite_sequence\" WHERE \"name\" IN ({names});");
+            // NOCASE, as SQLite matches identifiers: the DELETE above found Widgets under the model's
+            // widgets, and an exact comparison here would leave its counter running.
+            body.Add($"DELETE FROM \"main\".\"sqlite_sequence\" WHERE \"name\" COLLATE NOCASE IN ({names});");
         }
 
         if (state.InTransaction)
