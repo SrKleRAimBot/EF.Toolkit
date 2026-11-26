@@ -64,6 +64,12 @@ public sealed class Comment
 
     /// <summary>A complex property: its members are columns of the comment's own row.</summary>
     public CommentMeta Meta { get; set; } = new();
+
+    /// <summary>An optional complex property.</summary>
+    public CommentMeta? Extra { get; set; }
+
+    /// <summary>A complex collection, stored as JSON in the comment's row.</summary>
+    public List<CommentMeta> Reactions { get; set; } = [];
 }
 
 public sealed class CommentMeta
@@ -118,6 +124,8 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
             b.HasSoftDelete(c => c.DeletedAt);
             b.Property(c => c.Version).IsConcurrencyToken();
             b.ComplexProperty(c => c.Meta);
+            b.ComplexProperty(c => c.Extra);
+            b.ComplexCollection(c => c.Reactions, r => r.ToJson());
         });
         modelBuilder.Entity<Note>(b =>
         {
@@ -241,5 +249,7 @@ public sealed class PooledCommentsContext(DbContextOptions<PooledCommentsContext
             b.HasSoftDelete(c => c.DeletedAt);
             b.Property(c => c.Version).IsConcurrencyToken();
             b.ComplexProperty(c => c.Meta);
+            b.ComplexProperty(c => c.Extra);
+            b.ComplexCollection(c => c.Reactions, r => r.ToJson());
         });
 }

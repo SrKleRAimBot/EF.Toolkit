@@ -157,12 +157,25 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
             // which runs after this, would find them on an entry that is now Modified. A real delete
             // discards them, so they are accepted as the baseline instead — all but concurrency tokens,
             // whose original value is what the UPDATE's WHERE clause has to check.
-            entry.State = EntityState.Unchanged;
-            AcceptAsBaseline(entry.Properties);
-            foreach (var complex in entry.ComplexProperties)
+            try
             {
-                AcceptAsBaseline(complex);
+                entry.State = EntityState.Unchanged;
             }
+            catch (InvalidOperationException ex) when (entry.ComplexCollections.Any())
+            {
+                // EF cannot take a deleted entry back to Unchanged while a complex collection on it has
+                // changed since it was loaded, and offers no way to put the collection's original value
+                // back. Said plainly, rather than as EF's message about an element ordinal.
+                throw new InvalidOperationException(
+                    $"Cannot soft-delete this '{entry.Metadata.DisplayName()}': a complex collection on it "
+                    + "("
+                    + string.Join(", ", entry.ComplexCollections.Select(c => c.Metadata.Name))
+                    + ") was changed after it was loaded, and EF Core cannot discard that change when turning "
+                    + "the delete into an update. Undo the collection change, or save it, before Remove().",
+                    ex);
+            }
+
+            Baseline.Accept(entry);
 
             property.CurrentValue = ConventionMetadata.DeletedValue(mapping, now);
             property.IsModified = true;
@@ -191,38 +204,6 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
         }
 
         CascadeRepair.RestoreNulledForeignKeys(context, state.Converted.Select(c => c.Entry).ToList());
-    }
-
-    private static void AcceptAsBaseline(IEnumerable<PropertyEntry> properties)
-    {
-        foreach (var property in properties)
-        {
-            if (!property.Metadata.IsConcurrencyToken
-                && !property.Metadata.IsPrimaryKey()
-                && !Equals(property.CurrentValue, property.OriginalValue))
-            {
-                property.OriginalValue = property.CurrentValue;
-            }
-
-            property.IsModified = false;
-        }
-    }
-
-    // A complex property's members are columns of the same row, so pre-Remove() edits to them are
-    // discarded the same way — at every level of nesting. An absent optional complex value has no
-    // members to read.
-    private static void AcceptAsBaseline(ComplexPropertyEntry complex)
-    {
-        if (complex.CurrentValue is null)
-        {
-            return;
-        }
-
-        AcceptAsBaseline(complex.Properties);
-        foreach (var nested in complex.ComplexProperties)
-        {
-            AcceptAsBaseline(nested);
-        }
     }
 
     // Remove() cascades to loaded required dependents, but only the principal carries the HardDelete()

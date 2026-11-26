@@ -611,6 +611,91 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Clearing_an_optional_complex_value_before_Remove_is_discarded()
+    {
+        await using (var seed = _db.Context())
+        {
+            (await seed.Comments.SingleAsync(c => c.Id == 2, Ct)).Extra = new CommentMeta { Mood = "extra" };
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            comment.Extra = null;
+            context.Comments.Remove(comment);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct);
+        stored.DeletedAt.ShouldNotBeNull();
+        stored.Extra.ShouldNotBeNull().Mood.ShouldBe("extra");
+    }
+
+    [Fact]
+    public async Task An_element_added_to_an_empty_complex_collection_before_Remove_is_discarded()
+    {
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            comment.Reactions.Add(new CommentMeta { Mood = "added before the remove" });
+            context.Comments.Remove(comment);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct);
+        stored.DeletedAt.ShouldNotBeNull();
+        stored.Reactions.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_complex_collection_changed_before_Remove_is_refused_plainly_and_nothing_is_written()
+    {
+        // EF Core cannot take the deleted entry back to Unchanged once a collection that already had
+        // elements has changed, and has no way to restore it. The save fails before anything is sent —
+        // with a message that says why.
+        await using (var seed = _db.Context())
+        {
+            (await seed.Comments.SingleAsync(c => c.Id == 2, Ct)).Reactions.Add(new CommentMeta { Mood = "like" });
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            comment.Reactions.Add(new CommentMeta { Mood = "added before the remove" });
+            context.Comments.Remove(comment);
+
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.SaveChangesAsync(Ct)))
+                .Message.ShouldContain("a complex collection on it (Reactions) was changed after it was loaded");
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Comments.SingleAsync(c => c.Id == 2, Ct);
+        stored.DeletedAt.ShouldBeNull();
+        stored.Reactions.Select(r => r.Mood).ShouldBe(["like"]);
+    }
+
+    [Fact]
+    public async Task Edits_to_a_table_split_owned_entity_before_Remove_are_discarded()
+    {
+        await using (var context = _db.Context())
+        {
+            var post = await context.Posts.SingleAsync(p => p.Id == 2, Ct);
+            post.Seo.Slug = "edited before the remove";
+            context.Posts.Remove(post);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Posts.IncludeDeleted().SingleAsync(p => p.Id == 2, Ct);
+        stored.IsDeleted.ShouldBeTrue();
+        stored.Seo.Slug.ShouldBe("two-slug");
+    }
+
+    [Fact]
     public async Task Edits_to_a_complex_property_before_Remove_are_discarded_like_any_other()
     {
         await using (var context = _db.Context())

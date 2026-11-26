@@ -76,7 +76,14 @@ db.Entry(post).State;                            // Detached, as after a real de
 ```
 
 Only the soft-delete column — and the updated-at timestamp, if the type has one — is written. Edits
-made to the entity before it was removed are discarded, exactly as a real delete would discard them.
+made to the entity before it was removed are discarded, exactly as a real delete would discard them:
+to its own columns, its complex properties (including one set to `null`), and owned entities kept in
+its row.
+
+One edit cannot be discarded: an element added to, or removed from, a **complex collection** that
+already had elements. EF Core cannot take the deleted entry back to unchanged in that state and has no
+way to restore the collection, so the save is refused with a message naming the collection, before
+anything is written. Undo the collection change, or save it first.
 
 The property can be a `bool` (`true` means deleted) or a nullable `DateTime` / `DateTimeOffset` (a
 value means deleted, and records when). A `DateTime` is always written in UTC.

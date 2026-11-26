@@ -37,7 +37,10 @@ internal static class OwnedEntries
                 var entry = owner.Context.Entry(value);
                 if (entry.State == EntityState.Deleted)
                 {
+                    // Revived along with its owner, and with its owner's rule: edits made before the
+                    // Remove() are discarded, not written to the row the soft delete keeps.
                     entry.State = EntityState.Unchanged;
+                    Baseline.Accept(entry);
                 }
 
                 Keep(entry);
