@@ -469,6 +469,28 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_hard_delete_saved_without_accepting_survives_a_rolled_back_retry()
+    {
+        // The EF retry pattern: SaveChanges(false) inside a transaction, roll back, save again. The
+        // first save cleared the mark, so the retry soft-deleted the row it was asked to purge.
+        await using var context = _db.Context();
+        var post = await context.Posts.SingleAsync(p => p.Id == 2, Ct);
+        context.HardDelete(post);
+
+        await using (var transaction = await context.Database.BeginTransactionAsync(Ct))
+        {
+            await context.SaveChangesAsync(acceptAllChangesOnSuccess: false, Ct);
+            await transaction.RollbackAsync(Ct);
+        }
+
+        context.Entry(post).State.ShouldBe(EntityState.Deleted);
+        await context.SaveChangesAsync(Ct);
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.IncludeDeleted().AnyAsync(p => p.Id == 2, Ct)).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task HardDelete_works_on_a_context_without_the_conventions()
     {
         await using (var context = _db.Context(conventions: false))

@@ -43,14 +43,14 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
 
     public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
     {
-        Completed();
+        Completed(eventData.Context);
         return result;
     }
 
     public override ValueTask<int> SavedChangesAsync(
         SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
     {
-        Completed();
+        Completed(eventData.Context);
         return ValueTask.FromResult(result);
     }
 
@@ -226,7 +226,7 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
         }
     }
 
-    private void Completed()
+    private void Completed(DbContext? context)
     {
         foreach (var (entry, _, _) in state.Converted)
         {
@@ -241,9 +241,11 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
 
         state.Converted.Clear();
 
-        // A hard-delete mark is for the next save only; once that save succeeded the mark is spent,
-        // and keeping it would hard-delete the same instance if it were ever attached and removed again.
-        state.ClearHardDeletes();
+        // A hard-delete mark is spent once its delete has been accepted — keeping it would hard-delete
+        // the same instance if it were ever attached and removed again. An entity still Deleted after a
+        // successful save, though, is one SaveChanges(acceptAllChangesOnSuccess: false) left pending: the
+        // caller may roll back and save again, and that retry must still delete it for real.
+        state.ClearHardDeletes(entity => context?.Entry(entity).State == EntityState.Deleted);
     }
 
     private void Failed()
