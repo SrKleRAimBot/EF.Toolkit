@@ -33,6 +33,10 @@ public sealed class TestData
     private static readonly DateTime BaseDate = new(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     private static readonly ConditionalWeakTable<IDbContextOptions, TestData> ByOptions = new();
 
+    // By the context itself too: a context whose OnConfiguring adds an option ends up with options of its
+    // own, which the database's registration never saw.
+    private static readonly ConditionalWeakTable<DbContext, TestData> ByContext = new();
+
     private readonly Lock _lock = new();
     private readonly Random _random;
     private long _counter;
@@ -158,7 +162,12 @@ public sealed class TestData
 
     /// <summary>The builder for <paramref name="context" />: its test database's, or <see cref="Shared" />.</summary>
     internal static TestData For(DbContext context)
-        => ByOptions.TryGetValue(context.GetService<IDbContextOptions>(), out var data) ? data : Shared;
+        => ByContext.TryGetValue(context, out var data) || ByOptions.TryGetValue(context.GetService<IDbContextOptions>(), out data)
+            ? data
+            : Shared;
+
+    /// <summary>Makes <paramref name="data" /> the builder for <paramref name="context" />, whatever its options became.</summary>
+    internal static void Associate(DbContext context, TestData data) => ByContext.AddOrUpdate(context, data);
 
     /// <summary>Makes <paramref name="data" /> the builder for every context created with <paramref name="options" />.</summary>
     internal static void Register(IDbContextOptions options, TestData data) => ByOptions.AddOrUpdate(options, data);

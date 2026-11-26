@@ -130,7 +130,7 @@ inventing one would be worse than not. Only the parts around it are rendered per
 
 | Engine | Create | Drop |
 | --- | --- | --- |
-| PostgreSQL | `CREATE OR REPLACE PROCEDURE p(IN a int, OUT b int) LANGUAGE plpgsql AS $$ … $$` | `DROP PROCEDURE IF EXISTS p` |
+| PostgreSQL | `CREATE OR REPLACE PROCEDURE p(IN a int, OUT b int) LANGUAGE plpgsql AS $$ … $$` | `DROP PROCEDURE IF EXISTS p(IN int, OUT int)` from a definition; `DROP PROCEDURE IF EXISTS p` from a name |
 | SQL Server | `CREATE OR ALTER PROCEDURE p @a int, @b int OUTPUT AS …` | `DROP PROCEDURE IF EXISTS p` |
 | MySQL | `DROP PROCEDURE IF EXISTS p` then `CREATE PROCEDURE p(IN a int, OUT b int) …` | `DROP PROCEDURE IF EXISTS p` |
 | SQLite | throws | throws |
@@ -529,10 +529,15 @@ per request until EF refused to build more.
 - **Routine and view bodies are not translated.** The SQL inside a view, procedure, function or policy
   expression is the author's, verbatim. A migration replayed against two engines needs a body valid on
   both — or a definition per engine.
-- **Procedures and functions are dropped by name.** No argument list is rendered, since that is the
-  only form all three engines share. On PostgreSQL an overloaded routine makes the drop ambiguous, and
-  `CREATE OR REPLACE` with changed parameter types creates an overload beside the old routine rather
-  than replacing it — drop the old signature first.
+- **PostgreSQL routines are dropped by signature from a definition, by name from a name.**
+  `DropDatabaseObjectsAsync(definition)` and `migrationBuilder.DropDatabaseObject(definition)` render the
+  definition's argument list (`DROP FUNCTION IF EXISTS lookup(integer)`), so only that overload goes.
+  `DropFunction("lookup")` and `DropStoredProcedure("p")` take a name alone, which is the only form all
+  three engines share: on PostgreSQL it drops the routine only while it is not overloaded — and if just
+  `lookup(text)` is left, it drops that one. For an overloaded routine, roll back with the definition:
+  `migrationBuilder.DropDatabaseObject(Schema.LookupByNumber)`. `CREATE OR REPLACE` with changed
+  parameter types creates an overload beside the old routine rather than replacing it — drop the old
+  signature first.
 - **PostgreSQL views cannot change their columns in place.** `CREATE OR REPLACE VIEW` may add columns at
   the end but not remove, rename or retype them; PostgreSQL refuses, and the view must be dropped first.
 - **Materialized views lose their indexes when recreated.** See [Materialized views](#materialized-views).

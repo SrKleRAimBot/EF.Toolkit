@@ -339,6 +339,23 @@ public sealed class TestDataTests
         first.BuildMany<Customer>(2).Select(Snapshot).ShouldBe(second.BuildMany<Customer>(2).Select(Snapshot));
     }
 
+    private sealed class DetailedShopContext(DbContextOptions<ShopContext> options) : ShopContext(options)
+    {
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) => optionsBuilder.EnableDetailedErrors();
+    }
+
+    [Fact]
+    public async Task A_context_that_adds_an_option_in_OnConfiguring_keeps_the_database_builder()
+    {
+        // OnConfiguring gives the context options of its own, which the database's registration never saw:
+        // it fell back to the process-wide builder, and two databases with one seed built different values.
+        await using var one = await SqliteTestDatabase<ShopContext>.CreateAsync(
+            o => o.WithTestDataSeed(5).UseContextFactory(options => new DetailedShopContext(options)), Ct);
+        await using var context = one.CreateContext();
+
+        Snapshot(context.Build<Customer>()).ShouldBe(Snapshot(new TestData(5).Build<Customer>(context)));
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {

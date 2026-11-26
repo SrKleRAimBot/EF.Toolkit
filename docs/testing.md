@@ -220,7 +220,9 @@ so it can never take the place of one of yours.
 Whatever is suspended is restored even when a statement fails, and every restore is attempted even if
 one of them fails — those settings belong to the connection or the table, and a pooled connection
 handed back with foreign-key checks off would disable them for whichever test opened it next. A
-setting that was already off is left off. If a restore fails too, the reset's own error and the
+setting that was already off is left off — with one exception: on SQL Server a table on a foreign-key
+cycle has `WITH CHECK CHECK CONSTRAINT ALL` run after its delete, which re-enables every constraint on
+it, including a check or foreign key that was disabled on purpose (see the limitations below). If a restore fails too, the reset's own error and the
 restore's are raised together in an `AggregateException`, the original first.
 
 The SQL Server reseed reads the table's own seed and increment and whether it has ever generated a

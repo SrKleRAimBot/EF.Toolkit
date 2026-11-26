@@ -53,7 +53,9 @@ public abstract class TestDatabaseBase<TContext> : IAsyncDisposable, IDisposable
     public TContext CreateContext()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return _factory(Options);
+        var context = _factory(Options);
+        TestData.Associate(context, Data);
+        return context;
     }
 
     /// <summary>Starts recording the SQL of every context this database creates, on the current flow.</summary>
