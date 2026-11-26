@@ -272,7 +272,8 @@ Values are compared, not their text, so `12.5` matches a `numeric(10,2)` tenant 
 the ISO 8601 timestamp `UseSessionContext` writes for a `DateTime` matches the `timestamp(0)` PostgreSQL
 prints with a space; `12:30:00.4` against that column matches nothing. A type with no modifier
 (`integer`, `uuid`, `text`) loses nothing on the cast and gets no second comparison. A bare `character`
-or `bit` is the exception: without a length it means length 1, so it is compared like `character(1)`.
+or `bit` is the exception: without a length it means length 1, so it is compared like `character(1)`;
+likewise `name`, which keeps only its first 63 bytes.
 
 On SQL Server a string holding a GUID followed by anything converts to that GUID, and its string
 equality ignores trailing spaces. There the converted value must either equal the session value as a
@@ -454,7 +455,10 @@ Objects are created in the order given and dropped in reverse, so list dependenc
 statement is rendered before the first one runs, so an object the engine cannot have refuses the whole
 call without leaving half of it applied. The statements then run as **one transaction** — or, inside
 yours, under a savepoint — so a statement the database rejects rolls back the ones before it, and your
-transaction is left as it was and still usable. That
+transaction is left as it was and still usable. A transaction that cannot take a savepoint — an ambient
+`TransactionScope`, or SQL Server with `MultipleActiveResultSets`, where EF turns savepoints off — gets
+the statements as they are: if one fails, the ones before it are part of your transaction, which may
+still be committable, so roll the whole transaction back rather than commit it. That
 matters most when replacing a definition, which is a drop followed by a create: re-applying tenant
 isolation never shows another session a moment with the tenant policy gone and the grant still in
 place. MySQL commits implicitly before every DDL statement, so there the statements run one by one,

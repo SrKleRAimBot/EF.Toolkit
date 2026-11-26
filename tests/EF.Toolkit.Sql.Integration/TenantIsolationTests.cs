@@ -426,6 +426,38 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_name_tenant_keeps_its_63_byte_limit_from_merging_two_keys()
+    {
+        // name keeps the first 63 bytes, so a 64-byte session value matched the tenant that is its prefix.
+        var roles = new TenantIsolationPolicy("RoleRows", "Tenant", "app.tenant_role", "name", policyName: "roles_iso");
+        var prefix = new string('r', 63);
+        await using var admin = fixture.CreateAdminContext();
+        var create = "CREATE TABLE \"RoleRows\" (\"Id\" int PRIMARY KEY, \"Tenant\" name NOT NULL); "
+            + "INSERT INTO \"RoleRows\" VALUES (1, '" + prefix + "'); "
+            + "ALTER TABLE \"RoleRows\" OWNER TO " + PostgreSqlFixture.AppUser + ";";
+        await admin.Database.ExecuteSqlRawAsync(create, Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(roles);
+
+            async Task<List<int>> IdsAs(string tenant)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set("app.tenant_role", () => tenant))
+                    .Options);
+                return await context.Database.SqlQueryRaw<int>("SELECT \"Id\" AS \"Value\" FROM \"RoleRows\"").ToListAsync(Token);
+            }
+
+            (await IdsAs(prefix)).ShouldBe([1]);
+            (await IdsAs(prefix + "x")).ShouldBeEmpty();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"RoleRows\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

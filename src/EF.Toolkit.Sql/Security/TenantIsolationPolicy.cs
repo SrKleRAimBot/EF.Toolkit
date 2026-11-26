@@ -344,12 +344,14 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         var array = name.EndsWith("[]", StringComparison.Ordinal) ? "[]" : "";
         name = name[..^array.Length].TrimEnd();
 
-        // Bare, these two still have a length: character is character(1) and bit is bit(1), so
-        // 'acme' cast to character is 'a'. They need the comparison with or without a modifier.
+        // Bare, these still have a length: character is character(1) and bit is bit(1), so 'acme' cast to
+        // character is 'a', and name keeps only its first 63 bytes. They need the comparison with or
+        // without a modifier.
         var unbounded = name switch
         {
             "char" or "character" or "nchar" or "national character" or "national char" => schema + "bpchar" + array,
             "bit" => schema + "varbit" + array,
+            "name" => schema + "text" + array,
             _ => null,
         };
 
