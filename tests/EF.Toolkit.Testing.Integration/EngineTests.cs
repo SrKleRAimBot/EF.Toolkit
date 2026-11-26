@@ -292,6 +292,51 @@ public sealed class MySqlCollectionDefinition : ICollectionFixture<MySqlFixture>
 [Collection("testing-postgres")]
 public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture)
 {
+    private sealed class Reading
+    {
+        public int Id { get; set; }
+        public decimal Fraction { get; set; }
+        public DateTime TakenAt { get; set; }
+        public DateTime LocalTime { get; set; }
+    }
+
+    private sealed class ReadingContext(DbContextOptions<ReadingContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Reading>(b =>
+            {
+                b.ToTable("Readings");
+                b.Property(r => r.Fraction).HasPrecision(18, 18);
+                b.Property(r => r.TakenAt).HasColumnType("timestamptz(3)");
+                b.Property(r => r.LocalTime).HasColumnType("timestamp(3) without time zone");
+            });
+    }
+
+    [Fact]
+    public async Task Generated_values_fit_wide_fractions_and_timestamp_columns_with_a_precision()
+    {
+        // numeric(18,18) got integers it overflows on, and timestamptz(3) an unspecified DateTime, which
+        // Npgsql refuses for a timestamp with time zone.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new ReadingContext(
+            new DbContextOptionsBuilder<ReadingContext>().UseNpgsql(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Readings\" (\"Id\" serial PRIMARY KEY, \"Fraction\" numeric(18,18) NOT NULL, "
+                + "\"TakenAt\" timestamptz(3) NOT NULL, \"LocalTime\" timestamp(3) without time zone NOT NULL)",
+            Ct);
+        try
+        {
+            var readings = await context.CreateManyAsync<Reading>(3, cancellationToken: Ct);
+
+            readings.Select(r => r.Fraction).Distinct().Count().ShouldBe(3);
+            (await context.Set<Reading>().CountAsync(Ct)).ShouldBe(3);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Readings\"", Ct);
+        }
+    }
+
     [Fact]
     public async Task A_truncate_trigger_writing_into_another_reset_table_fails_the_reset()
     {

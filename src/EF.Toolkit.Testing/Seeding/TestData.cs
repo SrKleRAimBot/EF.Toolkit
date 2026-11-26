@@ -437,20 +437,31 @@ public sealed class TestData
     /// <remarks>
     ///     Kept inside the column's digits, fractional ones included, so <c>decimal(5,2)</c> never overflows
     ///     and <c>decimal(2,2)</c>, with no integer digits at all, still gets 100 distinct values rather than
-    ///     always 0. A column holds only so many: past 10^precision values they repeat.
+    ///     always 0. A column holds only so many: past 10^precision values they repeat. Wide ones too:
+    ///     at most 18 digits are drawn, which a long holds, and a CLR decimal's scale stops at 28 — so
+    ///     <c>numeric(18,18)</c> gets fractions below 1 rather than integers it would refuse.
     /// </remarks>
     private static decimal GenerateDecimal(long n, IProperty? property)
     {
-        var precision = property?.GetPrecision();
-        var scale = Math.Max(property?.GetScale() ?? 0, 0);
-        if (precision is not { } p || p >= 18)
+        if (property?.GetPrecision() is not { } precision)
         {
             return n;
         }
 
-        scale = Math.Min(scale, p);
-        var digits = n % (long)Math.Pow(10, p);
-        return digits / (decimal)Math.Pow(10, scale);
+        var digits = Math.Clamp(precision, 1, 18);
+        var scale = Math.Clamp(property.GetScale() ?? 0, 0, 28);
+        return n % (long)Pow10(digits) / Pow10(scale);
+    }
+
+    private static decimal Pow10(int exponent)
+    {
+        var value = 1m;
+        for (var i = 0; i < exponent; i++)
+        {
+            value *= 10m;
+        }
+
+        return value;
     }
 
     private Guid GenerateGuid()
@@ -468,11 +479,16 @@ public sealed class TestData
     private static DateTime GenerateDateTime(long n, IProperty? property)
     {
         var value = BaseDate.AddMinutes(n % MaxMinutes);
-        var columnType = property?.GetColumnType();
+
+        // Without its precision, so timestamptz(3) is still the time-zone alias and timestamp(3) without
+        // time zone still the plain one.
+        var columnType = property?.GetColumnType() is { } declared
+            ? System.Text.RegularExpressions.Regex.Replace(declared, @"\s*\(\s*\d+\s*\)", "").Trim().ToLowerInvariant()
+            : null;
         return columnType is not null
-            && columnType.StartsWith("timestamp", StringComparison.OrdinalIgnoreCase)
-            && !columnType.Contains("with time zone", StringComparison.OrdinalIgnoreCase)
-            && !columnType.Equals("timestamptz", StringComparison.OrdinalIgnoreCase)
+            && columnType.StartsWith("timestamp", StringComparison.Ordinal)
+            && !columnType.Contains("with time zone", StringComparison.Ordinal)
+            && columnType != "timestamptz"
             ? DateTime.SpecifyKind(value, DateTimeKind.Unspecified)
             : value;
     }
