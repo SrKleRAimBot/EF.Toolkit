@@ -20,15 +20,17 @@
       Test-only. EF.Toolkit.Bulk.MySql and EF.Toolkit.Audit.MySql reference no MySQL provider, so
       they work under whichever one the application already uses. The equivalence suites need a
       concrete one, and Oracle's is the provider that ships for EF Core 10. The bundled SQLite
-      package is likewise only for the tests: the library takes the native-library-free Core
-      package and leaves the choice of SQLite build to the application.
+      package is for the tests and for EF.Toolkit.Testing, whose in-memory test database should work
+      with no further install; the write-side SQLite packages take the native-library-free Core
+      package and leave the choice of SQLite build to the application.
     -->
     <PackageVersion Include="MySql.EntityFrameworkCore" Version="$(MySqlEfCoreRange)" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCoreRange)" />
 
     <!--
       The bundled native SQLite above resolves to SQLitePCLRaw.lib.e_sqlite3 2.1.11, which ships a
-      SQLite carrying GHSA-2m69-gcr7-jv3q. Test-only, like the bundle that pulls it in.
+      SQLite carrying GHSA-2m69-gcr7-jv3q. With transitive pinning on, the fixed version also ships
+      as a direct dependency of EF.Toolkit.Testing, so its consumers get the fix too.
     -->
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.14" />
   </ItemGroup>

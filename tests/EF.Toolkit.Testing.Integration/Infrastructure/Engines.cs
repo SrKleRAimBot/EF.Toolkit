@@ -14,7 +14,7 @@ public sealed class PostgreSqlFixture : EngineFixture
 {
     private PostgreSqlContainer? _container;
 
-    public override string Engine => "postgres";
+    public override string Engine => "postgres17";
 
     protected override async Task StartContainerAsync()
     {

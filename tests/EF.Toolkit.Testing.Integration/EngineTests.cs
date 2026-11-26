@@ -217,7 +217,7 @@ public sealed class SqlServerCollectionDefinition : ICollectionFixture<SqlServer
 [CollectionDefinition("testing-mysql")]
 public sealed class MySqlCollectionDefinition : ICollectionFixture<MySqlFixture>;
 
-[Trait("Engine", "postgres")]
+[Trait("Engine", "postgres17")]
 [Collection("testing-postgres")]
 public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture);
 
