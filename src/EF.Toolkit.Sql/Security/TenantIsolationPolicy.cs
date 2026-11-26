@@ -171,7 +171,14 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
         // and a session carrying the longer value would match the shorter tenant's rows. Requiring the
         // cast to read back as the very text that was set refuses every conversion that loses
         // anything, while the column side of the first comparison stays index-friendly.
-        var condition = $"{SqlSyntax.Quote(SqlDialect.PostgreSql, TenantColumn)} = {tenant} AND CAST({tenant} AS text) = {setting}";
+        //
+        // Numeric types are the exception: numeric(10,2) renders 12.5 back as 12.50, which is the same
+        // value, not a lossy one. There the constrained cast is compared with the unconstrained numeric
+        // instead — added scale passes, rounding (12.555 to 12.56) still does not.
+        var lossless = IsPostgreSqlNumeric(ColumnStoreType)
+            ? $"{tenant} = CAST({setting} AS numeric)"
+            : $"CAST({tenant} AS text) = {setting}";
+        var condition = $"{SqlSyntax.Quote(SqlDialect.PostgreSql, TenantColumn)} = {tenant} AND {lossless}";
 
         // Restrictive: PostgreSQL ORs permissive policies together, so a permissive tenant check
         // would be bypassed by any other permissive policy on the table — a reporting policy with
@@ -239,7 +246,17 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
     {
         var value = $"SESSION_CONTEXT({SqlSyntax.Literal(SqlDialect.SqlServer, SessionKey)})";
         var tenant = $"CAST({value} AS {ColumnStoreType})";
-        return $"@tenant = {tenant} AND CAST({tenant} AS nvarchar(4000)) = CAST({value} AS nvarchar(4000))";
+        // Compared as bytes: SQL Server's string equality ignores trailing spaces, so a GUID followed by a
+        // space would still read back "equal". The toolkit stores typed session values, which both sides
+        // render identically, so an exact comparison costs nothing for them.
+        return $"@tenant = {tenant} AND CAST(CAST({tenant} AS nvarchar(4000)) AS varbinary(8000)) "
+            + $"= CAST(CAST({value} AS nvarchar(4000)) AS varbinary(8000))";
+    }
+
+    private static bool IsPostgreSqlNumeric(string storeType)
+    {
+        var type = storeType.Trim().ToLowerInvariant();
+        return type.StartsWith("numeric", StringComparison.Ordinal) || type.StartsWith("decimal", StringComparison.Ordinal);
     }
 
     private static SqlFeatureNotSupportedException NotSupported(SqlDialect dialect)

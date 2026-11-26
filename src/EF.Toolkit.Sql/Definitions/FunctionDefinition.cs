@@ -191,7 +191,7 @@ public sealed class FunctionDefinition : IDatabaseObject
             ? ReturnType
             : "TABLE (" + string.Join(", ", Columns.Select(c => $"{SqlSyntax.Quote(SqlDialect.PostgreSql, c.Name)} {c.StoreType}")) + ")";
 
-        return $"CREATE OR REPLACE FUNCTION {target}({RoutineSyntax.ParameterList(Parameters, withDirection: false)})\n"
+        return $"CREATE OR REPLACE FUNCTION {target}({RoutineSyntax.ParameterList(Parameters, withDirection: false, SqlDialect.PostgreSql)})\n"
             + $"RETURNS {returns}\n"
             + $"LANGUAGE {Language}\n"
             + (Characteristics is null ? "" : Characteristics + "\n")

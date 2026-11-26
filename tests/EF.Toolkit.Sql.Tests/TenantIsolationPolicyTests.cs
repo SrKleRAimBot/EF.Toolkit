@@ -133,7 +133,7 @@ public sealed class TenantIsolationPolicyTests
             RETURNS TABLE
             WITH SCHEMABINDING
             AS
-            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) = CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000))
+            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND CAST(CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) AS varbinary(8000)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(8000))
             """,
             """
             CREATE SECURITY POLICY [sales].[Orders_tenant_isolation]
@@ -143,6 +143,17 @@ public sealed class TenantIsolationPolicyTests
             WITH (STATE = ON)
             """,
         ]);
+
+    [Theory]
+    [InlineData("numeric(10,2)")]
+    [InlineData(" DECIMAL(12, 4)")]
+    public void PostgreSql_numeric_tenants_compare_as_numbers_so_added_scale_is_not_taken_for_loss(string storeType)
+    {
+        var sql = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3];
+
+        sql.ShouldContain("= CAST(NULLIF(current_setting('app.tenant_id', true), '') AS numeric)");
+        sql.ShouldNotContain("AS text)");
+    }
 
     [Fact]
     public void SqlServer_escapes_the_key_literal()

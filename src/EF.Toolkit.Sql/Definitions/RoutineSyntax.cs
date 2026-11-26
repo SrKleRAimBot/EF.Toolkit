@@ -1,3 +1,5 @@
+using EFToolkit.Sql.Dialects;
+
 namespace EFToolkit.Sql.Definitions;
 
 /// <summary>The parts of routine definitions shared by procedures and functions.</summary>
@@ -39,10 +41,42 @@ internal static class RoutineSyntax
     }
 
     /// <summary>A parenthesised-list body for PostgreSQL and MySQL.</summary>
-    public static string ParameterList(IReadOnlyList<SqlParameterDefinition> parameters, bool withDirection)
-        => string.Join(", ", parameters.Select(p => withDirection
-            ? $"{Direction(p.Direction)} {p.Name} {p.StoreType}"
-            : $"{p.Name} {p.StoreType}"));
+    public static string ParameterList(
+        IReadOnlyList<SqlParameterDefinition> parameters,
+        bool withDirection,
+        SqlDialect dialect = SqlDialect.MySql)
+        => string.Join(", ", parameters.Select(p =>
+        {
+            var name = dialect == SqlDialect.PostgreSql ? PostgreSqlParameterName(p.Name) : p.Name;
+            return withDirection ? $"{Direction(p.Direction)} {name} {p.StoreType}" : $"{name} {p.StoreType}";
+        }));
+
+    /// <summary>A PostgreSQL routine parameter name as written in DDL and in a named-notation call.</summary>
+    /// <remarks>
+    ///     Bare, so it folds to lowercase like any unquoted identifier: a routine body refers to its
+    ///     parameters unquoted, and quoting a mixed-case name here would leave those references pointing
+    ///     at nothing. A reserved word cannot be written bare at all, so it is quoted — in its folded form,
+    ///     which is the name the bare spelling would have had.
+    /// </remarks>
+    public static string PostgreSqlParameterName(string name)
+    {
+        var folded = name.ToLowerInvariant();
+        return PostgreSqlReserved.Contains(folded) ? SqlSyntax.Quote(SqlDialect.PostgreSql, folded) : name;
+    }
+
+    // PostgreSQL's reserved key words: the ones it refuses as a bare parameter or argument name.
+    private static readonly HashSet<string> PostgreSqlReserved = new(StringComparer.Ordinal)
+    {
+        "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric", "both", "case",
+        "cast", "check", "collate", "column", "constraint", "create", "current_catalog", "current_date",
+        "current_role", "current_time", "current_timestamp", "current_user", "default", "deferrable",
+        "desc", "distinct", "do", "else", "end", "except", "false", "fetch", "for", "foreign", "from",
+        "grant", "group", "having", "in", "initially", "intersect", "into", "lateral", "leading", "limit",
+        "localtime", "localtimestamp", "not", "null", "offset", "on", "only", "or", "order", "placing",
+        "primary", "references", "returning", "select", "session_user", "some", "symmetric",
+        "system_user", "table", "then", "to", "trailing", "true", "union", "unique", "user", "using",
+        "variadic", "when", "where", "window", "with",
+    };
 
     /// <summary>SQL Server's procedure parameter list, which is not parenthesised.</summary>
     public static string SqlServerProcedureParameters(IReadOnlyList<SqlParameterDefinition> parameters)

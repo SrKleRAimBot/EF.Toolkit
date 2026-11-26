@@ -75,7 +75,7 @@ public sealed class StoredProcedureDefinition : IDatabaseObject
         {
             SqlDialect.PostgreSql =>
             [
-                $"CREATE OR REPLACE PROCEDURE {target}({RoutineSyntax.ParameterList(Parameters, withDirection: true)})\n"
+                $"CREATE OR REPLACE PROCEDURE {target}({RoutineSyntax.ParameterList(Parameters, withDirection: true, SqlDialect.PostgreSql)})\n"
                 + $"LANGUAGE {Language}\n"
                 + $"AS {SqlSyntax.DollarQuote(Body)}",
             ],

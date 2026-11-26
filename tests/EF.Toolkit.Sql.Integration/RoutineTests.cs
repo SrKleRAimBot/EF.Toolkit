@@ -53,6 +53,22 @@ public sealed class RoutineTests(PostgreSqlFixture fixture) : IAsyncLifetime
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     [Fact]
+    public async Task A_procedure_with_a_reserved_parameter_name_is_created_and_called()
+    {
+        // `from` cannot be written bare as a parameter or a named argument; both are quoted.
+        var since = new StoredProcedureDefinition(
+            "orders_from",
+            [new("from", "integer"), new("tenant", "integer")],
+            """BEGIN INSERT INTO "Orders" ("TenantId", "Total", "Note") VALUES (tenant, "from", 'reserved'); END;""");
+
+        await using var context = fixture.CreateAdminContext();
+        await context.Database.CreateDatabaseObjectsAsync(since);
+        await context.Database.ExecuteProcedureAsync("orders_from", new { From = 42, tenant = 5 }, cancellationToken: Token);
+
+        (await context.Orders.SingleAsync(o => o.Note == "reserved", Token)).Total.ShouldBe(42m);
+    }
+
+    [Fact]
     public async Task A_procedure_runs_with_its_arguments_bound_by_name()
     {
         await using var context = fixture.CreateAdminContext();

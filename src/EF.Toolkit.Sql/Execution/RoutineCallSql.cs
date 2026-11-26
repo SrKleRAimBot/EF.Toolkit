@@ -71,7 +71,8 @@ internal static class RoutineCallSql
         => string.Join(", ", arguments.Select((_, i) => Placeholder(i)));
 
     private static string Named(IReadOnlyList<(string Name, object? Value)> arguments)
-        => string.Join(", ", arguments.Select((a, i) => a.Name + " => " + Placeholder(i)));
+        // Spelled as the routine's DDL spells it, reserved words quoted (RoutineSyntax).
+        => string.Join(", ", arguments.Select((a, i) => RoutineSyntax.PostgreSqlParameterName(a.Name) + " => " + Placeholder(i)));
 
     private static string SqlServerNamed(IReadOnlyList<(string Name, object? Value)> arguments)
         => arguments.Count == 0

@@ -141,7 +141,10 @@ On PostgreSQL the dollar-quote tag is chosen so that it does not occur in the bo
 `language: "sql"` for a PostgreSQL procedure in plain SQL.
 
 Parameter names are written bare, because the body refers to them bare, so they must be plain
-identifiers (letters, digits, underscores). SQL Server's `@` is added for you.
+identifiers (letters, digits, underscores). SQL Server's `@` is added for you. On PostgreSQL a name
+that is a reserved word there (`from`, `order`, `user`, …) is quoted in the definition and in named
+calls, as `"from"`; refer to it quoted inside the body too. Other names stay bare, so PostgreSQL folds
+them to lower case.
 
 ### Calling them
 
@@ -253,7 +256,11 @@ alone would truncate: with a `varchar(8)` tenant column, a session carrying `acm
 `acme-dev`'s rows, and on SQL Server a string holding a GUID followed by anything converts to that
 GUID. The session value must read back as exactly the text that was set, so the value you put in the
 session context should be the tenant value's own canonical text — `1`, not `01`; a GUID as .NET formats
-it — which is what `UseSessionContext` writes for the CLR value you return.
+it — which is what `UseSessionContext` writes for the CLR value you return. Return the tenant as its
+own type (a `Guid`, an `int`), not as a string. On SQL Server the texts are compared as bytes, because
+string equality there ignores trailing spaces. A PostgreSQL `numeric`/`decimal` column is compared as a
+number instead: `numeric(10,2)` reads `12.5` back as `12.50`, the same tenant, while `12.555` rounds to
+a different one and matches nothing.
 
 The tenant check is **restrictive**. PostgreSQL ORs permissive policies together, so a permissive
 tenant check would be bypassed by any other permissive policy on the table — a reporting policy with
@@ -289,8 +296,8 @@ On **SQL Server** it renders a schema-bound predicate function and a security po
 CREATE OR ALTER FUNCTION [dbo].[Orders_tenant_isolation_predicate](@tenant int)
 RETURNS TABLE WITH SCHEMABINDING
 AS RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'app.tenant_id') AS int)
-    AND CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS nvarchar(4000))
-        = CAST(SESSION_CONTEXT(N'app.tenant_id') AS nvarchar(4000));
+    AND CAST(CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS nvarchar(4000)) AS varbinary(8000))
+        = CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS nvarchar(4000)) AS varbinary(8000));
 
 CREATE SECURITY POLICY [dbo].[Orders_tenant_isolation]
     ADD FILTER PREDICATE [dbo].[Orders_tenant_isolation_predicate]([TenantId]) ON [dbo].[Orders],

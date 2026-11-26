@@ -16,6 +16,16 @@ public sealed class RoutineCallSqlTests
     }
 
     [Fact]
+    public void PostgreSql_quotes_a_reserved_argument_name_and_leaves_others_to_fold()
+    {
+        // `from => ...` does not parse; `"from" => ...` does. A mixed-case name stays bare, folding to the
+        // lowercase name an unquoted parameter of the routine has.
+        var (sql, _) = RoutineCallSql.Procedure(SqlDialect.PostgreSql, "report", null, new { From = 1, tenantId = 2 });
+
+        sql.ShouldBe("CALL \"report\"(\"from\" => {0}, tenantId => {1})");
+    }
+
+    [Fact]
     public void SqlServer_execs_with_named_parameters_and_marks_output_ones()
     {
         var total = new SqlParameter("@total", SqlDbType.Int) { Direction = ParameterDirection.Output };

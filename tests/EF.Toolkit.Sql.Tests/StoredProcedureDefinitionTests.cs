@@ -12,6 +12,16 @@ public sealed class StoredProcedureDefinitionTests
     ];
 
     [Fact]
+    public void PostgreSql_quotes_a_reserved_parameter_name_in_the_definition_as_calls_do()
+    {
+        var procedure = new StoredProcedureDefinition(
+            "report", [new SqlParameterDefinition("from", "int"), new SqlParameterDefinition("tenantId", "int")], "BEGIN END;");
+
+        procedure.GetCreateSql(SqlDialect.PostgreSql)[0].ShouldContain("(IN \"from\" int, IN tenantId int)");
+        procedure.GetCreateSql(SqlDialect.MySql)[1].ShouldContain("IN from int");
+    }
+
+    [Fact]
     public void PostgreSql_creates_or_replaces_with_directions_and_dollar_quoting()
         => new StoredProcedureDefinition("close_month", Parameters, "BEGIN\n  total := 0;\nEND;", "billing")
             .GetCreateSql(SqlDialect.PostgreSql)

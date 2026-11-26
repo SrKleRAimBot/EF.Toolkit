@@ -259,6 +259,39 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_numeric_tenant_column_accepts_added_scale_but_not_rounding()
+    {
+        // numeric(10,2) renders 12.5 back as 12.50: the same value, which a text comparison refused.
+        // Rounding 12.555 to 12.56 is a different tenant and must still reach nothing.
+        var accounts = new TenantIsolationPolicy("Accounts", "Tenant", "app.tenant_num", "numeric(10,2)", policyName: "accounts_iso");
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Accounts\" (\"Id\" int PRIMARY KEY, \"Tenant\" numeric(10,2) NOT NULL); "
+                + "INSERT INTO \"Accounts\" VALUES (1, 12.50), (2, 12.56); "
+                + $"ALTER TABLE \"Accounts\" OWNER TO {PostgreSqlFixture.AppUser};",
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(accounts);
+
+            async Task<List<int>> IdsAs(decimal tenant)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set("app.tenant_num", () => tenant))
+                    .Options);
+                return await context.Database.SqlQueryRaw<int>("SELECT \"Id\" AS \"Value\" FROM \"Accounts\"").ToListAsync(Token);
+            }
+
+            (await IdsAs(12.5m)).ShouldBe([1]);
+            (await IdsAs(12.555m)).ShouldBeEmpty();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Accounts\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

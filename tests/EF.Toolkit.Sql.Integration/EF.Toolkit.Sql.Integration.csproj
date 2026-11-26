@@ -16,6 +16,8 @@
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="Testcontainers.MySql" />
+    <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="MySql.EntityFrameworkCore" />
 
     <!-- MySql.EntityFrameworkCore needs a newer relational layer than the package's own floor. -->
