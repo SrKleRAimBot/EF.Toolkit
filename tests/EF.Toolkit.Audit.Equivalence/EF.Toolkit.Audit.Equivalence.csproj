@@ -32,7 +32,7 @@
       MySql.EntityFrameworkCore needs at least 10.0.1 of the relational layer, above the floor the
       libraries themselves declare, so the floor is lifted here rather than for every consumer.
     -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="[10.0.1,11.0.0)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="$(RelationalTestRange)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
   </ItemGroup>
 

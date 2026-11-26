@@ -214,7 +214,16 @@ public class BulkPartitionerTests
                 TableName = "Customers",
                 EntityState = EntityState.Modified,
                 ColumnModifications =
+#if EFCORE10
                     [new FakeColumn { ColumnName = "Data", IsWrite = true, JsonPath = "$.a" }]
+#else
+                    [new FakeColumn
+                    {
+                        ColumnName = "Data",
+                        IsWrite = true,
+                        JsonPath = Microsoft.EntityFrameworkCore.Infrastructure.StructuredJsonPath.Root
+                    }]
+#endif
             }
         ];
 

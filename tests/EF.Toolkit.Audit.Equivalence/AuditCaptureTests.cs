@@ -375,7 +375,7 @@ public abstract class AuditCaptureTests(AuditDatabaseFixture fixture)
     protected static JsonElement Payload(AuditRow entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        return JsonDocument.Parse(entry.Changes).RootElement;
+        return JsonElement.Parse(entry.Changes);
     }
 
     /// <summary>A product with every column set to something recognisable.</summary>

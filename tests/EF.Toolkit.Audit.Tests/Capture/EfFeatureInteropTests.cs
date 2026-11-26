@@ -341,14 +341,14 @@ public class EfFeatureInteropTests
     {
         using var writer = new AuditPayloadWriter(options);
 
-        return JsonDocument.Parse(
+        return JsonElement.Parse(
             writer.Write(
                 source.Operation,
                 AuditSourceProjection.Create(source, plan),
                 source,
                 0,
                 NoMetadata,
-                reason: null)!).RootElement;
+                reason: null)!);
     }
 
     public class Customer

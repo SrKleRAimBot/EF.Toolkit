@@ -397,7 +397,7 @@ public abstract class BulkAuditTests(AuditDatabaseFixture fixture)
     protected static JsonElement Payload(AuditRow entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        return JsonDocument.Parse(entry.Changes).RootElement;
+        return JsonElement.Parse(entry.Changes);
     }
 
     /// <summary>A run of products with distinct SKUs.</summary>

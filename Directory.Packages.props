@@ -10,11 +10,11 @@
     low-level update-pipeline services, so it must never silently resolve across an EF major.
   -->
   <ItemGroup Label="EF Core">
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="[10.0.0,11.0.0)" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="[10.0.0,11.0.0)" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="[10.0.0,11.0.0)" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL.NodaTime" Version="[10.0.0,11.0.0)" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite.Core" Version="[10.0.0,11.0.0)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="$(EfCoreRange)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(EfCoreRange)" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(EfCoreRange)" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL.NodaTime" Version="$(EfCoreRange)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite.Core" Version="$(EfCoreRange)" />
 
     <!--
       Test-only. EF.Toolkit.Bulk.MySql and EF.Toolkit.Audit.MySql reference no MySQL provider, so
@@ -23,8 +23,8 @@
       package is likewise only for the tests: the library takes the native-library-free Core
       package and leaves the choice of SQLite build to the application.
     -->
-    <PackageVersion Include="MySql.EntityFrameworkCore" Version="[10.0.1,11.0.0)" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="[10.0.0,11.0.0)" />
+    <PackageVersion Include="MySql.EntityFrameworkCore" Version="$(MySqlEfCoreRange)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCoreRange)" />
 
     <!--
       The bundled native SQLite above resolves to SQLitePCLRaw.lib.e_sqlite3 2.1.11, which ships a
@@ -61,13 +61,13 @@
       the fixed version here lifts it without waiting for Testcontainers to move.
     -->
     <PackageVersion Include="SSH.NET" Version="2026.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="[10.0.0,11.0.0)" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="$(EfCoreRange)" />
 
     <!--
       Test-only. A keyset cursor has to carry the types a provider maps natively, and NodaTime
       through the Npgsql plugin is the case that has no value converter to read the answer off.
     -->
-    <PackageVersion Include="NodaTime" Version="3.3.3" />
+    <PackageVersion Include="NodaTime" Version="3.3.7" />
   </ItemGroup>
 
   <ItemGroup Label="Benchmarks">
