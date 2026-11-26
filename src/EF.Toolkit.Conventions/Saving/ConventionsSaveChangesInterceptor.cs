@@ -121,7 +121,19 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
 
         if (options.SoftDelete)
         {
-            ConvertDeletes(context, now);
+            try
+            {
+                ConvertDeletes(context, now);
+            }
+            catch
+            {
+                // Thrown from inside SavingChanges, so EF's own failure path never runs. Entries the loop
+                // had already converted would be left Modified with their owned entries still Deleted, and
+                // a retry would skip them as already converted — deleting their owned rows for real.
+                // Everything converted so far goes back to Deleted before the error propagates.
+                Failed();
+                throw;
+            }
         }
 
         if (options.Timestamps)

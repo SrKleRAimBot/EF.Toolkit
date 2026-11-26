@@ -611,6 +611,66 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Clearing_an_optional_complex_value_with_only_nested_values_before_Remove_is_discarded()
+    {
+        // Rebuilding only Place's direct members put Floor back and lost Geo, so the soft delete cleared
+        // the stored coordinates.
+        await using (var seed = _db.Context())
+        {
+            (await seed.Comments.SingleAsync(c => c.Id == 2, Ct)).Place = new Place { Floor = 3, Geo = new Geo { Lat = 1.5, Lng = 2.5 } };
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            comment.Place = null;
+            context.Comments.Remove(comment);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct);
+        stored.DeletedAt.ShouldNotBeNull();
+        stored.Place.ShouldNotBeNull().Floor.ShouldBe(3);
+        stored.Place.Geo.ShouldNotBeNull().Lat.ShouldBe(1.5);
+    }
+
+#if EFCORE10
+    [Fact]
+    public async Task A_refusal_part_way_through_a_save_leaves_nothing_half_converted_for_the_retry()
+    {
+        // The author is converted first; the comment is then refused. Left half-done, the retry found the
+        // author already Modified, skipped it, and deleted its owned links for real.
+        await using (var seed = _db.Context())
+        {
+            (await seed.Comments.SingleAsync(c => c.Id == 2, Ct)).Reactions.Add(new CommentMeta { Mood = "like" });
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = _db.Context())
+        {
+            var author = await context.Authors.SingleAsync(Ct);
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            context.Authors.Remove(author);
+            comment.Reactions.Add(new CommentMeta { Mood = "added before the remove" });
+            context.Comments.Remove(comment);
+
+            await Should.ThrowAsync<InvalidOperationException>(() => context.SaveChangesAsync(Ct));
+            context.Entry(author).State.ShouldBe(EntityState.Deleted);
+
+            context.Entry(comment).State = EntityState.Detached;
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var stored = await fresh.Authors.IncludeDeleted().SingleAsync(Ct);
+        fresh.Entry(stored).Property<bool>("IsDeleted").CurrentValue.ShouldBeTrue();
+        stored.Profile!.Links.Count.ShouldBe(2);
+    }
+#endif
+
+    [Fact]
     public async Task Clearing_an_optional_complex_value_before_Remove_is_discarded()
     {
         await using (var seed = _db.Context())
@@ -870,8 +930,10 @@ public sealed class SoftDeleteTests : IAsyncLifetime
         entry.State.ShouldBe(EntityState.Deleted);
         comment.DeletedAt.ShouldBeNull();
 
-        // The usual resolution: take the database's token, and save again.
-        entry.OriginalValues.SetValues((await entry.GetDatabaseValuesAsync(Ct))!);
+        // The usual resolution: take the database's token, and save again. (Only the token: EF Core 10's
+        // OriginalValues.SetValues cannot take database values for an absent optional complex property.)
+        var database = (await entry.GetDatabaseValuesAsync(Ct))!;
+        entry.Property(c => c.Version).OriginalValue = database.GetValue<int>(nameof(Comment.Version));
         await context.SaveChangesAsync(Ct);
 
         entry.State.ShouldBe(EntityState.Detached);

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace EFToolkit.Conventions.Saving;
 
@@ -57,19 +58,41 @@ internal static class Baseline
                 continue;
             }
 
-            var members = complex.Metadata.ComplexType.GetProperties().ToList();
-            if (!complex.Metadata.IsNullable || members.All(p => originals[p] is null))
+            if (complex.Metadata.IsNullable && FromOriginals(complex.Metadata, originals) is { } value)
             {
-                continue;
+                complex.CurrentValue = value;
             }
-
-            var value = Activator.CreateInstance(complex.Metadata.ClrType)!;
-            foreach (var member in members)
-            {
-                member.PropertyInfo?.SetValue(value, originals[member]);
-            }
-
-            complex.CurrentValue = value;
         }
+    }
+
+    // The value a complex property had when loaded, rebuilt member by member and level by level from the
+    // original snapshot — or null when nothing under it held a value, which is how an absent optional
+    // complex value is stored.
+    private static object? FromOriginals(IComplexProperty complexProperty, PropertyValues originals)
+    {
+        var type = complexProperty.ComplexType;
+        var scalars = type.GetProperties().Select(p => (Property: p, Value: originals[p])).ToList();
+        var nested = type.GetComplexProperties()
+            .Where(c => !c.IsCollection)
+            .Select(c => (Property: c, Value: FromOriginals(c, originals)))
+            .ToList();
+
+        if (complexProperty.IsNullable && scalars.All(s => s.Value is null) && nested.All(n => n.Value is null))
+        {
+            return null;
+        }
+
+        var value = Activator.CreateInstance(complexProperty.ClrType)!;
+        foreach (var (property, original) in scalars)
+        {
+            property.PropertyInfo?.SetValue(value, original);
+        }
+
+        foreach (var (property, original) in nested)
+        {
+            property.PropertyInfo?.SetValue(value, original);
+        }
+
+        return value;
     }
 }

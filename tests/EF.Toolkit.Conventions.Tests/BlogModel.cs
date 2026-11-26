@@ -70,6 +70,24 @@ public sealed class Comment
 
     /// <summary>A complex collection, stored as JSON in the comment's row.</summary>
     public List<CommentMeta> Reactions { get; set; } = [];
+
+    /// <summary>An optional complex value with an optional complex value nested in it.</summary>
+    public Place? Place { get; set; }
+}
+
+public sealed class Place
+{
+    /// <summary>Required: EF needs one to tell an absent optional complex value from an empty one.</summary>
+    public int Floor { get; set; }
+
+    public string? Name { get; set; }
+    public Geo? Geo { get; set; }
+}
+
+public sealed class Geo
+{
+    public double Lat { get; set; }
+    public double Lng { get; set; }
 }
 
 public sealed class CommentMeta
@@ -126,6 +144,7 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
             b.ComplexProperty(c => c.Meta);
             b.ComplexProperty(c => c.Extra);
             b.ComplexCollection(c => c.Reactions, r => r.ToJson());
+            b.ComplexProperty(c => c.Place, p => p.ComplexProperty(x => x.Geo));
         });
         modelBuilder.Entity<Note>(b =>
         {
@@ -251,5 +270,6 @@ public sealed class PooledCommentsContext(DbContextOptions<PooledCommentsContext
             b.ComplexProperty(c => c.Meta);
             b.ComplexProperty(c => c.Extra);
             b.ComplexCollection(c => c.Reactions, r => r.ToJson());
+            b.ComplexProperty(c => c.Place, p => p.ComplexProperty(x => x.Geo));
         });
 }
