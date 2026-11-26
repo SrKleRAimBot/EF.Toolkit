@@ -11,10 +11,21 @@ namespace Microsoft.EntityFrameworkCore;
 
 /// <summary>Database objects, routine calls and session context at runtime.</summary>
 /// <remarks>
-///     Every value passed here reaches the database as a bound parameter through EF's own raw-SQL
-///     pipeline — <c>ExecuteSqlRawAsync</c> and <c>SqlQueryRaw</c> — so the context's transaction,
-///     interceptors, logging and execution strategy all apply. Only names are rendered into the SQL
-///     text, and those are quoted.
+///     <para>
+///         Every value passed here reaches the database as a bound parameter through EF's own raw-SQL
+///         pipeline — <c>ExecuteSqlRawAsync</c> and <c>SqlQueryRaw</c> — so the context's transaction,
+///         interceptors and logging apply. Only names are rendered into the SQL text, and those are
+///         quoted.
+///     </para>
+///     <para>
+///         Retries differ by method. <c>CreateDatabaseObjectsAsync</c> and <c>DropDatabaseObjectsAsync</c>
+///         run their whole set inside the context's execution strategy, so a retrying strategy retries
+///         the set as one unit. <c>QueryProcedureAsync</c> and <c>QueryFunction</c> are queries, retried
+///         as EF retries any query. <c>ExecuteProcedureAsync</c>, <c>SetSessionContextAsync</c> and
+///         <c>RefreshMaterializedViewAsync</c> are not retried: EF does not retry raw commands on its
+///         own, and a procedure may not be safe to run twice. Wrap them in
+///         <c>Database.CreateExecutionStrategy().ExecuteAsync(...)</c> where it is.
+///     </para>
 /// </remarks>
 public static class SqlDatabaseFacadeExtensions
 {

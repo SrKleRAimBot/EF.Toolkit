@@ -16,7 +16,42 @@ public sealed class MigrationBuilderExtensionsTests
     {
         builder.Operations.ShouldAllBe(o => o is SqlOperation);
         builder.Operations.Cast<SqlOperation>().ShouldAllBe(o => !o.SuppressTransaction);
-        return builder.Operations.Cast<SqlOperation>().Select(o => o.Sql).ToList();
+        return builder.Operations.Cast<SqlOperation>().Select(o => Unwrap(builder, o.Sql)).ToList();
+    }
+
+    // SQL Server statements arrive wrapped in EXEC(N'...') for idempotent scripts; the assertions
+    // below are about the statement inside, and the wrapping has tests of its own.
+    private static string Unwrap(MigrationBuilder builder, string sql)
+    {
+        if (builder.ActiveProvider != SqlServer)
+        {
+            return sql;
+        }
+
+        sql.ShouldStartWith("EXEC(N'");
+        sql.ShouldEndWith("')");
+        return sql["EXEC(N'".Length..^"')".Length].Replace("''", "'", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SqlServer_statements_are_wrapped_in_EXEC_so_idempotent_scripts_keep_them_first_in_their_batch()
+    {
+        // `migrations script --idempotent` puts each operation inside IF NOT EXISTS (...) BEGIN ... END,
+        // where CREATE OR ALTER VIEW is not first in its batch and fails. EXEC gives it a batch of its own.
+        var builder = new MigrationBuilder(SqlServer);
+        builder.CreateView(new ViewDefinition("v", "SELECT N'it''s' AS x"));
+
+        var sql = ((SqlOperation)builder.Operations.Single()).Sql;
+        sql.ShouldBe("EXEC(N'CREATE OR ALTER VIEW [v] AS\nSELECT N''it''''s'' AS x')");
+    }
+
+    [Fact]
+    public void Other_engines_are_not_wrapped()
+    {
+        var builder = new MigrationBuilder(PostgreSql);
+        builder.CreateView(new ViewDefinition("v", "SELECT 1"));
+
+        ((SqlOperation)builder.Operations.Single()).Sql.ShouldNotStartWith("EXEC");
     }
 
     [Fact]

@@ -273,12 +273,20 @@ public static class SqlMigrationBuilderExtensions
 
         // Rendered in full before anything is added, so a refusal leaves the migration untouched
         // rather than holding the first half of a multi-statement object.
-        var statements = render(SqlDialectDetector.FromProviderName(migrationBuilder.ActiveProvider));
-        foreach (var statement in statements)
+        var dialect = SqlDialectDetector.FromProviderName(migrationBuilder.ActiveProvider);
+        foreach (var statement in render(dialect))
         {
-            migrationBuilder.Sql(statement);
+            migrationBuilder.Sql(dialect == SqlDialect.SqlServer ? SqlServerBatch(statement) : statement);
         }
 
         return migrationBuilder;
     }
+
+    // CREATE VIEW, PROCEDURE, FUNCTION and their OR ALTER forms must be the first statement of a batch.
+    // A migration applied directly gets a batch per operation, but `dotnet ef migrations script
+    // --idempotent` wraps each one in IF NOT EXISTS (...) BEGIN ... END, where they are not. EXEC of
+    // the statement as a string gives it a batch of its own wherever it lands — the wrapping EF's own
+    // documentation recommends for raw SQL in migrations.
+    internal static string SqlServerBatch(string statement)
+        => "EXEC(N'" + statement.Replace("'", "''", StringComparison.Ordinal) + "')";
 }
