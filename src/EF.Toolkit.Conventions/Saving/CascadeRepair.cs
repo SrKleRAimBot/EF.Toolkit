@@ -44,8 +44,14 @@ internal static class CascadeRepair
                 continue;
             }
 
+            // EF's fixup nulls only the nullable components of a composite key: an invoice's CustomerId,
+            // but not its required TenantId. So at least one component must have been cleared, and every
+            // other must still hold the value it was loaded with — anything else is the application's edit.
             var properties = foreignKey.Properties.Select(p => entry.Property(p.Name)).ToList();
-            if (!properties.All(p => p.IsModified && p.CurrentValue is null && p.OriginalValue is not null))
+            var cleared = properties.Where(p => p.IsModified && p.CurrentValue is null && p.OriginalValue is not null).ToList();
+            if (cleared.Count == 0
+                || properties.Any(p => p.OriginalValue is null
+                    || (!cleared.Contains(p) && !Same(p.Metadata, p.CurrentValue, p.OriginalValue))))
             {
                 continue;
             }
@@ -64,7 +70,7 @@ internal static class CascadeRepair
                 entry.Reference(navigation.Name).CurrentValue = principal.Entity;
             }
 
-            foreach (var property in properties)
+            foreach (var property in cleared)
             {
                 property.CurrentValue = property.OriginalValue;
                 property.IsModified = false;
@@ -78,6 +84,11 @@ internal static class CascadeRepair
             }
         }
     }
+
+    private static bool Same(IReadOnlyProperty property, object? left, object? right)
+        => left is null || right is null
+            ? left is null && right is null
+            : property.GetKeyValueComparer() is { } comparer ? comparer.Equals(left, right) : Equals(left, right);
 
     /// <summary>The principal among <paramref name="principals" /> whose key is <paramref name="values" />.</summary>
     internal static EntityEntry? Find(IForeignKey foreignKey, object?[] values, IEnumerable<EntityEntry> principals)
@@ -93,7 +104,9 @@ internal static class CascadeRepair
             var matches = true;
             for (var i = 0; i < key.Count && matches; i++)
             {
-                matches = Equals(candidate.Property(key[i].Name).CurrentValue, values[i]);
+                // With EF's own key comparer, as its fixup matched them: a case-insensitive key holds ABC
+                // on the principal and abc on its dependent.
+                matches = Same(key[i], candidate.Property(key[i].Name).CurrentValue, values[i]);
             }
 
             if (matches)
