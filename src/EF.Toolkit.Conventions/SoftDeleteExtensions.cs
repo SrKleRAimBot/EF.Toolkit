@@ -81,8 +81,13 @@ public static class SoftDeleteExtensions
         }
         else if (entry.State == EntityState.Deleted)
         {
-            // A Remove() and a Restore() before one save cancel out.
+            // A Remove() and a Restore() before one save cancel out — including the foreign keys of
+            // loaded optional dependents Remove() nulled under Immediate cascade timing.
             entry.State = EntityState.Unchanged;
+            if (context.ChangeTracker.CascadeDeleteTiming == CascadeTiming.Immediate)
+            {
+                CascadeRepair.RestoreNulledForeignKeys(context, [entry]);
+            }
         }
 
         // Remove() marked the owned parts deleted along with the entity; undoing it undoes theirs.

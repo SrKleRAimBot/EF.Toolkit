@@ -191,6 +191,27 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Restore_after_Remove_puts_back_the_keys_Remove_nulled_on_loaded_dependents()
+    {
+        // Under Immediate timing Remove() nulled each loaded post's AuthorId at once; cancelling the
+        // removal must cancel that too, or the save unlinks posts from an author who stays.
+        await using (var context = _db.Context())
+        {
+            var author = await context.Authors.Include(a => a.Posts).SingleAsync(Ct);
+            context.Authors.Remove(author);
+            author.Posts.ShouldAllBe(p => p.AuthorId == null);   // EF's fixup, before any save
+
+            context.Restore(author);
+            author.Posts.ShouldAllBe(p => p.AuthorId == 1);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.CountAsync(p => p.AuthorId == 1, Ct)).ShouldBe(2);
+        (await fresh.Authors.AnyAsync(Ct)).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Restore_after_Remove_keeps_a_nested_owned_collection()
     {
         await using (var context = _db.Context())

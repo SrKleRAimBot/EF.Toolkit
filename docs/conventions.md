@@ -110,7 +110,11 @@ db.HardDelete(post);                   // a real DELETE — erasure requests, pu
 await db.SaveChangesAsync();
 ```
 
-`Restore()` after `Remove()` in the same unit of work simply cancels it.
+`Restore()` after `Remove()` in the same unit of work cancels it: the entity, its owned data, and the
+foreign keys `Remove()` nulled on loaded optional dependents are all put back. Dependents that
+`Remove()` cascade-*deleted* (required relationships) are not revived, since nothing tells them apart
+from ones the application removed itself; use `CascadeTiming.OnSaveChanges` (below) where that matters,
+under which `Remove()` touches no dependent until the save.
 
 ### Set-based
 
