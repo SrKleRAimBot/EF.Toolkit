@@ -539,6 +539,95 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     // A failed save
     // ---------------------------------------------------------------------------------------
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_suppressed_concurrency_conflict_leaves_the_rest_of_the_save_as_soft_deletes(bool async)
+    {
+        // Another interceptor may suppress a conflict — the row is already gone, say — and EF then goes
+        // on to complete the save. Restoring the tracker when the conflict was first reported undid the
+        // soft delete of comment 1, which EF then accepted as a real one.
+        await using var context = _db.Context(interceptors: new SuppressConcurrency());
+        var comments = await context.Comments.OrderBy(c => c.Id).ToListAsync(Ct);
+
+        await using (var other = _db.Context())
+        {
+            (await other.Comments.SingleAsync(c => c.Id == 2, Ct)).Version = 1;
+            await other.SaveChangesAsync(Ct);
+        }
+
+        context.Comments.RemoveRange(comments);
+        if (async)
+        {
+            await context.SaveChangesAsync(Ct);
+        }
+        else
+        {
+            context.SaveChanges();
+        }
+
+        context.Entry(comments[0]).State.ShouldBe(EntityState.Detached);
+        comments[0].DeletedAt.ShouldNotBeNull();
+
+        await using var fresh = _db.Context();
+        (await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 1, Ct)).DeletedAt.ShouldNotBeNull();
+    }
+
+    private sealed class SuppressConcurrency : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        public override Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult ThrowingConcurrencyException(
+            Microsoft.EntityFrameworkCore.Diagnostics.ConcurrencyExceptionEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult result)
+            => Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult.Suppress();
+
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult> ThrowingConcurrencyExceptionAsync(
+            Microsoft.EntityFrameworkCore.Diagnostics.ConcurrencyExceptionEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult result,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult.Suppress());
+    }
+
+    [Fact]
+    public async Task A_soft_delete_saved_without_accepting_is_still_a_soft_delete_on_the_retry()
+    {
+        // SaveChanges(false), roll back, save again: the retry used to send a plain update and leave the
+        // entity tracked, where Find could still return it.
+        await using var context = _db.Context();
+        var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+        context.Comments.Remove(comment);
+
+        await using (var transaction = await context.Database.BeginTransactionAsync(Ct))
+        {
+            await context.SaveChangesAsync(acceptAllChangesOnSuccess: false, Ct);
+            await transaction.RollbackAsync(Ct);
+        }
+
+        _db.Clock.Now = BlogDatabase.Start.AddHours(1);
+        await context.SaveChangesAsync(Ct);
+
+        context.Entry(comment).State.ShouldBe(EntityState.Detached);
+        await using var fresh = _db.Context();
+        (await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct)).DeletedAt
+            .ShouldBe(BlogDatabase.Start.AddHours(1).UtcDateTime);
+    }
+
+    [Fact]
+    public async Task HardDelete_deletes_the_dependents_its_cascade_reaches_for_real_too()
+    {
+        // Comments are soft-deletable, but cascaded from a hard-deleted post. Converted to updates, their
+        // rows stayed and — with ClientCascade, no cascade in the database — the post's DELETE failed.
+        await using (var context = _db.Context())
+        {
+            var post = await context.Posts.Include(p => p.Comments).SingleAsync(p => p.Id == 1, Ct);
+            context.HardDelete(post);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Posts.IncludeDeleted().AnyAsync(p => p.Id == 1, Ct)).ShouldBeFalse();
+        (await fresh.Comments.IncludeDeleted().AnyAsync(Ct)).ShouldBeFalse();
+    }
+
     [Fact]
     public async Task A_concurrency_conflict_leaves_the_delete_as_the_application_made_it_and_a_retry_converts_it_again()
     {

@@ -56,23 +56,6 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
 
     public override void SaveChangesFailed(DbContextErrorEventData eventData) => Failed();
 
-    // EF reports an optimistic-concurrency conflict here rather than through SaveChangesFailed, so
-    // without these the tracker kept the half-converted update: a caller refreshing the token and
-    // retrying then sent it as a plain update, and the soft-deleted entity stayed tracked.
-    public override InterceptionResult ThrowingConcurrencyException(
-        ConcurrencyExceptionEventData eventData, InterceptionResult result)
-    {
-        Failed();
-        return result;
-    }
-
-    public override ValueTask<InterceptionResult> ThrowingConcurrencyExceptionAsync(
-        ConcurrencyExceptionEventData eventData, InterceptionResult result, CancellationToken cancellationToken = default)
-    {
-        Failed();
-        return ValueTask.FromResult(result);
-    }
-
     public override Task SaveChangesFailedAsync(
         DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
     {
@@ -98,6 +81,15 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
             return;
         }
 
+        // EF raises an optimistic-concurrency failure through DbContext.SaveChangesFailed but not through
+        // the interceptor's SaveChangesFailed — and only once nothing has suppressed it, which is the
+        // point: restoring the tracker any earlier would undo a save that went on to succeed.
+        if (!state.SubscribedToFailures)
+        {
+            context.SaveChangesFailed += (_, _) => Failed();
+            state.SubscribedToFailures = true;
+        }
+
         if (context.ChangeTracker.AutoDetectChangesEnabled)
         {
             context.ChangeTracker.DetectChanges();
@@ -105,6 +97,21 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
 
         var now = options.Clock.GetUtcNow();
         state.Converted.Clear();
+
+        // Conversions a previous SaveChanges(acceptAllChangesOnSuccess: false) made and never accepted:
+        // they are still soft deletes, to be stamped afresh and detached once a save accepts them.
+        foreach (var (entry, property, before) in state.Pending)
+        {
+            if (entry.State == EntityState.Modified && ConventionMetadata.FindSoftDelete(entry.Metadata) is { } mapping)
+            {
+                var value = entry.Property(property);
+                value.CurrentValue = ConventionMetadata.DeletedValue(mapping, now);
+                value.IsModified = true;
+                state.Converted.Add((entry, property, before));
+            }
+        }
+
+        state.Pending.Clear();
 
         if (options.SoftDelete)
         {
@@ -120,6 +127,7 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
     private void ConvertDeletes(DbContext context, DateTimeOffset now)
     {
         var entries = context.ChangeTracker.Entries().ToList();
+        PropagateHardDeletes(entries);
 
         foreach (var entry in entries)
         {
@@ -185,6 +193,45 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
         CascadeRepair.RestoreNulledForeignKeys(context, state.Converted.Select(c => c.Entry).ToList());
     }
 
+    // Remove() cascades to loaded required dependents, but only the principal carries the HardDelete()
+    // mark. Converting a cascaded dependent to an update would keep its row — and under ClientCascade,
+    // with no cascade in the database, the principal's DELETE would then fail on that row's foreign key.
+    // A dependent deleted by cascade from a hard-deleted principal is deleted for real too, all the way
+    // down.
+    private void PropagateHardDeletes(List<EntityEntry> entries)
+    {
+        var hard = entries.Where(e => e.State == EntityState.Deleted && state.IsHardDelete(e.Entity)).ToList();
+        for (var changed = hard.Count > 0; changed;)
+        {
+            changed = false;
+            foreach (var entry in entries)
+            {
+                if (entry.State != EntityState.Deleted || state.IsHardDelete(entry.Entity))
+                {
+                    continue;
+                }
+
+                foreach (var foreignKey in entry.Metadata.GetForeignKeys())
+                {
+                    if (foreignKey.IsOwnership
+                        || foreignKey.DeleteBehavior is not (DeleteBehavior.Cascade or DeleteBehavior.ClientCascade))
+                    {
+                        continue;
+                    }
+
+                    var values = foreignKey.Properties.Select(p => entry.Property(p.Name).CurrentValue).ToArray();
+                    if (CascadeRepair.Find(foreignKey, values, hard) is not null)
+                    {
+                        state.MarkHardDelete(entry.Entity);
+                        hard.Add(entry);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     private static void Stamp(DbContext context, DateTimeOffset now)
     {
         foreach (var entry in context.ChangeTracker.Entries())
@@ -245,14 +292,20 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
 
     private void Completed(DbContext? context)
     {
-        foreach (var (entry, _, _) in state.Converted)
+        foreach (var converted in state.Converted)
         {
             // Stock EF detaches an entity once its delete is saved. The row is still there here, but
             // as far as the application is concerned it is gone — the query filter says so — and a
             // tracked instance would let it reappear through identity resolution.
-            if (entry.State == EntityState.Unchanged)
+            if (converted.Entry.State == EntityState.Unchanged)
             {
-                entry.State = EntityState.Detached;
+                converted.Entry.State = EntityState.Detached;
+            }
+            else if (converted.Entry.State == EntityState.Modified)
+            {
+                // SaveChanges(acceptAllChangesOnSuccess: false): written but not accepted, so the caller
+                // may roll back and save again. Kept, so that save still treats it as a soft delete.
+                state.Pending.Add(converted);
             }
         }
 

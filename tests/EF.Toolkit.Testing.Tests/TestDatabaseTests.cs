@@ -40,6 +40,9 @@ public sealed class TestDatabaseTests
             }
         });
 
+        // Background, so that if the deadlock ever returns the timeout fails this test instead of the
+        // blocked thread keeping the test host alive.
+        thread.IsBackground = true;
         thread.Start();
         thread.Join(TimeSpan.FromSeconds(30)).ShouldBeTrue("Create() deadlocked on the async seeder.");
         failure.ShouldBeNull();

@@ -98,6 +98,10 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
             b.OwnsOne(p => p.Seo);
             b.HasIndex(p => p.Title).IsUnique();
             b.HasOne(p => p.Author).WithMany(a => a.Posts).HasForeignKey(p => p.AuthorId).IsRequired(false);
+
+            // ClientCascade: EF deletes loaded comments with their post, and the database has no cascade
+            // of its own — a hard-deleted post's DELETE fails if any comment row is left behind.
+            b.HasMany(p => p.Comments).WithOne().HasForeignKey(c => c.PostId).OnDelete(DeleteBehavior.ClientCascade);
         });
 
         modelBuilder.Entity<FeaturedPost>();
@@ -137,16 +141,29 @@ public sealed class BlogDatabase : IAsyncDisposable
     {
         var database = new BlogDatabase();
         await database._connection.OpenAsync();
+
+        // EF turns foreign keys on only for connections it opens itself; this one is opened here and
+        // shared, so without this the suite would never notice a write that breaks a constraint.
+        await using (var pragma = database._connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA foreign_keys = ON;";
+            await pragma.ExecuteNonQueryAsync();
+        }
         await using var context = database.Context();
         await context.Database.EnsureCreatedAsync();
         return database;
     }
 
-    public BlogContext Context(int? tenant = null, Action<ConventionsOptionsBuilder>? configure = null, bool conventions = true)
+    public BlogContext Context(
+        int? tenant = null,
+        Action<ConventionsOptionsBuilder>? configure = null,
+        bool conventions = true,
+        params IInterceptor[] interceptors)
     {
         var builder = new DbContextOptionsBuilder<BlogContext>()
             .UseSqlite(_connection)
             .AddInterceptors(new CommandRecorder(Commands))
+            .AddInterceptors(interceptors)
             // Every test has a clock of its own, and the clock is part of the options EF caches
             // service providers by — so this suite creates far more of them than an application would.
             .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));

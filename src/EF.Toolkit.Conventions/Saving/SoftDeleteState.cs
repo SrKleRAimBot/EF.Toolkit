@@ -10,6 +10,12 @@ internal sealed class SoftDeleteState
     /// <summary>The deletes the current save turned into updates, with the value each flag had before.</summary>
     internal List<(EntityEntry Entry, string Property, object? Before)> Converted { get; } = [];
 
+    /// <summary>Conversions a save wrote without accepting, carried to the next save.</summary>
+    internal List<(EntityEntry Entry, string Property, object? Before)> Pending { get; } = [];
+
+    /// <summary>Whether the interceptor has subscribed to this context's <c>SaveChangesFailed</c> event.</summary>
+    internal bool SubscribedToFailures { get; set; }
+
     /// <summary>Marks <paramref name="entity" /> to be deleted for real by the next save.</summary>
     internal void MarkHardDelete(object entity) => _hardDeletes.Add(entity);
 
