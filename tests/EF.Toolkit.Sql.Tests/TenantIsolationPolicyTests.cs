@@ -18,8 +18,8 @@ public sealed class TenantIsolationPolicyTests
                 AS RESTRICTIVE
                 FOR ALL
                 TO PUBLIC
-                USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
-                WITH CHECK ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
+                USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AND CAST(CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AS text) = NULLIF(current_setting('app.tenant_id', true), ''))
+                WITH CHECK ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AND CAST(CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AS text) = NULLIF(current_setting('app.tenant_id', true), ''))
             """,
             "DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"",
             """
@@ -133,7 +133,7 @@ public sealed class TenantIsolationPolicyTests
             RETURNS TABLE
             WITH SCHEMABINDING
             AS
-            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int)
+            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) = CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000))
             """,
             """
             CREATE SECURITY POLICY [sales].[Orders_tenant_isolation]

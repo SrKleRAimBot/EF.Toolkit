@@ -239,12 +239,21 @@ ALTER TABLE "Orders" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "Orders" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "Orders_tenant_isolation" ON "Orders"
     AS RESTRICTIVE FOR ALL TO PUBLIC
-    USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer))
-    WITH CHECK ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer));
+    USING ("TenantId" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer)
+           AND CAST(CAST(NULLIF(current_setting('app.tenant_id', true), '') AS integer) AS text)
+               = NULLIF(current_setting('app.tenant_id', true), ''))
+    WITH CHECK (/* the same */);
 CREATE POLICY "Orders_tenant_isolation_access" ON "Orders"
     AS PERMISSIVE FOR ALL TO PUBLIC
     USING (true) WITH CHECK (true);
 ```
+
+The second half of each comparison makes the conversion from the session value **lossless**. Casting
+alone would truncate: with a `varchar(8)` tenant column, a session carrying `acme-dev2` would match
+`acme-dev`'s rows, and on SQL Server a string holding a GUID followed by anything converts to that
+GUID. The session value must read back as exactly the text that was set, so the value you put in the
+session context should be the tenant value's own canonical text — `1`, not `01`; a GUID as .NET formats
+it — which is what `UseSessionContext` writes for the CLR value you return.
 
 The tenant check is **restrictive**. PostgreSQL ORs permissive policies together, so a permissive
 tenant check would be bypassed by any other permissive policy on the table — a reporting policy with
@@ -279,7 +288,9 @@ On **SQL Server** it renders a schema-bound predicate function and a security po
 ```sql
 CREATE OR ALTER FUNCTION [dbo].[Orders_tenant_isolation_predicate](@tenant int)
 RETURNS TABLE WITH SCHEMABINDING
-AS RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'app.tenant_id') AS int);
+AS RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'app.tenant_id') AS int)
+    AND CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS nvarchar(4000))
+        = CAST(SESSION_CONTEXT(N'app.tenant_id') AS nvarchar(4000));
 
 CREATE SECURITY POLICY [dbo].[Orders_tenant_isolation]
     ADD FILTER PREDICATE [dbo].[Orders_tenant_isolation_predicate]([TenantId]) ON [dbo].[Orders],

@@ -221,6 +221,44 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_session_value_longer_than_the_tenant_column_reaches_no_tenant()
+    {
+        // Casting the session value to varchar(8) truncated 'acme-dev2' to 'acme-dev', so the longer
+        // value read, changed and deleted the shorter tenant's rows.
+        var labels = new TenantIsolationPolicy("Labels", "Tenant", "app.tenant_key", "varchar(8)", policyName: "labels_iso");
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Labels\" (\"Id\" int PRIMARY KEY, \"Tenant\" varchar(8) NOT NULL); "
+                + "INSERT INTO \"Labels\" VALUES (1, 'acme-dev'); "
+                + $"ALTER TABLE \"Labels\" OWNER TO {PostgreSqlFixture.AppUser};",
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(labels);
+
+            async Task<long> CountAs(string tenant, string sql)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set("app.tenant_key", () => tenant))
+                    .Options);
+                return sql.StartsWith("SELECT", StringComparison.Ordinal)
+                    ? await context.Database.SqlQueryRaw<long>(sql).SingleAsync(Token)
+                    : await context.Database.ExecuteSqlRawAsync(sql, Token);
+            }
+
+            (await CountAs("acme-dev", "SELECT COUNT(*) AS \"Value\" FROM \"Labels\"")).ShouldBe(1);
+            (await CountAs("acme-dev2", "SELECT COUNT(*) AS \"Value\" FROM \"Labels\"")).ShouldBe(0);
+            (await CountAs("acme-dev2", "UPDATE \"Labels\" SET \"Id\" = 2")).ShouldBe(0);
+            (await CountAs("acme-dev2", "DELETE FROM \"Labels\"")).ShouldBe(0);
+            (await CountAs("acme-dev", "SELECT COUNT(*) AS \"Value\" FROM \"Labels\" WHERE \"Id\" = 1")).ShouldBe(1);
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Labels\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

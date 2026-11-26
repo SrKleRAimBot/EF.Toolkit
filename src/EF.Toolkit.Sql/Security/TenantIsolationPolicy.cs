@@ -164,8 +164,14 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
 
         // NULLIF because a setting that was set and then cleared reads back as '' rather than NULL,
         // and casting '' to integer or uuid is an error on every query against the table.
-        var tenant = $"CAST(NULLIF(current_setting({SqlSyntax.Literal(SqlDialect.PostgreSql, SessionKey)}, true), '') AS {ColumnStoreType})";
-        var condition = $"{SqlSyntax.Quote(SqlDialect.PostgreSql, TenantColumn)} = {tenant}";
+        var setting = $"NULLIF(current_setting({SqlSyntax.Literal(SqlDialect.PostgreSql, SessionKey)}, true), '')";
+        var tenant = $"CAST({setting} AS {ColumnStoreType})";
+
+        // The cast must also be lossless. Casting to varchar(8) truncates 'acme-dev2' to 'acme-dev',
+        // and a session carrying the longer value would match the shorter tenant's rows. Requiring the
+        // cast to read back as the very text that was set refuses every conversion that loses
+        // anything, while the column side of the first comparison stays index-friendly.
+        var condition = $"{SqlSyntax.Quote(SqlDialect.PostgreSql, TenantColumn)} = {tenant} AND CAST({tenant} AS text) = {setting}";
 
         // Restrictive: PostgreSQL ORs permissive policies together, so a permissive tenant check
         // would be bypassed by any other permissive policy on the table — a reporting policy with
@@ -220,9 +226,20 @@ public sealed class TenantIsolationPolicy : IDatabaseObject
             Table,
             PolicyName + "_predicate",
             [new SqlServerPredicateParameter("tenant", ColumnStoreType, TenantColumn)],
-            $"@tenant = CAST(SESSION_CONTEXT({SqlSyntax.Literal(SqlDialect.SqlServer, SessionKey)}) AS {ColumnStoreType})",
+            SqlServerCondition(),
             Schema,
             block: SqlServerBlockOperations.AfterInsert | SqlServerBlockOperations.AfterUpdate);
+    }
+
+    // As on PostgreSQL, the conversion from the session value must be lossless: a string holding a GUID
+    // followed by extra text converts to that GUID, and an nvarchar(8) column truncates a longer
+    // value — either way matching a different tenant's rows. The converted value has to read back as
+    // the session value's own text.
+    private string SqlServerCondition()
+    {
+        var value = $"SESSION_CONTEXT({SqlSyntax.Literal(SqlDialect.SqlServer, SessionKey)})";
+        var tenant = $"CAST({value} AS {ColumnStoreType})";
+        return $"@tenant = {tenant} AND CAST({tenant} AS nvarchar(4000)) = CAST({value} AS nvarchar(4000))";
     }
 
     private static SqlFeatureNotSupportedException NotSupported(SqlDialect dialect)
