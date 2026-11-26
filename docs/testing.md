@@ -431,7 +431,8 @@ backing field EF maps.
 - **A SQL Server table under an enabled row-level-security filter is refused.** The filter applies to
   `DELETE` as to `SELECT`, so the reset would remove only the rows the session can see and report
   success. Turn the policy off for the reset (`ALTER SECURITY POLICY ... WITH (STATE = OFF)`) or
-  exclude the table.
+  exclude the table. The check needs to see every policy, so the reset also refuses a login without
+  `VIEW DEFINITION` on the database (db_owner has it): to such a login a policy can be invisible.
 - **A transaction counts when EF or ADO.NET knows about it** — `Database.BeginTransaction`,
   `UseTransaction`, an isolated scope, or an ambient `TransactionScope`. One opened by sending
   `START TRANSACTION` as SQL text is invisible to EF itself, whose own `SaveChanges` would end it the

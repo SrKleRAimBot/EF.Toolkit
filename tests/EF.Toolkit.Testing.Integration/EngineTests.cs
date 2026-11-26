@@ -545,6 +545,39 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
     }
 
     [Fact]
+    public async Task A_login_that_cannot_see_security_policies_is_refused_rather_than_trusted()
+    {
+        // Catalog views show only what the login may see: without VIEW DEFINITION the policy check above
+        // would find nothing, and a filtered table would be half-reset with success reported.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.OpenConnectionAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE USER limited_user WITHOUT LOGIN; GRANT SELECT, INSERT, UPDATE, DELETE, ALTER ON SCHEMA::dbo TO limited_user;", Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("EXECUTE AS USER = 'limited_user'", Ct);
+            try
+            {
+                (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct)))
+                    .Message.ShouldContain("cannot see the database's row-level security policies");
+            }
+            finally
+            {
+                await context.Database.ExecuteSqlRawAsync("REVERT", Ct);
+            }
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS limited_user;", Ct);
+        }
+    }
+
+    [Fact]
     public async Task Under_a_non_dbo_default_schema_the_check_follows_the_table_the_delete_resolves_to()
     {
         // For a user whose default schema is app, unqualified Customers is app.Customers. Checking
@@ -565,6 +598,7 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
                 CREATE USER reset_user WITHOUT LOGIN WITH DEFAULT_SCHEMA = app;
                 GRANT CONTROL ON SCHEMA::app TO reset_user;
                 GRANT CONTROL ON SCHEMA::dbo TO reset_user;
+                GRANT VIEW DEFINITION TO reset_user;
                 """,
                 Ct);
 

@@ -93,6 +93,22 @@ internal static class DatabaseForeignKeys
           AND pr.target_object_id IN (SELECT id FROM [plan] WHERE id IS NOT NULL);
         """;
 
+    /// <summary>
+    ///     SQL Server: 1 when the login can see every security policy in the database, which
+    ///     <see cref="SqlServerFilteredTables" /> needs to be trusted.
+    /// </summary>
+    /// <remarks>
+    ///     Catalog views show only what the login may see. Without database-wide <c>VIEW DEFINITION</c>
+    ///     (or SQL Server 2022's narrower <c>VIEW SECURITY DEFINITION</c>), a policy filtering a reset
+    ///     table can be invisible, the check finds nothing, and the reset deletes only the rows the
+    ///     session can see. Either permission is reported through <c>HAS_PERMS_BY_NAME</c>, which answers
+    ///     <c>NULL</c> for a permission the server does not know — hence the <c>COALESCE</c>.
+    /// </remarks>
+    internal const string SqlServerCanSeePolicies =
+        "SELECT CASE WHEN COALESCE(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION'), 0) = 1 "
+        + "OR COALESCE(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW SECURITY DEFINITION'), 0) = 1 "
+        + "THEN 1 ELSE 0 END;";
+
     private static string SqlLiteral(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
 
     private static string SqlServerName(ResetTable table)

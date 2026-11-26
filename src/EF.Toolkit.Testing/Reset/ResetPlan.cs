@@ -146,8 +146,17 @@ internal sealed class ResetPlan
     ///     Refuses a SQL Server reset of a table an enabled row-level-security filter applies to, from rows
     ///     produced by <see cref="DatabaseForeignKeys.SqlServerFilteredTables" />.
     /// </summary>
-    internal static void RefuseFilteredTables(IEnumerable<DatabaseReference> filtered)
+    internal static void RefuseFilteredTables(IEnumerable<DatabaseReference> filtered, bool canSeePolicies = true)
     {
+        if (!canSeePolicies)
+        {
+            throw new InvalidOperationException(
+                "Cannot reset: this login cannot see the database's row-level security policies, so it cannot "
+                + "tell whether one filters a table being reset — and a filter applies to DELETE, which would "
+                + "then remove only the rows this session can see and report success. Run the reset as a login "
+                + "with VIEW DEFINITION on the database (db_owner has it), or GRANT VIEW DEFINITION TO it.");
+        }
+
         if (filtered.FirstOrDefault() is { } table)
         {
             throw new InvalidOperationException(

@@ -66,9 +66,13 @@ public static class DatabaseResetExtensions
 
                 if (engine == DatabaseEngine.SqlServer)
                 {
+                    var canSee = Convert.ToInt64(
+                        await ScalarAsync(connection, transaction, DatabaseForeignKeys.SqlServerCanSeePolicies, cancellationToken).ConfigureAwait(false),
+                        System.Globalization.CultureInfo.InvariantCulture) == 1;
                     ResetPlan.RefuseFilteredTables(
                         await ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.SqlServerFilteredTables(plan), cancellationToken)
-                            .ConfigureAwait(false));
+                            .ConfigureAwait(false),
+                        canSee);
                 }
 
                 if (engine == DatabaseEngine.PostgreSql)
@@ -136,8 +140,11 @@ public static class DatabaseResetExtensions
 
                 if (engine == DatabaseEngine.SqlServer)
                 {
+                    var canSee = Convert.ToInt64(
+                        Scalar(connection, transaction, DatabaseForeignKeys.SqlServerCanSeePolicies),
+                        System.Globalization.CultureInfo.InvariantCulture) == 1;
                     ResetPlan.RefuseFilteredTables(
-                        ReadReferences(connection, transaction, DatabaseForeignKeys.SqlServerFilteredTables(plan)));
+                        ReadReferences(connection, transaction, DatabaseForeignKeys.SqlServerFilteredTables(plan)), canSee);
                 }
 
                 if (engine == DatabaseEngine.PostgreSql)
