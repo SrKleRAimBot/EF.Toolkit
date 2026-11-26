@@ -33,13 +33,24 @@ internal sealed class SessionContextInterceptor : DbConnectionInterceptor
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(eventData);
 
-        if (Prepare(eventData) is not { } plan)
+        try
         {
-            return;
-        }
+            if (Prepare(eventData) is not { } plan)
+            {
+                return;
+            }
 
-        using var command = SessionContextSql.CreateCommand(connection, plan.Dialect, plan.Values);
-        command.ExecuteNonQuery();
+            using var command = SessionContextSql.CreateCommand(connection, plan.Dialect, plan.Values);
+            command.ExecuteNonQuery();
+        }
+        catch
+        {
+            // The physical open already succeeded. Left open, EF would treat the connection as ready
+            // and never call this interceptor for it again — the next query on the context would run
+            // with no session values, which row-level security answers with no rows at all.
+            connection.Close();
+            throw;
+        }
     }
 
     public override async Task ConnectionOpenedAsync(
@@ -50,15 +61,25 @@ internal sealed class SessionContextInterceptor : DbConnectionInterceptor
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(eventData);
 
-        if (Prepare(eventData) is not { } plan)
+        try
         {
-            return;
-        }
+            if (Prepare(eventData) is not { } plan)
+            {
+                return;
+            }
 
-        var command = SessionContextSql.CreateCommand(connection, plan.Dialect, plan.Values);
-        await using (command.ConfigureAwait(false))
+            var command = SessionContextSql.CreateCommand(connection, plan.Dialect, plan.Values);
+            await using (command.ConfigureAwait(false))
+            {
+                await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
         {
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            // As in the synchronous path: an open connection without its session values must not be
+            // left for EF to reuse.
+            await connection.CloseAsync().ConfigureAwait(false);
+            throw;
         }
     }
 

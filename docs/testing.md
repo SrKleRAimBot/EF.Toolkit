@@ -428,6 +428,10 @@ backing field EF maps.
 - **Excluding a table that references a reset one is refused** before anything runs, on every engine:
   the reset would either delete the kept rows with their principals or orphan them. Exclude the
   principal too, or stop excluding the dependent.
+- **A transaction counts when EF or ADO.NET knows about it** — `Database.BeginTransaction`,
+  `UseTransaction`, an isolated scope, or an ambient `TransactionScope`. One opened by sending
+  `START TRANSACTION` as SQL text is invisible to EF itself, whose own `SaveChanges` would end it the
+  same way; on MySQL a reset would commit it. Start transactions through EF.
 - **MySQL cannot restart identity inside a transaction.** `TRUNCATE` and `ALTER TABLE` both commit
   implicitly, so inside an isolated scope the reset deletes and the counters carry on.
 - **SQL Server re-enables every constraint on a cyclic table**, including one that was disabled on

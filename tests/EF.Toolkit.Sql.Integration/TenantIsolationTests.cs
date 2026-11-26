@@ -204,6 +204,23 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_resolver_that_fails_once_does_not_leave_the_next_query_without_its_tenant()
+    {
+        // The physical open had succeeded before the resolver threw. Left open, EF reused the connection
+        // without calling the interceptor again, and the retry ran with no tenant — and saw no rows.
+        var calls = 0;
+        await using var context = AppContext(() => ++calls == 1 ? throw new InvalidOperationException("no tenant yet") : 1);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => context.Documents.CountAsync(Token));
+
+        (await TitlesAsync(context)).ShouldBe(["one-a", "one-b"]);
+
+        calls = 0;
+        Should.Throw<InvalidOperationException>(() => context.Documents.Count());
+        context.Documents.Count().ShouldBe(2);
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

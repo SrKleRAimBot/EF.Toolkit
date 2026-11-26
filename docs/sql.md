@@ -407,7 +407,12 @@ matters most when replacing a definition, which is a drop followed by a create: 
 isolation never shows another session a moment with the tenant policy gone and the grant still in
 place. MySQL commits implicitly before every DDL statement, so there the statements run one by one,
 and a call made inside a transaction is refused before anything runs — it would otherwise commit the
-work already done in that transaction. `IDatabaseObject` is the interface all of the definitions
+work already done in that transaction.
+
+"Inside a transaction" means one EF or ADO.NET knows about: `Database.BeginTransaction`,
+`Database.UseTransaction`, or an ambient `TransactionScope`. A transaction opened by sending
+`START TRANSACTION` as SQL text is invisible to EF itself — its own `SaveChanges` would end it the same
+way — and so to these helpers; start transactions through EF when they need protecting. `IDatabaseObject` is the interface all of the definitions
 share; `migrationBuilder.CreateDatabaseObject` / `DropDatabaseObject` take any of them, including your
 own.
 

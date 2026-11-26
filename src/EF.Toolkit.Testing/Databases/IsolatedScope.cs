@@ -19,8 +19,11 @@ namespace EFToolkit.Testing;
 ///         inside one test.
 ///     </para>
 ///     <para>
-///         <c>SaveChanges</c> inside the scope uses a savepoint rather than a transaction of its own,
-///         and so does a nested <c>BeginTransaction</c> on providers that refuse it outright.
+///         <c>SaveChanges</c> inside the scope joins the scope's transaction rather than starting one
+///         of its own. Code under test that calls <c>Database.BeginTransaction</c> itself is refused by
+///         EF, since a context can hold only one transaction; for that code, create savepoints on
+///         <c>Database.CurrentTransaction</c> instead (<c>CreateSavepoint</c> /
+///         <c>RollbackToSavepoint</c>), or reset the database between tests rather than isolating.
 ///     </para>
 /// </remarks>
 public sealed class IsolatedScope<TContext> : IAsyncDisposable, IDisposable
