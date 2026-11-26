@@ -133,7 +133,7 @@ public sealed class TenantIsolationPolicyTests
             RETURNS TABLE
             WITH SCHEMABINDING
             AS
-            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND (CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS sql_variant) = SESSION_CONTEXT(N'TenantId') OR (SQL_VARIANT_PROPERTY(SESSION_CONTEXT(N'TenantId'), 'BaseType') IN ('nvarchar', 'varchar', 'nchar', 'char') AND CAST(CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) AS varbinary(8000)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(8000))))
+            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND (CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS sql_variant) = SESSION_CONTEXT(N'TenantId') OR (SQL_VARIANT_PROPERTY(SESSION_CONTEXT(N'TenantId'), 'BaseType') IN ('nvarchar', 'varchar', 'nchar', 'char') AND CAST(CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) AS varbinary(8000)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(8000)) AND DATALENGTH(CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000))) = DATALENGTH(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)))))
             """,
             """
             CREATE SECURITY POLICY [sales].[Orders_tenant_isolation]
@@ -184,7 +184,16 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("national character varying (20)")]
     public void SqlServer_compares_a_character_tenant_byte_for_byte_whatever_the_database_collation(string storeType)
         => new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1]
-            .ShouldContain($"AND CAST(@tenant AS varbinary(max)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS {storeType}) AS varbinary(max))");
+            .ShouldContain($"AND CAST(@tenant AS varbinary(max)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS {storeType}) AS varbinary(max)) "
+                + $"AND DATALENGTH(@tenant) = DATALENGTH(CAST(SESSION_CONTEXT(N'TenantId') AS {storeType}))");
+
+    [Theory]
+    [InlineData("nvarchar(max)")]
+    [InlineData("varchar(10)")]
+    public void SqlServer_never_converts_a_character_tenant_to_sql_variant(string storeType)
+        // nvarchar(max) cannot be converted to sql_variant at all, and for a string the variant comparison pads.
+        => new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1]
+            .ShouldNotContain("AS sql_variant)");
 
     [Theory]
     [InlineData("int")]

@@ -168,4 +168,32 @@ public sealed class SqlServerTenantIsolationTests(SqlServerFixture fixture)
             await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Desks", Token);
         }
     }
+
+    [Theory]
+    [InlineData("nvarchar(4)")]
+    [InlineData("nvarchar(max)")]
+    public async Task A_string_tenant_matches_only_its_exact_text_and_any_width_of_column_works(string storeType)
+    {
+        // nvarchar(4) truncated "acme " to "acme", and the padded sql_variant comparison let it read acme's
+        // rows; nvarchar(max) could not be converted to sql_variant, so the policy failed to create.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        var policy = new TenantIsolationPolicy("Shelves", "Tenant", "TenantText", storeType, policyName: "shelves_iso");
+
+        await using var admin = fixture.CreateContext();
+        var create = "CREATE TABLE Shelves (Id int PRIMARY KEY, Tenant " + storeType + " NOT NULL); INSERT INTO Shelves VALUES (1, N'acme');";
+        await admin.Database.ExecuteSqlRawAsync(create, Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(policy);
+
+            (await CountAsync("Shelves", "TenantText", "acme")).ShouldBe(1);
+            (await CountAsync("Shelves", "TenantText", "acme ")).ShouldBe(0);
+            (await CountAsync("Shelves", "TenantText", "acm")).ShouldBe(0);
+        }
+        finally
+        {
+            await admin.Database.DropDatabaseObjectsAsync(policy);
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Shelves", Token);
+        }
+    }
 }

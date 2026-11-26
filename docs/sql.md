@@ -274,10 +274,13 @@ equality ignores trailing spaces. There the converted value must either equal th
 `sql_variant`, which compares a typed value by value (`decimal` 12.5 equals `decimal(10,2)` 12.50, but
 never a string with a GUID), or — for a string session value only — read back as its exact text,
 compared as bytes. A typed value never takes the text route, since a `float` 1.00000001 and the `real`
-1 it rounds to both print as `1`. A character tenant column is also compared byte for byte: the
-predicate's parameter takes the database's default collation rather than the column's, so a
-case-insensitive default would otherwise give `acme` the rows of `ACME` too. Tenant keys therefore
-match exactly, case and trailing spaces included. Return
+1 it rounds to both print as `1`. A character tenant column is compared byte for byte, lengths included, and
+only by text: the predicate's parameter takes the database's default collation rather than the
+column's, so a case-insensitive default would otherwise give `acme` the rows of `ACME` too, and a
+string's `sql_variant` comparison ignores trailing spaces, so `acme ` truncated into an `nvarchar(4)`
+column would have read `acme`'s rows. (It also keeps `nvarchar(max)` columns working, which cannot be
+converted to `sql_variant` at all.) Tenant keys therefore match exactly, case and trailing spaces
+included. Return
 the tenant from `UseSessionContext` as its own type (a `Guid`, an `int`, a `decimal`); a string works
 only when it is that value's canonical text, so `12.50` for a `decimal(10,2)` tenant and not `12.5`.
 
@@ -318,7 +321,8 @@ AS RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'app.tenant_
     AND (CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS sql_variant) = SESSION_CONTEXT(N'app.tenant_id')
          OR (SQL_VARIANT_PROPERTY(SESSION_CONTEXT(N'app.tenant_id'), 'BaseType') IN ('nvarchar', 'varchar', 'nchar', 'char')
              AND CAST(CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS nvarchar(4000)) AS varbinary(8000))
-                 = CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS nvarchar(4000)) AS varbinary(8000))));
+                 = CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS nvarchar(4000)) AS varbinary(8000))
+             AND DATALENGTH(CAST(CAST(SESSION_CONTEXT(N'app.tenant_id') AS int) AS nvarchar(4000))) = DATALENGTH(CAST(SESSION_CONTEXT(N'app.tenant_id') AS nvarchar(4000)))));
 
 CREATE SECURITY POLICY [dbo].[Orders_tenant_isolation]
     ADD FILTER PREDICATE [dbo].[Orders_tenant_isolation_predicate]([TenantId]) ON [dbo].[Orders],

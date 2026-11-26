@@ -258,22 +258,37 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
     // A character tenant is also compared byte for byte. The predicate's parameter takes the database's
     // default collation, not the column's, so under a case-insensitive default a binary-collated column
     // holding both "acme" and "ACME" would otherwise give either tenant both sets of rows.
+    //
+    // Bytes are compared with their lengths, because SQL Server pads the shorter of two binary values with
+    // zeros. A character column takes the text route only: a string's sql_variant comparison pads trailing
+    // spaces too (an nvarchar(4) column truncates "acme " to "acme", which then compares equal), a typed
+    // value is of another family and never equal there anyway, and nvarchar(max) cannot be converted to
+    // sql_variant at all. The session value itself is a sql_variant of at most 8000 bytes, so
+    // nvarchar(4000) holds all of it.
     private string SqlServerCondition()
     {
         var value = $"SESSION_CONTEXT({SqlSyntax.Literal(SqlDialect.SqlServer, SessionKey)})";
         var tenant = $"CAST({value} AS {ColumnStoreType})";
-        var exact = IsSqlServerCharacter(ColumnStoreType)
-            ? $" AND CAST(@tenant AS varbinary(max)) = CAST({tenant} AS varbinary(max))"
-            : "";
-        return $"@tenant = {tenant}{exact} AND (CAST({tenant} AS sql_variant) = {value} "
-            + $"OR (SQL_VARIANT_PROPERTY({value}, 'BaseType') IN ('nvarchar', 'varchar', 'nchar', 'char') "
-            + $"AND CAST(CAST({tenant} AS nvarchar(4000)) AS varbinary(8000)) "
-            + $"= CAST(CAST({value} AS nvarchar(4000)) AS varbinary(8000))))";
+        var asText = $"CAST({tenant} AS nvarchar(4000))";
+        var valueText = $"CAST({value} AS nvarchar(4000))";
+        var text = $"(SQL_VARIANT_PROPERTY({value}, 'BaseType') IN ('nvarchar', 'varchar', 'nchar', 'char') "
+            + $"AND CAST({asText} AS varbinary(8000)) = CAST({valueText} AS varbinary(8000)) "
+            + $"AND DATALENGTH({asText}) = DATALENGTH({valueText}))";
+
+        if (IsSqlServerCharacter(ColumnStoreType))
+        {
+            return $"@tenant = {tenant} AND CAST(@tenant AS varbinary(max)) = CAST({tenant} AS varbinary(max)) "
+                + $"AND DATALENGTH(@tenant) = DATALENGTH({tenant}) AND {text}";
+        }
+
+        return $"@tenant = {tenant} AND (CAST({tenant} AS sql_variant) = {value} OR {text})";
     }
 
     private static bool IsSqlServerCharacter(string storeType)
     {
-        var name = Whitespace().Replace(TypeModifier().Replace(storeType, "").Trim(), " ").ToLowerInvariant();
+        var bare = TypeModifier().Replace(storeType, "");
+        bare = MaxModifier().Replace(bare, "");
+        var name = Whitespace().Replace(bare.Trim(), " ").ToLowerInvariant();
         if (name.StartsWith("sys.", StringComparison.Ordinal))
         {
             name = name[4..];
@@ -320,6 +335,9 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
 
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex Whitespace();
+
+    [GeneratedRegex(@"\s*\(\s*max\s*\)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex MaxModifier();
 
     private static SqlFeatureNotSupportedException NotSupported(SqlDialect dialect)
         => SqlFeatureNotSupportedException.For(
