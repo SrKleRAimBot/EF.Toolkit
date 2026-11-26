@@ -19,8 +19,8 @@ namespace EFToolkit.Testing;
 ///     </para>
 ///     <para>
 ///         The shared connection is not thread-safe. Contexts from one database must not run
-///         commands concurrently — give each parallel test its own database, which costs about a
-///         millisecond.
+///         commands concurrently — give each parallel test its own database, which is cheap: nothing
+///         touches the disk.
 ///     </para>
 /// </remarks>
 /// <example>

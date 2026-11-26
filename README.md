@@ -18,6 +18,7 @@ it alongside whatever EF Core version your app already uses.
 | `EF.Toolkit.Audit` | Records who changed what and when, with old and new values per column, into one audit table whose payload is queryable JSON — `jsonb` on PostgreSQL. | [docs/audit.md](docs/audit.md) |
 | `EF.Toolkit.Audit.Bulk` | Joins the two: audits the explicit bulk API, and writes audit entries in bulk. | [docs/audit-bulk.md](docs/audit-bulk.md) |
 | `EF.Toolkit.Query` | Offset and keyset pagination, sorting contracts with a guaranteed total order, composable filters, batched streaming and ambient tracking scopes — plus a development-time advisor for missing indexes. | [docs/query.md](docs/query.md) |
+| `EF.Toolkit.Testing` | Test databases on in-memory SQLite or a real engine, each test in a rolled-back transaction, model-driven data reset, seeding that clears the tracker, a test-data builder, SQL capture for N+1 checks, and model assertions. Framework agnostic. | [docs/testing.md](docs/testing.md) |
 
 The write-side capabilities have a provider package — `.PostgreSQL`, `.SqlServer`, `.MySql` or
 `.Sqlite` — which is the one you install. The bridge and `EF.Toolkit.Query` are provider-neutral.
@@ -27,6 +28,7 @@ dotnet add package EF.Toolkit.Bulk.PostgreSQL
 dotnet add package EF.Toolkit.Audit.PostgreSQL
 dotnet add package EF.Toolkit.Audit.Bulk       # only if you use both
 dotnet add package EF.Toolkit.Query
+dotnet add package EF.Toolkit.Testing          # in test projects
 ```
 
 Each provider package has its own notes on how the capability is executed on that engine, and what
