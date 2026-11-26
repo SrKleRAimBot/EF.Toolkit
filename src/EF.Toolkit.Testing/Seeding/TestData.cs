@@ -434,18 +434,23 @@ public sealed class TestData
         return new string(buffer[position..]);
     }
 
-    /// <remarks>Kept inside the column's integer digits, so <c>decimal(5,2)</c> never overflows.</remarks>
+    /// <remarks>
+    ///     Kept inside the column's digits, fractional ones included, so <c>decimal(5,2)</c> never overflows
+    ///     and <c>decimal(2,2)</c>, with no integer digits at all, still gets 100 distinct values rather than
+    ///     always 0. A column holds only so many: past 10^precision values they repeat.
+    /// </remarks>
     private static decimal GenerateDecimal(long n, IProperty? property)
     {
         var precision = property?.GetPrecision();
-        var scale = property?.GetScale() ?? 0;
-        if (precision is not { } p || p - scale >= 18)
+        var scale = Math.Max(property?.GetScale() ?? 0, 0);
+        if (precision is not { } p || p >= 18)
         {
             return n;
         }
 
-        var limit = (long)Math.Pow(10, Math.Max(p - scale, 0));
-        return limit <= 1 ? 0m : n % limit;
+        scale = Math.Min(scale, p);
+        var digits = n % (long)Math.Pow(10, p);
+        return digits / (decimal)Math.Pow(10, scale);
     }
 
     private Guid GenerateGuid()

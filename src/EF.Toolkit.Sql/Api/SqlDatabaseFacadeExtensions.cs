@@ -301,7 +301,7 @@ public static class SqlDatabaseFacadeExtensions
             // would commit the caller's earlier work behind their back — and take any savepoint with it —
             // so it is refused before anything runs. Outside one there is no unit to offer: the
             // statements run one by one, each committing as MySQL always does.
-            if (database.CurrentTransaction is not null || System.Transactions.Transaction.Current is not null)
+            if (InAnyTransaction(database))
             {
                 throw new InvalidOperationException(
                     "MySQL commits implicitly before every DDL statement, so creating or dropping database objects "
@@ -333,7 +333,7 @@ public static class SqlDatabaseFacadeExtensions
             return;
         }
 
-        if (database.CurrentTransaction is not null || System.Transactions.Transaction.Current is not null)
+        if (InAnyTransaction(database))
         {
             // A transaction without savepoints, or an ambient one: the set joins it, and its atomicity
             // is the caller's to decide.
@@ -358,6 +358,14 @@ public static class SqlDatabaseFacadeExtensions
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    // EF's own transaction, an ambient TransactionScope, or one enlisted explicitly with
+    // Database.EnlistTransaction — which neither of the other two shows.
+    private static bool InAnyTransaction(DatabaseFacade database)
+        => database.CurrentTransaction is not null
+            || System.Transactions.Transaction.Current is not null
+            || database.GetService<Microsoft.EntityFrameworkCore.Storage.IRelationalConnection>()
+                is Microsoft.EntityFrameworkCore.Storage.RelationalConnection { EnlistedTransaction: not null };
 
     private const string Savepoint = "ef_toolkit_objects";
 

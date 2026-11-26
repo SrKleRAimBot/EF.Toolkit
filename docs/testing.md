@@ -277,7 +277,8 @@ var many = await context.CreateManyAsync<Customer>(50, (c, i) => c.Name = $"Cust
 
 `Build` reads the model and fills every **required** property with a value that is valid for its
 column and **unique** — one counter runs across every value produced, so two entities never share a
-generated string or number and a unique index is never tripped by accident.
+generated string or number and a unique index is never tripped by accident. A column with only so many
+values repeats past them: a `decimal(2,2)` holds 100, a `bool` two.
 
 | Type | Value |
 | --- | --- |

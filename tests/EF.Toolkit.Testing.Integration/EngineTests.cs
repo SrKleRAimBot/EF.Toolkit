@@ -3,6 +3,7 @@ using System.Globalization;
 using EFToolkit.Testing.Integration.Infrastructure;
 using EFToolkit.Testing.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 
 namespace EFToolkit.Testing.Integration;
@@ -640,6 +641,43 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
                 b.ToTable("BigSeeds");
                 b.Property(x => x.Id).HasColumnType("decimal(20, 0)").ValueGeneratedOnAdd();
             });
+    }
+
+    [Fact]
+    public async Task A_failed_reset_in_an_explicitly_enlisted_transaction_keeps_the_caller_s_work()
+    {
+        // A transaction enlisted through EF's connection shows in neither CurrentTransaction nor
+        // Transaction.Current: the reset opened one of its own, and its ROLLBACK took the caller's insert.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER SoftDeleteCustomers ON Customers INSTEAD OF DELETE AS "
+                + "UPDATE Customers SET IsActive = 0 WHERE Id IN (SELECT Id FROM deleted);",
+            Ct);
+        try
+        {
+            using var transaction = new System.Transactions.CommittableTransaction();
+            await context.Database.OpenConnectionAsync(Ct);
+            try
+            {
+                ((RelationalConnection)context.GetService<IRelationalConnection>()).EnlistTransaction(transaction);
+                await context.Database.ExecuteSqlRawAsync("INSERT INTO Tags (Code, Label) VALUES (N'mine', N'the caller''s')", Ct);
+
+                await Should.ThrowAsync<DbException>(() => context.Database.ResetDataAsync(o => o.ExcludeEntity<Tag>(), Ct));
+
+                (await ScalarAsync(context, "SELECT COUNT(*) FROM Tags WHERE Code = N'mine'")).ShouldBe(1);
+                transaction.Rollback();
+            }
+            finally
+            {
+                await context.Database.CloseConnectionAsync();
+            }
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS SoftDeleteCustomers", Ct);
+        }
     }
 
     [Fact]

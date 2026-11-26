@@ -356,6 +356,36 @@ public sealed class TestDataTests
         Snapshot(context.Build<Customer>()).ShouldBe(Snapshot(new TestData(5).Build<Customer>(context)));
     }
 
+    private sealed class Discount
+    {
+        public int Id { get; set; }
+        public decimal Rate { get; set; }
+    }
+
+    private sealed class DiscountContext(DbContextOptions<DiscountContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Discount>(b =>
+            {
+                b.Property(d => d.Rate).HasPrecision(2, 2);
+                b.HasIndex(d => d.Rate).IsUnique();
+            });
+    }
+
+    [Fact]
+    public async Task A_decimal_with_no_integer_digits_still_gets_distinct_values_that_fit()
+    {
+        // decimal(2,2) has no room before the point, and every generated value was 0: the second insert
+        // broke the unique index.
+        await using var db = await SqliteTestDatabase<DiscountContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+
+        var discounts = await context.CreateManyAsync<Discount>(5, cancellationToken: Ct);
+
+        discounts.Select(d => d.Rate).Distinct().Count().ShouldBe(5);
+        discounts.ShouldAllBe(d => d.Rate > -1m && d.Rate < 1m && decimal.Round(d.Rate, 2) == d.Rate);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {

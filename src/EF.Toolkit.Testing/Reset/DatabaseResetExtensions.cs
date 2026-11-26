@@ -56,7 +56,7 @@ public static class DatabaseResetExtensions
                             .ConfigureAwait(false));
                 }
 
-                var state = await ReadStateAsync(engine, connection, transaction, options, cancellationToken)
+                var state = await ReadStateAsync(database, engine, connection, transaction, options, cancellationToken)
                     .ConfigureAwait(false);
                 if (DatabaseForeignKeys.Query(engine, plan, state.MySqlNoBackslashEscapes) is { } query)
                 {
@@ -171,7 +171,7 @@ public static class DatabaseResetExtensions
                         ReadReferences(connection, transaction, DatabaseForeignKeys.ResolveSchemas(plan)));
                 }
 
-                var state = ReadState(engine, connection, transaction, options);
+                var state = ReadState(database, engine, connection, transaction, options);
                 if (DatabaseForeignKeys.Query(engine, plan, state.MySqlNoBackslashEscapes) is { } query)
                 {
                     ResetPlan.RefuseUnplannedReferences(ReadReferences(connection, transaction, query));
@@ -277,17 +277,23 @@ public static class DatabaseResetExtensions
 
     // An ambient TransactionScope counts too: the connection enlists in it, and a TRUNCATE on MySQL
     // would commit it just the same.
-    private static bool InTransaction(DbTransaction? transaction)
-        => transaction is not null || System.Transactions.Transaction.Current is not null;
+    // Or one enlisted explicitly with Database.EnlistTransaction, which neither EF's CurrentTransaction
+    // nor Transaction.Current shows: the reset's own BEGIN/ROLLBACK would otherwise take the caller's work
+    // with it.
+    private static bool InTransaction(DatabaseFacade database, DbTransaction? transaction)
+        => transaction is not null
+            || System.Transactions.Transaction.Current is not null
+            || database.GetService<IRelationalConnection>() is RelationalConnection { EnlistedTransaction: not null };
 
     private static async Task<ResetConnectionState> ReadStateAsync(
+        DatabaseFacade database,
         DatabaseEngine engine,
         DbConnection connection,
         DbTransaction? transaction,
         ResetDataOptions options,
         CancellationToken cancellationToken)
     {
-        var inTransaction = InTransaction(transaction);
+        var inTransaction = InTransaction(database, transaction);
         if (engine == DatabaseEngine.MySql)
         {
             var checks = Convert.ToInt64(
@@ -320,12 +326,13 @@ public static class DatabaseResetExtensions
     }
 
     private static ResetConnectionState ReadState(
+        DatabaseFacade database,
         DatabaseEngine engine,
         DbConnection connection,
         DbTransaction? transaction,
         ResetDataOptions options)
     {
-        var inTransaction = InTransaction(transaction);
+        var inTransaction = InTransaction(database, transaction);
         if (engine == DatabaseEngine.MySql)
         {
             var checks = Convert.ToInt64(
