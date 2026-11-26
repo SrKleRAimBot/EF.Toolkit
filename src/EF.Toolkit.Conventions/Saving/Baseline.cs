@@ -29,12 +29,27 @@ internal static class Baseline
             .Select(p => (Property: p, Original: p.OriginalValue))
             .ToList();
 
+        // A token inside a complex value is not among entry.Properties, but SetValues copies it all the
+        // same: the UPDATE would check the edited value, failing against an unchanged row and passing
+        // against one another writer had moved on. Its original is kept, and its current value put back
+        // to match — the delete discards the edit, as it does every other.
+        var complexTokens = entry.OriginalValues.Properties
+            .Where(p => p.IsConcurrencyToken && p.DeclaringType is IComplexType)
+            .Select(p => (Property: p, Original: entry.OriginalValues[p]))
+            .ToList();
+
         RestoreClearedComplexValues(entry.ComplexProperties, entry.OriginalValues);
         entry.OriginalValues.SetValues(entry.CurrentValues);
 
         foreach (var (property, original) in tokens)
         {
             property.OriginalValue = original;
+        }
+
+        foreach (var (property, original) in complexTokens)
+        {
+            entry.OriginalValues[property] = original;
+            entry.CurrentValues[property] = original;
         }
 
         foreach (var property in entry.Properties)

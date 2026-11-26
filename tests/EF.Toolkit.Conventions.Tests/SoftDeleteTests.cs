@@ -953,6 +953,43 @@ public sealed class SoftDeleteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_token_inside_a_complex_value_is_checked_as_loaded_not_as_edited()
+    {
+        // The baseline replacement copied the edited Stamp.Revision into the original snapshot: the soft
+        // delete checked for 2 against a row holding 1 and failed for nothing.
+        await using (var context = _db.Context())
+        {
+            var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+            comment.Stamp.Revision = 2;
+            context.Comments.Remove(comment);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var deleted = await fresh.Comments.IncludeDeleted().SingleAsync(c => c.Id == 2, Ct);
+        deleted.DeletedAt.ShouldNotBeNull();
+        deleted.Stamp.Revision.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_token_inside_a_complex_value_still_catches_a_writer_that_moved_the_row_on()
+    {
+        // ...and checked for the edited 2 against a row another writer had moved to 2: the stale delete won.
+        await using var context = _db.Context();
+        var comment = await context.Comments.SingleAsync(c => c.Id == 2, Ct);
+        await using (var other = _db.Context())
+        {
+            (await other.Comments.SingleAsync(c => c.Id == 2, Ct)).Stamp.Revision = 2;
+            await other.SaveChangesAsync(Ct);
+        }
+
+        comment.Stamp.Revision = 2;
+        context.Comments.Remove(comment);
+
+        await Should.ThrowAsync<DbUpdateConcurrencyException>(() => context.SaveChangesAsync(Ct));
+    }
+
+    [Fact]
     public async Task A_concurrency_conflict_leaves_the_delete_as_the_application_made_it_and_a_retry_converts_it_again()
     {
         // EF reports a concurrency conflict through its own hook, not SaveChangesFailed.

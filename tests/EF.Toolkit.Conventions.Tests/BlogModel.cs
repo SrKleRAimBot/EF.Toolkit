@@ -79,6 +79,14 @@ public sealed class Comment
 
     /// <summary>An optional value object, with a private constructor and a private setter.</summary>
     public Badge? Badge { get; set; }
+
+    /// <summary>A complex value holding an application-managed concurrency token.</summary>
+    public Stamp Stamp { get; set; } = new();
+}
+
+public sealed class Stamp
+{
+    public int Revision { get; set; }
 }
 
 public sealed class Spot
@@ -170,6 +178,7 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
             b.ComplexProperty(c => c.Place, p => p.ComplexProperty(x => x.Geo));
             b.ComplexProperty(c => c.Spot, p => p.ComplexProperty(x => x.Geo));
             b.ComplexProperty(c => c.Badge);
+            b.ComplexProperty(c => c.Stamp, s => s.Property(x => x.Revision).IsConcurrencyToken());
         });
         modelBuilder.Entity<Note>(b =>
         {
@@ -298,5 +307,6 @@ public sealed class PooledCommentsContext(DbContextOptions<PooledCommentsContext
             b.ComplexProperty(c => c.Place, p => p.ComplexProperty(x => x.Geo));
             b.ComplexProperty(c => c.Spot, p => p.ComplexProperty(x => x.Geo));
             b.ComplexProperty(c => c.Badge);
+            b.ComplexProperty(c => c.Stamp, s => s.Property(x => x.Revision).IsConcurrencyToken());
         });
 }
