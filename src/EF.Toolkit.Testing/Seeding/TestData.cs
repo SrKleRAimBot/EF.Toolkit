@@ -351,7 +351,7 @@ public sealed class TestData
 
         if (type == typeof(string))
         {
-            return GenerateString(property?.Name ?? "Value", n, property?.GetMaxLength());
+            return GenerateString(property?.Name ?? "Value", n, MaxLength(property));
         }
 
         // Neither an enum nor a bool can be unique, and stepping through them with the counter would
@@ -386,7 +386,7 @@ public sealed class TestData
             _ when type == typeof(DateOnly) => DateOnly.FromDateTime(BaseDate).AddDays((int)(n % MaxDays)),
             _ when type == typeof(TimeOnly) => new TimeOnly(n % SecondsPerDay * TimeSpan.TicksPerSecond),
             _ when type == typeof(TimeSpan) => TimeSpan.FromSeconds(n % SecondsPerDay),
-            _ when type == typeof(byte[]) => GenerateBytes(n, property?.GetMaxLength()),
+            _ when type == typeof(byte[]) => GenerateBytes(n, MaxLength(property)),
             _ => null,
         };
     }
@@ -396,20 +396,31 @@ public sealed class TestData
     private const long MaxMinutes = MaxDays * 24 * 60;
     private const long SecondsPerDay = 24 * 60 * 60;
 
+    // HasColumnType("varchar(4)") sets no max-length facet; only the resolved type mapping's Size knows
+    // it. A size of zero or less is that mapping's "unbounded" (max).
+    private static int? MaxLength(IProperty? property)
+        => property?.GetMaxLength() ?? (property?.FindRelationalTypeMapping()?.Size is > 0 and var size ? size : null);
+
     /// <remarks>
     ///     The counter goes at the end and the property name is cut to make room for it, so a string
     ///     stays unique however short its column is: uniqueness is lost only once the counter itself
-    ///     no longer fits, and the counter is written in base 36 to put that off.
+    ///     no longer fits. A bounded column always gets the counter in base 36, which puts that off — and
+    ///     only ever in base 36: decimal where it fits and base 36 where not wrote 30 for both 30 and 108.
     /// </remarks>
     private static string GenerateString(string name, long n, int? maxLength)
     {
-        var full = string.Create(CultureInfo.InvariantCulture, $"{name}-{n}");
-        if (maxLength is not { } max || full.Length <= max)
+        if (maxLength is not { } max)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{name}-{n}");
+        }
+
+        var suffix = ToBase36(n);
+        var full = $"{name}-{suffix}";
+        if (full.Length <= max)
         {
             return full;
         }
 
-        var suffix = ToBase36(n);
         if (suffix.Length >= max)
         {
             return suffix[^max..];

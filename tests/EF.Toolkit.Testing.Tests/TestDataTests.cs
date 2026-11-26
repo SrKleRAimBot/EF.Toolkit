@@ -372,6 +372,53 @@ public sealed class TestDataTests
             });
     }
 
+    private sealed class Badge
+    {
+        public int Id { get; set; }
+        public string X { get; set; } = "";
+        public string Typed { get; set; } = "";
+        public byte[] Blob { get; set; } = [];
+    }
+
+    private sealed class BadgeContext(DbContextOptions<BadgeContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Badge>(b =>
+            {
+                b.Property(x => x.X).HasMaxLength(4);
+                b.HasIndex(x => x.X).IsUnique();
+
+                // Lengths only in the column type: no max-length facet, just the resolved mapping's Size.
+                b.Property(x => x.Typed).HasColumnType("varchar(4)");
+                b.Property(x => x.Blob).HasColumnType("varbinary(3)");
+            });
+    }
+
+    [Fact]
+    public async Task A_short_unique_string_never_repeats_while_its_column_still_has_room()
+    {
+        // X-30 came out for counter 30 in decimal and for counter 108 in base 36.
+        await using var db = await SqliteTestDatabase<BadgeContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+
+        var badges = await context.CreateManyAsync<Badge>(108, cancellationToken: Ct);
+
+        badges.Select(b => b.X).Distinct().Count().ShouldBe(108);
+        badges.ShouldAllBe(b => b.X.Length <= 4);
+    }
+
+    [Fact]
+    public void Lengths_declared_only_in_the_column_type_are_kept_to()
+    {
+        // GetMaxLength() is null for HasColumnType("varchar(4)"); Typed-1 overflowed it.
+        using var context = new BadgeContext(new DbContextOptionsBuilder<BadgeContext>().UseSqlServer("Server=.;Database=unused").Options);
+
+        var badge = context.Build<Badge>();
+
+        badge.Typed.Length.ShouldBeLessThanOrEqualTo(4);
+        badge.Blob.Length.ShouldBeLessThanOrEqualTo(3);
+    }
+
     [Fact]
     public async Task A_decimal_with_no_integer_digits_still_gets_distinct_values_that_fit()
     {

@@ -297,6 +297,7 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
         public int Id { get; set; }
         public decimal Fraction { get; set; }
         public decimal Declared { get; set; }
+        public string Code { get; set; } = "";
         public DateTime TakenAt { get; set; }
         public DateTime LocalTime { get; set; }
     }
@@ -311,6 +312,7 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
 
                 // Precision only in the column type: no precision facet, just the resolved mapping.
                 b.Property(r => r.Declared).HasColumnType("numeric(2,2)");
+                b.Property(r => r.Code).HasColumnType("varchar(4)");
                 b.Property(r => r.TakenAt).HasColumnType("timestamptz(3)");
                 b.Property(r => r.LocalTime).HasColumnType("timestamp(3) without time zone");
             });
@@ -325,7 +327,7 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
         await using var context = new ReadingContext(
             new DbContextOptionsBuilder<ReadingContext>().UseNpgsql(Fixture.ConnectionString).Options);
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE TABLE \"Readings\" (\"Id\" serial PRIMARY KEY, \"Fraction\" numeric(18,18) NOT NULL, \"Declared\" numeric(2,2) NOT NULL, "
+            "CREATE TABLE \"Readings\" (\"Id\" serial PRIMARY KEY, \"Fraction\" numeric(18,18) NOT NULL, \"Declared\" numeric(2,2) NOT NULL, \"Code\" varchar(4) NOT NULL, "
                 + "\"TakenAt\" timestamptz(3) NOT NULL, \"LocalTime\" timestamp(3) without time zone NOT NULL)",
             Ct);
         try
