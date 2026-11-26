@@ -170,7 +170,10 @@ total.Value;   // set by the procedure
 
 PostgreSQL matches arguments by name (`CALL p(a => @p0)`), so order does not matter and a procedure's
 defaults can be left out. SQL Server matches by name too (`EXEC p @a = @p0`, with `OUTPUT` added for
-output parameters). MySQL's `CALL` is positional, so arguments go in the order given.
+output parameters). MySQL's `CALL` is positional, so arguments go in the order given, and it takes
+input parameters only: MySQL's client libraries cannot bind an `OUT` or `INOUT` parameter to a call
+sent as text, so one is refused before anything runs. Return the value as a result set instead, and
+read it with `QueryProcedureAsync`.
 
 `QueryProcedureAsync<T>` materialises a `List<T>` rather than returning a query, because a procedure
 call cannot be composed over — `EXEC` and `CALL` cannot appear in a `FROM` clause, so a `Where` added
@@ -525,5 +528,7 @@ per request until EF refused to build more.
 - **MySQL backslashes.** String literals are escaped for MySQL's default mode, in which a backslash is
   an escape character. Under `NO_BACKSLASH_ESCAPES` a literal containing one comes out doubled. Runtime
   values are parameters and unaffected.
-- **No SQL Server integration suite yet.** The SQL Server rendering is covered by exact-SQL unit tests;
-  the end-to-end suite runs against PostgreSQL.
+- **Integration coverage.** Every dialect's rendering has exact-SQL unit tests. Against real engines,
+  PostgreSQL covers row-level security, tenant isolation, routines and views; SQL Server covers tenant
+  isolation (typed and string session values, lossy conversions, a binary-collated tenant column under a
+  case-insensitive database); MySQL covers runtime DDL and procedures with reserved parameter names.

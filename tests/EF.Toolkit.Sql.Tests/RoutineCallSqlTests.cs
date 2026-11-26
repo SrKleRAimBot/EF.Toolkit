@@ -42,6 +42,19 @@ public sealed class RoutineCallSqlTests
         => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", "dbo", null).Sql.ShouldBe("EXEC [dbo].[p]");
 
     [Fact]
+    public void MySql_refuses_an_output_parameter_it_could_never_bind()
+    {
+        var total = new Npgsql.NpgsqlParameter("total", (object)0) { Direction = System.Data.ParameterDirection.Output };
+
+        var refused = Should.Throw<SqlFeatureNotSupportedException>(
+            () => RoutineCallSql.Procedure(SqlDialect.MySql, "p", null, new { tenant = 1, total }));
+
+        refused.Message.ShouldContain("'total' is an Output parameter");
+        RoutineCallSql.Procedure(SqlDialect.MySql, "p", null,
+            new { total = new Npgsql.NpgsqlParameter("total", (object)0) }).Sql.ShouldBe("CALL `p`({0})");
+    }
+
+    [Fact]
     public void MySql_calls_by_position_in_the_order_given()
     {
         var (sql, args) = RoutineCallSql.Procedure(SqlDialect.MySql, "p", null, new { b = 2, a = 1 });

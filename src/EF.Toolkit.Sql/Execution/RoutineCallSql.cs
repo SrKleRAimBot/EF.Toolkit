@@ -31,7 +31,7 @@ internal static class RoutineCallSql
             SqlDialect.SqlServer => ($"EXEC {target}{SqlServerNamed(arguments)}", values),
 
             // MySQL's CALL is positional only: arguments go in the order given.
-            SqlDialect.MySql => ($"CALL {target}({Positional(arguments)})", values),
+            SqlDialect.MySql => ($"CALL {target}({Positional(RefuseMySqlOutput(arguments))})", values),
             SqlDialect.Sqlite => throw SqlFeatureNotSupportedException.For(
                 ProcedureCallFeature,
                 dialect,
@@ -57,6 +57,28 @@ internal static class RoutineCallSql
             SqlDialect.Sqlite => throw FunctionDefinition.NotOnSqlite(FunctionQueryFeature),
             _ => throw SqlSyntax.UndefinedDialect(dialect),
         };
+    }
+
+    // The call goes out as command text, and MySQL's client libraries bind only input parameters to a text
+    // command (MySqlConnector refuses the rest outright), so an OUT or INOUT parameter could never come
+    // back. Refused here, before anything runs, rather than by the provider half way through.
+    private static IReadOnlyList<(string Name, object? Value)> RefuseMySqlOutput(IReadOnlyList<(string Name, object? Value)> arguments)
+    {
+        foreach (var (name, value) in arguments)
+        {
+            if (value is DbParameter { Direction: not ParameterDirection.Input } parameter)
+            {
+                throw SqlFeatureNotSupportedException.For(
+                    "Output parameters in procedure calls",
+                    SqlDialect.MySql,
+                    $"Argument '{name}' is an {parameter.Direction} parameter, but MySQL binds only input parameters "
+                    + "to a CALL sent as text. Pass a session variable instead — ExecuteSqlRaw(\"CALL p(@total)\") "
+                    + "then SELECT @total, which needs AllowUserVariables=true in the connection string — or "
+                    + "return the value as a result set and read it with QueryProcedureAsync.");
+            }
+        }
+
+        return arguments;
     }
 
     private static string Target(SqlDialect dialect, string name, string? schema)
