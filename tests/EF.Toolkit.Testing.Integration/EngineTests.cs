@@ -722,6 +722,119 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
         }
     }
 
+    private static async Task CreateOutsideTablesAsync(ShopContext context)
+    {
+        // Neither table is in the model, and neither references a reset table: the inbound preflight
+        // has nothing to refuse.
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE OutParent (Id int PRIMARY KEY)", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE OutChild (Id int PRIMARY KEY, ParentId int NOT NULL, FOREIGN KEY (ParentId) REFERENCES OutParent (Id))", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO OutParent VALUES (1)", Ct);
+    }
+
+    private static async Task DropOutsideTablesAsync(ShopContext context)
+    {
+        await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS WriteOutside", Ct);
+        await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS OutChild", Ct);
+        await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS OutParent", Ct);
+    }
+
+    [Fact]
+    public async Task A_trigger_that_orphans_a_row_in_a_table_outside_the_reset_fails_the_reset_too()
+    {
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await CreateOutsideTablesAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER WriteOutside AFTER DELETE ON Categories FOR EACH ROW INSERT INTO OutChild VALUES (OLD.Id + 1000, 2147483647)", Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct)))
+                .Message.ShouldContain("violate a foreign key");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM OutChild")).ShouldBe(0);
+            await AssertConstraintsRestoredAsync(context);
+        }
+        finally
+        {
+            await DropOutsideTablesAsync(context);
+        }
+    }
+
+    [Fact]
+    public async Task An_orphan_that_was_there_before_the_reset_is_not_held_against_it()
+    {
+        // The trigger writes a valid row; the one orphan in OutChild predates the reset.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await CreateOutsideTablesAsync(context);
+        await context.Database.OpenConnectionAsync(Ct);
+        await context.Database.ExecuteSqlRawAsync("SET FOREIGN_KEY_CHECKS = 0", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO OutChild VALUES (1, 2147483647)", Ct);
+        await context.Database.ExecuteSqlRawAsync("SET FOREIGN_KEY_CHECKS = 1", Ct);
+        await context.Database.CloseConnectionAsync();
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER WriteOutside AFTER DELETE ON Categories FOR EACH ROW INSERT INTO OutChild VALUES (OLD.Id + 1000, 1)", Ct);
+        try
+        {
+            await context.Database.ResetDataAsync(o => o.RestartIdentity = false, Ct);
+
+            (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v == 0);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM OutChild WHERE ParentId = 1")).ShouldBeGreaterThan(0);
+        }
+        finally
+        {
+            await DropOutsideTablesAsync(context);
+        }
+    }
+
+    private sealed class Slashed
+    {
+        public int Id { get; set; }
+    }
+
+    private sealed class SlashedContext(DbContextOptions<SlashedContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Slashed>().ToTable("Par\\ent");
+    }
+
+    [Fact]
+    public async Task Under_NO_BACKSLASH_ESCAPES_a_table_name_with_a_backslash_is_still_matched_in_the_catalog()
+    {
+        // Doubling the backslash, right under the default sql_mode, named another table under this one:
+        // the preflight missed SlashChild and the truncate orphaned it.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new SlashedContext(
+            new DbContextOptionsBuilder<SlashedContext>().UseMySQL(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE `Par\\ent` (Id int PRIMARY KEY)", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE SlashChild (Id int PRIMARY KEY, ParentId int NOT NULL, FOREIGN KEY (ParentId) REFERENCES `Par\\ent` (Id))", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO `Par\\ent` VALUES (1)", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO SlashChild VALUES (1, 1)", Ct);
+        try
+        {
+            await context.Database.OpenConnectionAsync(Ct);
+            await context.Database.ExecuteSqlRawAsync("SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'", Ct);
+
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("'SlashChild', which the reset does not empty");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM `Par\\ent`")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.CloseConnectionAsync();
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS SlashChild", Ct);
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS `Par\\ent`", Ct);
+        }
+    }
+
     [Fact]
     public async Task Without_a_cycle_the_deletes_keep_checks_on_and_the_orphaning_trigger_fails_at_once()
     {

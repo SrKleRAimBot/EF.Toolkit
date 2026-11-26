@@ -249,16 +249,39 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
     //    of one type family by value (decimal 12.50 equals 12.5, datetime2(0) equals a datetime2 with
     //    no fraction), and values of different families never as equal, so a string never passes this
     //    way for a GUID or number column;
-    //  - or the converted value reads back as the session value's very text, compared as bytes because
-    //    string equality ignores trailing spaces. This is how a string session value passes for a
-    //    column of another type: only when it is that value's own canonical text.
+    //  - or the session value is a string, and the converted value reads back as its very text,
+    //    compared as bytes because string equality ignores trailing spaces. This is how a string passes
+    //    for a column of another type: only as that value's own canonical text. A typed value never
+    //    takes this way, because default text conversions are themselves lossy: a float 1.00000001
+    //    and the real 1 it rounds to both print as "1".
+    //
+    // A character tenant is also compared byte for byte. The predicate's parameter takes the database's
+    // default collation, not the column's, so under a case-insensitive default a binary-collated column
+    // holding both "acme" and "ACME" would otherwise give either tenant both sets of rows.
     private string SqlServerCondition()
     {
         var value = $"SESSION_CONTEXT({SqlSyntax.Literal(SqlDialect.SqlServer, SessionKey)})";
         var tenant = $"CAST({value} AS {ColumnStoreType})";
-        return $"@tenant = {tenant} AND (CAST({tenant} AS sql_variant) = {value} "
-            + $"OR CAST(CAST({tenant} AS nvarchar(4000)) AS varbinary(8000)) "
-            + $"= CAST(CAST({value} AS nvarchar(4000)) AS varbinary(8000)))";
+        var exact = IsSqlServerCharacter(ColumnStoreType)
+            ? $" AND CAST(@tenant AS varbinary(max)) = CAST({tenant} AS varbinary(max))"
+            : "";
+        return $"@tenant = {tenant}{exact} AND (CAST({tenant} AS sql_variant) = {value} "
+            + $"OR (SQL_VARIANT_PROPERTY({value}, 'BaseType') IN ('nvarchar', 'varchar', 'nchar', 'char') "
+            + $"AND CAST(CAST({tenant} AS nvarchar(4000)) AS varbinary(8000)) "
+            + $"= CAST(CAST({value} AS nvarchar(4000)) AS varbinary(8000))))";
+    }
+
+    private static bool IsSqlServerCharacter(string storeType)
+    {
+        var name = Whitespace().Replace(TypeModifier().Replace(storeType, "").Trim(), " ").ToLowerInvariant();
+        if (name.StartsWith("sys.", StringComparison.Ordinal))
+        {
+            name = name[4..];
+        }
+
+        return name.Trim('[', ']') is "char" or "varchar" or "nchar" or "nvarchar" or "sysname" or "character"
+            or "char varying" or "character varying" or "national character" or "national char"
+            or "national character varying" or "national char varying";
     }
 
     /// <summary>
@@ -272,22 +295,24 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
     internal static string? PostgreSqlUnconstrained(string storeType)
     {
         var bare = TypeModifier().Replace(storeType, "");
-        if (bare.Length == storeType.Length)
-        {
-            return null;
-        }
+        var modified = bare.Length != storeType.Length;
 
         bare = Whitespace().Replace(bare.Trim(), " ");
         var schema = bare.StartsWith("pg_catalog.", StringComparison.OrdinalIgnoreCase) ? bare[..11] : "";
         var name = bare[schema.Length..].ToLowerInvariant();
-        return name switch
+        var array = name.EndsWith("[]", StringComparison.Ordinal) ? "[]" : "";
+        name = name[..^array.Length].TrimEnd();
+
+        // Bare, these two still have a length: character is character(1) and bit is bit(1), so
+        // 'acme' cast to character is 'a'. They need the comparison with or without a modifier.
+        var unbounded = name switch
         {
-            "char" or "character" or "nchar" or "national character" or "national char" => schema + "bpchar",
-            "char[]" or "character[]" => schema + "bpchar[]",
-            "bit" => schema + "varbit",
-            "bit[]" => schema + "varbit[]",
-            _ => bare,
+            "char" or "character" or "nchar" or "national character" or "national char" => schema + "bpchar" + array,
+            "bit" => schema + "varbit" + array,
+            _ => null,
         };
+
+        return unbounded ?? (modified ? bare : null);
     }
 
     [GeneratedRegex(@"\s*\(\s*-?\d+\s*(,\s*-?\d+\s*)?\)", RegexOptions.CultureInvariant)]

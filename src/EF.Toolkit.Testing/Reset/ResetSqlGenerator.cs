@@ -21,8 +21,14 @@ namespace EFToolkit.Testing;
 ///     <c>@name</c> as an undefined parameter unless the connection string opts in to user variables.
 /// </param>
 /// <param name="MySqlForeignKeys">
-///     MySQL: the catalog's foreign keys from the reset tables, read only when the reset deletes with
-///     checks off, for the verify step. <see langword="null" /> when not read.
+///     MySQL: the catalog's foreign keys to verify, read only when the reset deletes with checks off —
+///     those from the reset tables, and every other one in the database too when a reset table has a
+///     <c>DELETE</c> trigger, which could write anywhere. <see langword="null" /> when not read.
+/// </param>
+/// <param name="MySqlNoBackslashEscapes">
+///     Whether the session's <c>sql_mode</c> has <c>NO_BACKSLASH_ESCAPES</c>, under which a backslash
+///     in a string literal is itself rather than an escape — so the catalog queries' table names are
+///     written to match.
 /// </param>
 internal sealed record ResetConnectionState(
     bool RestartIdentity,
@@ -31,7 +37,8 @@ internal sealed record ResetConnectionState(
     bool SqliteHasSequenceTable = false,
     bool MySqlForeignKeyChecks = true,
     bool SqliteDeferForeignKeys = false,
-    IReadOnlyList<MySqlForeignKey>? MySqlForeignKeys = null);
+    IReadOnlyList<MySqlForeignKey>? MySqlForeignKeys = null,
+    bool MySqlNoBackslashEscapes = false);
 
 /// <summary>A MySQL foreign key from a reset table, as the catalog records it.</summary>
 /// <param name="Table">The referencing table, in the connection's database.</param>
@@ -39,12 +46,19 @@ internal sealed record ResetConnectionState(
 /// <param name="ReferencedSchema">The referenced table's database.</param>
 /// <param name="ReferencedTable">The referenced table.</param>
 /// <param name="ReferencedColumns">The referenced columns, in key order.</param>
+/// <param name="InPlan">Whether <paramref name="Table" /> is one the reset empties.</param>
+/// <param name="Before">
+///     For a table outside the reset: how many of its rows violated the key just before the reset,
+///     which the reset must not add to. A reset table ends empty, so for one of those it is zero.
+/// </param>
 internal sealed record MySqlForeignKey(
     string Table,
     IReadOnlyList<string> Columns,
     string ReferencedSchema,
     string ReferencedTable,
-    IReadOnlyList<string> ReferencedColumns);
+    IReadOnlyList<string> ReferencedColumns,
+    bool InPlan = true,
+    long Before = 0);
 
 /// <summary>The statements a reset runs, in three parts.</summary>
 internal sealed record ResetScript
@@ -289,9 +303,10 @@ internal static class ResetSqlGenerator
             && (!state.MySqlForeignKeyChecks || plan.CyclicTables.Count > 0);
 
     // Every reset table is empty once the deletes are done, so any row there that violates a foreign key
-    // was written during the reset — by a trigger — and none is acceptable. Tables outside the reset
-    // cannot be affected: the catalog preflight refuses any foreign key from one of them into a reset
-    // table. A key with a NULL column is not enforced, as MySQL treats it.
+    // was written during the reset — by a trigger — and none is acceptable. Elsewhere only a DELETE
+    // trigger on a reset table can write while checks are off (the catalog preflight already refuses a
+    // foreign key from outside into a reset table), and where one exists the count of violations of
+    // each other key must not have grown. A key with a NULL column is not enforced, as MySQL treats it.
     private static string[] MySqlOrphans(IReadOnlyList<MySqlForeignKey> foreignKeys)
     {
         if (foreignKeys.Count == 0)
@@ -299,16 +314,18 @@ internal static class ResetSqlGenerator
             return [];
         }
 
-        var counts = foreignKeys.Select(fk =>
-        {
-            var present = string.Join(" AND ", fk.Columns.Select(c => $"c.{Quote(c, '`', '`')} IS NOT NULL"));
-            var join = string.Join(" AND ", fk.Columns.Zip(fk.ReferencedColumns, (c, r) => $"p.{Quote(r, '`', '`')} = c.{Quote(c, '`', '`')}"));
-            var parent = $"{Quote(fk.ReferencedSchema, '`', '`')}.{Quote(fk.ReferencedTable, '`', '`')}";
-            return $"(SELECT COUNT(*) FROM {Quote(fk.Table, '`', '`')} AS c WHERE {present} "
-                + $"AND NOT EXISTS (SELECT 1 FROM {parent} AS p WHERE {join}))";
-        });
-
+        var counts = foreignKeys.Select(fk => fk.InPlan ? MySqlViolations(fk) : $"({MySqlViolations(fk)} > {fk.Before})");
         return ["SELECT " + string.Join(" + ", counts) + ";"];
+    }
+
+    /// <summary>A query counting the rows that violate <paramref name="fk" />, parenthesised.</summary>
+    internal static string MySqlViolations(MySqlForeignKey fk)
+    {
+        var present = string.Join(" AND ", fk.Columns.Select(c => $"c.{Quote(c, '`', '`')} IS NOT NULL"));
+        var join = string.Join(" AND ", fk.Columns.Zip(fk.ReferencedColumns, (c, r) => $"p.{Quote(r, '`', '`')} = c.{Quote(c, '`', '`')}"));
+        var parent = $"{Quote(fk.ReferencedSchema, '`', '`')}.{Quote(fk.ReferencedTable, '`', '`')}";
+        return $"(SELECT COUNT(*) FROM {Quote(fk.Table, '`', '`')} AS c WHERE {present} "
+            + $"AND NOT EXISTS (SELECT 1 FROM {parent} AS p WHERE {join}))";
     }
 
     /// <remarks>

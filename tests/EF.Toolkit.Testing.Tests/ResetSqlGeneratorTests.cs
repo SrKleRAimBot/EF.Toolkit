@@ -155,6 +155,22 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
+    public void MySql_holds_a_table_outside_the_reset_only_to_the_violations_it_already_had()
+    {
+        var state = Default with
+        {
+            RestartIdentity = false,
+            MySqlForeignKeys = [new MySqlForeignKey("Audit", ["LineId"], "shop", "Lines", ["Id"], InPlan: false, Before: 2)],
+        };
+
+        Generate(DatabaseEngine.MySql, ResetPlan.Create([Lines], cyclicTables: [Lines]), state).Verify.ShouldBe(
+        [
+            "SELECT ((SELECT COUNT(*) FROM `Audit` AS c WHERE c.`LineId` IS NOT NULL "
+                + "AND NOT EXISTS (SELECT 1 FROM `shop`.`Lines` AS p WHERE p.`Id` = c.`LineId`)) > 2);",
+        ]);
+    }
+
+    [Fact]
     public void MySql_verifies_when_the_session_already_had_checks_off()
     {
         var state = Default with { InTransaction = true, MySqlForeignKeyChecks = false, MySqlForeignKeys = [new MySqlForeignKey("Lines", ["OrderId"], "shop", "Orders", ["Id"])] };

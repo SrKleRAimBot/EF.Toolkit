@@ -133,7 +133,7 @@ public sealed class TenantIsolationPolicyTests
             RETURNS TABLE
             WITH SCHEMABINDING
             AS
-            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND (CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS sql_variant) = SESSION_CONTEXT(N'TenantId') OR CAST(CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) AS varbinary(8000)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(8000)))
+            RETURN SELECT 1 AS allowed WHERE @tenant = CAST(SESSION_CONTEXT(N'TenantId') AS int) AND (CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS sql_variant) = SESSION_CONTEXT(N'TenantId') OR (SQL_VARIANT_PROPERTY(SESSION_CONTEXT(N'TenantId'), 'BaseType') IN ('nvarchar', 'varchar', 'nchar', 'char') AND CAST(CAST(CAST(SESSION_CONTEXT(N'TenantId') AS int) AS nvarchar(4000)) AS varbinary(8000)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS nvarchar(4000)) AS varbinary(8000))))
             """,
             """
             CREATE SECURITY POLICY [sales].[Orders_tenant_isolation]
@@ -156,6 +156,10 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("pg_catalog.bpchar(8)", "pg_catalog.bpchar")]
     [InlineData("bit(3)", "varbit")]
     [InlineData("varchar(8)[]", "varchar[]")]
+    [InlineData("character", "bpchar")]
+    [InlineData("char", "bpchar")]
+    [InlineData("pg_catalog.bit", "pg_catalog.varbit")]
+    [InlineData("char[]", "bpchar[]")]
     public void PostgreSql_compares_a_constrained_cast_with_the_unconstrained_one(string storeType, string unconstrained)
     {
         var sql = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3];
@@ -172,6 +176,23 @@ public sealed class TenantIsolationPolicyTests
     public void PostgreSql_needs_no_second_comparison_for_a_type_without_modifiers(string storeType)
         => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3]
             .ShouldContain($"USING (\"TenantId\" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS {storeType}))\n");
+
+    [Theory]
+    [InlineData("varchar(10)")]
+    [InlineData("NVARCHAR(64)")]
+    [InlineData("sysname")]
+    [InlineData("national character varying (20)")]
+    public void SqlServer_compares_a_character_tenant_byte_for_byte_whatever_the_database_collation(string storeType)
+        => new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1]
+            .ShouldContain($"AND CAST(@tenant AS varbinary(max)) = CAST(CAST(SESSION_CONTEXT(N'TenantId') AS {storeType}) AS varbinary(max))");
+
+    [Theory]
+    [InlineData("int")]
+    [InlineData("uniqueidentifier")]
+    [InlineData("decimal(10,2)")]
+    public void SqlServer_compares_other_tenants_by_value(string storeType)
+        => new TenantIsolationPolicy("Orders", "TenantId", "TenantId", storeType).GetCreateSql(SqlDialect.SqlServer)[1]
+            .ShouldNotContain("CAST(@tenant AS varbinary");
 
     [Fact]
     public void SqlServer_escapes_the_key_literal()

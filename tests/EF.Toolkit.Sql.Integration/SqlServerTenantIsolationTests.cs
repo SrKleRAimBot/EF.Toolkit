@@ -107,4 +107,65 @@ public sealed class SqlServerTenantIsolationTests(SqlServerFixture fixture)
             await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Cohorts", Token);
         }
     }
+
+    private async Task<int> CountAsync(string table, string key, object sessionValue)
+    {
+        await using var context = fixture.CreateContext(o => o.UseSessionContext(s => s.Set(key, () => sessionValue)));
+        var sql = "SELECT COUNT(*) AS [Value] FROM " + table;
+        return await context.Database.SqlQueryRaw<int>(sql).SingleAsync(Token);
+    }
+
+    [Fact]
+    public async Task A_typed_value_that_only_prints_like_the_tenant_reaches_nothing()
+    {
+        // A float 1.00000001 rounds to the real 1, and both print as "1": the text fallback let it in.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        var policy = new TenantIsolationPolicy("Gauges", "Tenant", "TenantReal", "real", policyName: "gauges_iso");
+
+        await using var admin = fixture.CreateContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE Gauges (Id int PRIMARY KEY, Tenant real NOT NULL); INSERT INTO Gauges VALUES (1, 1);", Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(policy);
+
+            (await CountAsync("Gauges", "TenantReal", 1.0)).ShouldBe(1);
+            (await CountAsync("Gauges", "TenantReal", 1.00000001)).ShouldBe(0);
+            (await CountAsync("Gauges", "TenantReal", "1")).ShouldBe(1);
+        }
+        finally
+        {
+            await admin.Database.DropDatabaseObjectsAsync(policy);
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Gauges", Token);
+        }
+    }
+
+    [Fact]
+    public async Task Tenants_a_binary_collated_column_keeps_apart_stay_apart_under_a_case_insensitive_database()
+    {
+        // The predicate's parameter compares under the database default collation, which here ignores
+        // case, while the column tells "acme" from "ACME".
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        var policy = new TenantIsolationPolicy("Desks", "Tenant", "TenantCode", "varchar(10)", policyName: "desks_iso");
+
+        await using var admin = fixture.CreateContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE Desks (Id int PRIMARY KEY, Tenant varchar(10) COLLATE Latin1_General_100_BIN2 NOT NULL); "
+                + "INSERT INTO Desks VALUES (1, 'acme'), (2, 'ACME');",
+            Token);
+        try
+        {
+            (await admin.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS [Value] FROM Desks WHERE Tenant = 'acme'").SingleAsync(Token)).ShouldBe(1);
+            await admin.Database.CreateDatabaseObjectsAsync(policy);
+
+            (await CountAsync("Desks", "TenantCode", "acme")).ShouldBe(1);
+            (await CountAsync("Desks", "TenantCode", "ACME")).ShouldBe(1);
+            (await CountAsync("Desks", "TenantCode", "Acme")).ShouldBe(0);
+        }
+        finally
+        {
+            await admin.Database.DropDatabaseObjectsAsync(policy);
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Desks", Token);
+        }
+    }
 }

@@ -43,7 +43,7 @@ internal static class DatabaseForeignKeys
     ///     <c>lower_case_table_names</c>. A comparer that folds more, or less, than the engine would take
     ///     an unmapped dependent for a reset table, or miss one.
     /// </remarks>
-    internal static string? Query(DatabaseEngine engine, ResetPlan plan)
+    internal static string? Query(DatabaseEngine engine, ResetPlan plan, bool mySqlNoBackslashEscapes = false)
         => engine switch
         {
             DatabaseEngine.Sqlite => $"""
@@ -67,8 +67,8 @@ internal static class DatabaseForeignKeys
                 SELECT rc.TABLE_NAME, rc.REFERENCED_TABLE_NAME, rc.CONSTRAINT_SCHEMA <> DATABASE()
                 FROM information_schema.REFERENTIAL_CONSTRAINTS AS rc
                 WHERE rc.UNIQUE_CONSTRAINT_SCHEMA = DATABASE()
-                  AND rc.REFERENCED_TABLE_NAME IN ({MySqlNames(plan)})
-                  AND NOT (rc.CONSTRAINT_SCHEMA = DATABASE() AND rc.TABLE_NAME IN ({MySqlNames(plan)}));
+                  AND rc.REFERENCED_TABLE_NAME IN ({MySqlNames(plan, mySqlNoBackslashEscapes)})
+                  AND NOT (rc.CONSTRAINT_SCHEMA = DATABASE() AND rc.TABLE_NAME IN ({MySqlNames(plan, mySqlNoBackslashEscapes)}));
                 """,
             _ => null,
         };
@@ -120,19 +120,35 @@ internal static class DatabaseForeignKeys
     }
 
     /// <summary>
-    ///     MySQL: one row per column of every foreign key from a table in <paramref name="plan" /> —
-    ///     constraint, table, column, referenced database, table and column — in key order.
+    ///     MySQL: one row per column of every foreign key from a table in <paramref name="plan" /> — or,
+    ///     with <paramref name="everyTable" />, from any table in the connection's database — giving
+    ///     constraint, table, column, referenced database, table and column, and whether the table is a
+    ///     reset one; in key order.
     /// </summary>
-    internal static string MySqlPlanForeignKeys(ResetPlan plan) => $"""
-        SELECT k.CONSTRAINT_NAME, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME
-        FROM information_schema.KEY_COLUMN_USAGE AS k
-        WHERE k.TABLE_SCHEMA = DATABASE()
-          AND k.REFERENCED_TABLE_NAME IS NOT NULL
-          AND k.TABLE_NAME IN ({MySqlNames(plan)})
-        ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION;
+    internal static string MySqlForeignKeys(ResetPlan plan, bool noBackslashEscapes, bool everyTable)
+    {
+        var names = MySqlNames(plan, noBackslashEscapes);
+        var only = everyTable ? "" : $"AND k.TABLE_NAME IN ({names})";
+        return $"""
+            SELECT k.CONSTRAINT_NAME, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME,
+                   CASE WHEN k.TABLE_NAME IN ({names}) THEN 1 ELSE 0 END
+            FROM information_schema.KEY_COLUMN_USAGE AS k
+            WHERE k.TABLE_SCHEMA = DATABASE()
+              AND k.REFERENCED_TABLE_NAME IS NOT NULL
+              {only}
+            ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION;
+            """;
+    }
+
+    /// <summary>MySQL: the number of <c>DELETE</c> triggers on the tables in <paramref name="plan" />.</summary>
+    internal static string MySqlDeleteTriggers(ResetPlan plan, bool noBackslashEscapes) => $"""
+        SELECT COUNT(*) FROM information_schema.TRIGGERS AS t
+        WHERE t.EVENT_OBJECT_SCHEMA = DATABASE()
+          AND t.EVENT_MANIPULATION = 'DELETE'
+          AND t.EVENT_OBJECT_TABLE IN ({MySqlNames(plan, noBackslashEscapes)});
         """;
 
-    /// <summary>Groups the rows of <see cref="MySqlPlanForeignKeys" /> into keys.</summary>
+    /// <summary>Groups the rows of <see cref="MySqlForeignKeys" /> into keys.</summary>
     internal static List<MySqlForeignKey> GroupMySqlForeignKeys(IEnumerable<string[]> rows)
         => rows
             .GroupBy(r => (Table: r[1], Constraint: r[0]))
@@ -141,11 +157,15 @@ internal static class DatabaseForeignKeys
                 [.. g.Select(r => r[2])],
                 g.First()[3],
                 g.First()[4],
-                [.. g.Select(r => r[5])]))
+                [.. g.Select(r => r[5])],
+                InPlan: g.First()[6] != "0"))
             .ToList();
 
-    private static string MySqlNames(ResetPlan plan)
-        => string.Join(", ", plan.Tables.Select(t => SqlLiteral(t.Name.Replace("\\", "\\\\", StringComparison.Ordinal))));
+    // A backslash escapes in a MySQL string literal unless the session's sql_mode has
+    // NO_BACKSLASH_ESCAPES, where it is just a backslash: doubling it there would name another table.
+    private static string MySqlNames(ResetPlan plan, bool noBackslashEscapes)
+        => string.Join(", ", plan.Tables.Select(t => SqlLiteral(
+            noBackslashEscapes ? t.Name : t.Name.Replace("\\", "\\\\", StringComparison.Ordinal))));
 
     /// <summary>
     ///     SQL Server: the schema each unqualified table in <paramref name="plan" /> resolves to, as rows

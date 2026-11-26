@@ -153,6 +153,9 @@ public sealed class ResetPlanTests
 
         // MySQL: in SQL, under information_schema's collation.
         DatabaseForeignKeys.Query(DatabaseEngine.MySql, plan)!.ShouldContain("IN ('O''Brien', 'Orders')");
+        var slashed = ResetPlan.Create([new ResetTable(null, "Par\\ent")]);
+        DatabaseForeignKeys.Query(DatabaseEngine.MySql, slashed)!.ShouldContain(@"IN ('Par\\ent')");
+        DatabaseForeignKeys.Query(DatabaseEngine.MySql, slashed, mySqlNoBackslashEscapes: true)!.ShouldContain(@"IN ('Par\ent')");
 
         DatabaseForeignKeys.Query(DatabaseEngine.PostgreSql, plan).ShouldBeNull();
     }

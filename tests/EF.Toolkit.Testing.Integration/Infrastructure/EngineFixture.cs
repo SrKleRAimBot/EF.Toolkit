@@ -21,7 +21,7 @@ public abstract class EngineFixture : IAsyncLifetime
     public TestDatabase<ShopContext> Database => _database ?? throw new InvalidOperationException(SkipReason);
 
     /// <summary>Connection string for the database under test.</summary>
-    protected string ConnectionString { get; private set; } = "";
+    public string ConnectionString { get; private set; } = "";
 
     public async ValueTask InitializeAsync()
     {

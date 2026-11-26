@@ -329,6 +329,38 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_bare_character_tenant_is_one_character_long_and_a_longer_session_value_reaches_nothing()
+    {
+        // character with no length is character(1): 'acme' casts to 'a'.
+        var desks = new TenantIsolationPolicy("Desks", "Tenant", "app.tenant_chr", "character", policyName: "desks_iso");
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Desks\" (\"Id\" int PRIMARY KEY, \"Tenant\" character NOT NULL); "
+                + "INSERT INTO \"Desks\" VALUES (1, 'a'); "
+                + $"ALTER TABLE \"Desks\" OWNER TO {PostgreSqlFixture.AppUser};",
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(desks);
+
+            async Task<List<int>> IdsAs(string tenant)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set("app.tenant_chr", () => tenant))
+                    .Options);
+                return await context.Database.SqlQueryRaw<int>("SELECT \"Id\" AS \"Value\" FROM \"Desks\"").ToListAsync(Token);
+            }
+
+            (await IdsAs("a")).ShouldBe([1]);
+            (await IdsAs("acme")).ShouldBeEmpty();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Desks\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

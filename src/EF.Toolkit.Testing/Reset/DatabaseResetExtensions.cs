@@ -58,7 +58,7 @@ public static class DatabaseResetExtensions
 
                 var state = await ReadStateAsync(engine, connection, transaction, options, cancellationToken)
                     .ConfigureAwait(false);
-                if (DatabaseForeignKeys.Query(engine, plan) is { } query)
+                if (DatabaseForeignKeys.Query(engine, plan, state.MySqlNoBackslashEscapes) is { } query)
                 {
                     ResetPlan.RefuseUnplannedReferences(
                         await ReadReferencesAsync(connection, transaction, query, cancellationToken).ConfigureAwait(false));
@@ -88,12 +88,7 @@ public static class DatabaseResetExtensions
 
                 if (engine == DatabaseEngine.MySql && ResetSqlGenerator.MySqlVerifies(plan, state))
                 {
-                    state = state with
-                    {
-                        MySqlForeignKeys = DatabaseForeignKeys.GroupMySqlForeignKeys(
-                            await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlPlanForeignKeys(plan), cancellationToken)
-                                .ConfigureAwait(false)),
-                    };
+                    state = await WithMySqlForeignKeysAsync(connection, transaction, plan, state, cancellationToken).ConfigureAwait(false);
                 }
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
@@ -143,7 +138,7 @@ public static class DatabaseResetExtensions
                 }
 
                 var state = ReadState(engine, connection, transaction, options);
-                if (DatabaseForeignKeys.Query(engine, plan) is { } query)
+                if (DatabaseForeignKeys.Query(engine, plan, state.MySqlNoBackslashEscapes) is { } query)
                 {
                     ResetPlan.RefuseUnplannedReferences(ReadReferences(connection, transaction, query));
                 }
@@ -168,11 +163,7 @@ public static class DatabaseResetExtensions
 
                 if (engine == DatabaseEngine.MySql && ResetSqlGenerator.MySqlVerifies(plan, state))
                 {
-                    state = state with
-                    {
-                        MySqlForeignKeys = DatabaseForeignKeys.GroupMySqlForeignKeys(
-                            ReadRows(connection, transaction, DatabaseForeignKeys.MySqlPlanForeignKeys(plan))),
-                    };
+                    state = WithMySqlForeignKeys(connection, transaction, plan, state);
                 }
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
@@ -240,7 +231,11 @@ public static class DatabaseResetExtensions
             var checks = Convert.ToInt64(
                 await ScalarAsync(connection, transaction, "SELECT @@FOREIGN_KEY_CHECKS;", cancellationToken).ConfigureAwait(false),
                 System.Globalization.CultureInfo.InvariantCulture) != 0;
-            return new ResetConnectionState(options.RestartIdentity, inTransaction, MySqlForeignKeyChecks: checks);
+            var noBackslashEscapes = Convert.ToInt64(
+                await ScalarAsync(connection, transaction, MySqlNoBackslashEscapes, cancellationToken).ConfigureAwait(false),
+                System.Globalization.CultureInfo.InvariantCulture) != 0;
+            return new ResetConnectionState(
+                options.RestartIdentity, inTransaction, MySqlForeignKeyChecks: checks, MySqlNoBackslashEscapes: noBackslashEscapes);
         }
 
         if (engine != DatabaseEngine.Sqlite)
@@ -274,7 +269,11 @@ public static class DatabaseResetExtensions
             var checks = Convert.ToInt64(
                 Scalar(connection, transaction, "SELECT @@FOREIGN_KEY_CHECKS;"),
                 System.Globalization.CultureInfo.InvariantCulture) != 0;
-            return new ResetConnectionState(options.RestartIdentity, inTransaction, MySqlForeignKeyChecks: checks);
+            var noBackslashEscapes = Convert.ToInt64(
+                Scalar(connection, transaction, MySqlNoBackslashEscapes),
+                System.Globalization.CultureInfo.InvariantCulture) != 0;
+            return new ResetConnectionState(
+                options.RestartIdentity, inTransaction, MySqlForeignKeyChecks: checks, MySqlNoBackslashEscapes: noBackslashEscapes);
         }
 
         if (engine != DatabaseEngine.Sqlite)
@@ -359,6 +358,50 @@ public static class DatabaseResetExtensions
         using var command = CreateCommand(connection, transaction, sql);
         return command.ExecuteScalar();
     }
+
+    private const string MySqlNoBackslashEscapes = "SELECT FIND_IN_SET('NO_BACKSLASH_ESCAPES', @@SESSION.sql_mode) > 0;";
+
+    // The keys the verify step checks. A DELETE trigger on a reset table could write to any table, so
+    // when there is one every key in the database is read, and those outside the reset are counted now,
+    // before anything is deleted: a violation that was already there is not the reset's to refuse over.
+    private static async Task<ResetConnectionState> WithMySqlForeignKeysAsync(
+        DbConnection connection, DbTransaction? transaction, ResetPlan plan, ResetConnectionState state, CancellationToken cancellationToken)
+    {
+        var nbe = state.MySqlNoBackslashEscapes;
+        var triggers = Convert.ToInt64(
+            await ScalarAsync(connection, transaction, DatabaseForeignKeys.MySqlDeleteTriggers(plan, nbe), cancellationToken).ConfigureAwait(false),
+            System.Globalization.CultureInfo.InvariantCulture) != 0;
+        var keys = DatabaseForeignKeys.GroupMySqlForeignKeys(
+            await ReadRowsAsync(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, nbe, everyTable: triggers), cancellationToken)
+                .ConfigureAwait(false));
+        var outside = keys.Where(k => !k.InPlan).ToList();
+        var before = outside.Count == 0
+            ? []
+            : (await ReadRowsAsync(connection, transaction, MySqlCounts(outside), cancellationToken).ConfigureAwait(false))[0];
+        return state with { MySqlForeignKeys = WithCounts(keys, outside, before) };
+    }
+
+    private static ResetConnectionState WithMySqlForeignKeys(
+        DbConnection connection, DbTransaction? transaction, ResetPlan plan, ResetConnectionState state)
+    {
+        var nbe = state.MySqlNoBackslashEscapes;
+        var triggers = Convert.ToInt64(
+            Scalar(connection, transaction, DatabaseForeignKeys.MySqlDeleteTriggers(plan, nbe)),
+            System.Globalization.CultureInfo.InvariantCulture) != 0;
+        var keys = DatabaseForeignKeys.GroupMySqlForeignKeys(
+            ReadRows(connection, transaction, DatabaseForeignKeys.MySqlForeignKeys(plan, nbe, everyTable: triggers)));
+        var outside = keys.Where(k => !k.InPlan).ToList();
+        var before = outside.Count == 0 ? [] : ReadRows(connection, transaction, MySqlCounts(outside))[0];
+        return state with { MySqlForeignKeys = WithCounts(keys, outside, before) };
+    }
+
+    private static string MySqlCounts(IEnumerable<MySqlForeignKey> keys)
+        => "SELECT " + string.Join(", ", keys.Select(ResetSqlGenerator.MySqlViolations)) + ";";
+
+    private static List<MySqlForeignKey> WithCounts(List<MySqlForeignKey> keys, List<MySqlForeignKey> outside, string[] before)
+        => [.. keys.Select(k => k.InPlan
+            ? k
+            : k with { Before = long.Parse(before[outside.IndexOf(k)], System.Globalization.CultureInfo.InvariantCulture) })];
 
     private static async Task<List<string[]>> ReadRowsAsync(
         DbConnection connection,
