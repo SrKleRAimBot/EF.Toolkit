@@ -247,7 +247,44 @@ public static class SqlDatabaseFacadeExtensions
     // refused, so nulls are passed through as they are.
     private static object[] Parameters(object?[] arguments) => arguments!;
 
+    // One transaction for the whole set, unless the caller already has one, which the statements join.
+    // Replacing a definition is a drop followed by a create; run as separate commands, the moment
+    // between them is visible to every other session — for tenant isolation, a moment in which the
+    // restrictive policy is gone and the permissive grant is not, so any session reads every tenant —
+    // and a create that fails leaves it that way. PostgreSQL, SQL Server and SQLite run DDL inside a
+    // transaction; MySQL commits each DDL statement implicitly, so there it stays statement by statement.
+    // Inside the execution strategy, so a retrying strategy retries the whole unit rather than refusing
+    // a transaction it cannot replay.
     private static async Task ExecuteAllAsync(
+        DatabaseFacade database,
+        List<string> statements,
+        CancellationToken cancellationToken)
+    {
+        if (database.CurrentTransaction is not null || System.Transactions.Transaction.Current is not null)
+        {
+            await ExecuteEachAsync(database, statements, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await database.CreateExecutionStrategy().ExecuteAsync(
+                (database, statements),
+                static async (_, state, token) =>
+                {
+                    var transaction = await state.database.BeginTransactionAsync(token).ConfigureAwait(false);
+                    await using (transaction.ConfigureAwait(false))
+                    {
+                        await ExecuteEachAsync(state.database, state.statements, token).ConfigureAwait(false);
+                        await transaction.CommitAsync(token).ConfigureAwait(false);
+                    }
+
+                    return true;
+                },
+                verifySucceeded: null,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task ExecuteEachAsync(
         DatabaseFacade database,
         List<string> statements,
         CancellationToken cancellationToken)

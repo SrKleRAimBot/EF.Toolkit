@@ -166,6 +166,25 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_replacement_that_fails_leaves_the_original_policy_enforcing()
+    {
+        // Replacing drops the restrictive policy before recreating it. Committed piecemeal, a failure
+        // there left only the permissive USING (true) grant — every session read every tenant.
+        var broken = new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "no_such_type");
+
+        await using var admin = fixture.CreateAdminContext();
+        await Should.ThrowAsync<PostgresException>(() => admin.Database.CreateDatabaseObjectsAsync(broken));
+
+        await using (var none = AppContext(() => null))
+        {
+            (await none.Documents.CountAsync(Token)).ShouldBe(0);
+        }
+
+        await using var one = AppContext(() => 1);
+        (await TitlesAsync(one)).ShouldBe(["one-a", "one-b"]);
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

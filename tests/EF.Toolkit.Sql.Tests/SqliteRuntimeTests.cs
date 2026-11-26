@@ -54,6 +54,32 @@ public sealed class SqliteRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_set_that_fails_part_way_leaves_nothing_behind()
+    {
+        // One transaction for the set: the first view must not survive the second's failure.
+        var broken = new ViewDefinition("Broken", "SELEC nothing");   // SQLite accepts a view over a missing table, not bad syntax
+
+        await Should.ThrowAsync<SqliteException>(() =>
+            _context.Database.CreateDatabaseObjectsAsync([ActiveCustomers, broken], TestContext.Current.CancellationToken));
+
+        await Should.ThrowAsync<SqliteException>(() => _context.ActiveCustomers.ToListAsync(TestContext.Current.CancellationToken));
+        _context.Database.CurrentTransaction.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_callers_transaction_is_joined_rather_than_nested()
+    {
+        await using (var transaction = await _context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken))
+        {
+            await _context.Database.CreateDatabaseObjectsAsync(ActiveCustomers);
+            (await _context.ActiveCustomers.CountAsync(TestContext.Current.CancellationToken)).ShouldBe(2);
+            await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+        }
+
+        await Should.ThrowAsync<SqliteException>(() => _context.ActiveCustomers.ToListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Creating_again_replaces_the_view()
     {
         await _context.Database.CreateDatabaseObjectsAsync(ActiveCustomers);
