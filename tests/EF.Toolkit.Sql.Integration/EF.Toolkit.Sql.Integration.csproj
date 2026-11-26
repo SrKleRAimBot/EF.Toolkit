@@ -15,6 +15,11 @@
     <PackageReference Include="Shouldly" />
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Testcontainers.MySql" />
+    <PackageReference Include="MySql.EntityFrameworkCore" />
+
+    <!-- MySql.EntityFrameworkCore needs a newer relational layer than the package's own floor. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="$(RelationalTestRange)" />
   </ItemGroup>
 
 </Project>

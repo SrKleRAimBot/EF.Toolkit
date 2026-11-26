@@ -260,6 +260,24 @@ public static class SqlDatabaseFacadeExtensions
         List<string> statements,
         CancellationToken cancellationToken)
     {
+        if (database.GetSqlDialect() == SqlDialect.MySql)
+        {
+            // MySQL commits implicitly before every DDL statement. Inside the caller's transaction that
+            // would commit the caller's earlier work behind their back — and take any savepoint with it —
+            // so it is refused before anything runs. Outside one there is no unit to offer: the
+            // statements run one by one, each committing as MySQL always does.
+            if (database.CurrentTransaction is not null || System.Transactions.Transaction.Current is not null)
+            {
+                throw new InvalidOperationException(
+                    "MySQL commits implicitly before every DDL statement, so creating or dropping database objects "
+                    + "inside a transaction would commit the work already done in it. Call this outside the "
+                    + "transaction.");
+            }
+
+            await ExecuteEachAsync(database, statements, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (database.CurrentTransaction is { SupportsSavepoints: true } current)
         {
             // Inside the caller's transaction, a savepoint gives the set the same all-or-nothing: some

@@ -405,7 +405,9 @@ yours, under a savepoint — so a statement the database rejects rolls back the 
 transaction is left as it was and still usable. That
 matters most when replacing a definition, which is a drop followed by a create: re-applying tenant
 isolation never shows another session a moment with the tenant policy gone and the grant still in
-place. MySQL commits each DDL statement implicitly, so there the calls stay statement by statement. `IDatabaseObject` is the interface all of the definitions
+place. MySQL commits implicitly before every DDL statement, so there the statements run one by one,
+and a call made inside a transaction is refused before anything runs — it would otherwise commit the
+work already done in that transaction. `IDatabaseObject` is the interface all of the definitions
 share; `migrationBuilder.CreateDatabaseObject` / `DropDatabaseObject` take any of them, including your
 own.
 
