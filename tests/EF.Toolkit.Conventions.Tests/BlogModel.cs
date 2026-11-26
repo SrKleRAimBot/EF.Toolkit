@@ -11,6 +11,20 @@ public sealed class Author
     public int Id { get; set; }
     public string Name { get; set; } = "";
     public List<Post> Posts { get; } = [];
+    public AuthorProfile? Profile { get; set; }
+}
+
+/// <summary>Owned by Author, and itself the owner of a collection stored in a table of its own.</summary>
+public sealed class AuthorProfile
+{
+    public string Bio { get; set; } = "";
+    public List<ProfileLink> Links { get; } = [];
+}
+
+public sealed class ProfileLink
+{
+    public int Id { get; set; }
+    public string Url { get; set; } = "";
 }
 
 public class Post
@@ -62,7 +76,11 @@ public sealed class BlogContext(DbContextOptions<BlogContext> options, int? tena
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<Author>().HasSoftDelete();
+        modelBuilder.Entity<Author>(b =>
+        {
+            b.HasSoftDelete();
+            b.OwnsOne(a => a.Profile, p => p.OwnsMany(x => x.Links, l => l.Property(x => x.Id).ValueGeneratedNever()));
+        });
 
         modelBuilder.Entity<Post>(b =>
         {

@@ -13,7 +13,12 @@ public sealed class SoftDeleteTests : IAsyncLifetime
         _db = await BlogDatabase.CreateAsync();
         await using var context = _db.Context();
 
-        var author = new Author { Id = 1, Name = "ann" };
+        var author = new Author
+        {
+            Id = 1,
+            Name = "ann",
+            Profile = new AuthorProfile { Bio = "bio", Links = { new ProfileLink { Id = 1, Url = "a" }, new ProfileLink { Id = 2, Url = "b" } } },
+        };
         context.Authors.Add(author);
         context.Posts.AddRange(
             new Post { Id = 1, Title = "one", Tenant = 1, Author = author, Seo = { Slug = "one-slug" }, Comments = { new Comment { Id = 1, Text = "c1" }, new Comment { Id = 2, Text = "c2" } } },
@@ -156,6 +161,47 @@ public sealed class SoftDeleteTests : IAsyncLifetime
 
         await using var fresh = _db.Context();
         (await fresh.Posts.IncludeDeleted().SingleAsync(p => p.Id == 2, Ct)).Seo.Slug.ShouldBe("two-slug");
+    }
+
+    [Fact]
+    public async Task A_nested_owned_collection_survives_the_soft_delete_and_the_restore()
+    {
+        // Remove() marks the whole ownership subtree deleted; the links are owned by the profile, not
+        // by the author directly, and live in a table of their own.
+        await using (var context = _db.Context())
+        {
+            context.Authors.Remove(await context.Authors.SingleAsync(Ct));
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = _db.Context())
+        {
+            var deleted = await context.Authors.IncludeDeleted().AsNoTracking().SingleAsync(Ct);
+            deleted.Profile!.Bio.ShouldBe("bio");
+            deleted.Profile.Links.Select(l => l.Url).Order().ShouldBe(["a", "b"]);
+
+            context.Restore(await context.Authors.OnlyDeleted().SingleAsync(Ct));
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        var restored = await fresh.Authors.SingleAsync(Ct);
+        restored.Profile!.Links.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Restore_after_Remove_keeps_a_nested_owned_collection()
+    {
+        await using (var context = _db.Context())
+        {
+            var author = await context.Authors.SingleAsync(Ct);
+            context.Authors.Remove(author);
+            context.Restore(author);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var fresh = _db.Context();
+        (await fresh.Authors.SingleAsync(Ct)).Profile!.Links.Count.ShouldBe(2);
     }
 
     [Fact]

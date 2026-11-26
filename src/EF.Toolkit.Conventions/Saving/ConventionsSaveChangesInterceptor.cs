@@ -150,33 +150,17 @@ internal sealed class ConventionsSaveChangesInterceptor(ConventionsOptions optio
             return;
         }
 
+        foreach (var (converted, _, _) in state.Converted)
+        {
+            OwnedEntries.Keep(converted);
+        }
+
         foreach (var entry in entries)
         {
-            if (entry.State == EntityState.Deleted && entry.Metadata.IsOwned())
-            {
-                KeepOwnedRow(entry);
-            }
-            else if (entry.State == EntityState.Modified)
+            if (entry.State == EntityState.Modified)
             {
                 RestoreNulledForeignKeys(entry);
             }
-        }
-    }
-
-    private void KeepOwnedRow(EntityEntry entry)
-    {
-        var ownership = entry.Metadata.FindOwnership();
-        if (ownership is null)
-        {
-            return;
-        }
-
-        var values = ownership.Properties.Select(p => entry.Property(p.Name).CurrentValue).ToArray();
-        if (FindConverted(ownership, values) is not null)
-        {
-            // An owned type is part of its owner's row — or of a table only the owner reaches. Left
-            // deleted, a table-split owned type would have its columns nulled under a row that stays.
-            entry.State = EntityState.Unchanged;
         }
     }
 

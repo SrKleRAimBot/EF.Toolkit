@@ -85,7 +85,8 @@ public static class SoftDeleteExtensions
             entry.State = EntityState.Unchanged;
         }
 
-        KeepOwned(entry);
+        // Remove() marked the owned parts deleted along with the entity; undoing it undoes theirs.
+        OwnedEntries.Keep(entry);
 
         var property = entry.Property(mapping.Property.Name);
         property.CurrentValue = ConventionMetadata.LiveValue(mapping);
@@ -211,33 +212,6 @@ public static class SoftDeleteExtensions
                     .Invoke(builder, [selector, value]);
             }
         };
-    }
-
-    // Remove() marked the owned parts of the entity deleted along with it; undoing the Remove() has to
-    // undo theirs too, or a table-split owned type would have its columns nulled.
-    private static void KeepOwned(EntityEntry entry)
-    {
-        foreach (var navigation in entry.Navigations)
-        {
-            if (!navigation.Metadata.TargetEntityType.IsOwned() || navigation.CurrentValue is null)
-            {
-                continue;
-            }
-
-            var owned = navigation.Metadata.IsCollection
-                ? ((System.Collections.IEnumerable)navigation.CurrentValue).Cast<object>()
-                : [navigation.CurrentValue];
-
-            foreach (var value in owned)
-            {
-                var ownedEntry = entry.Context.Entry(value);
-                if (ownedEntry.State == EntityState.Deleted)
-                {
-                    ownedEntry.State = EntityState.Unchanged;
-                    KeepOwned(ownedEntry);
-                }
-            }
-        }
     }
 
     private static SoftDeleteMapping Mapping<TEntity>(DbSet<TEntity> set)
