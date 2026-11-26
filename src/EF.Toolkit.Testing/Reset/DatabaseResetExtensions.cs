@@ -66,9 +66,13 @@ public static class DatabaseResetExtensions
 
                 if (engine == DatabaseEngine.PostgreSql)
                 {
-                    ResetPlan.RefuseTruncatedDescendants(
-                        await ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan), cancellationToken)
-                            .ConfigureAwait(false));
+                    ResetPlan.RefuseTruncatedDescendants(await GuardedAsync(
+                            connection,
+                            transaction,
+                            state.InTransaction,
+                            token => ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan), token),
+                            cancellationToken)
+                        .ConfigureAwait(false));
                 }
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
@@ -125,8 +129,11 @@ public static class DatabaseResetExtensions
 
                 if (engine == DatabaseEngine.PostgreSql)
                 {
-                    ResetPlan.RefuseTruncatedDescendants(
-                        ReadReferences(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan)));
+                    ResetPlan.RefuseTruncatedDescendants(Guarded(
+                        connection,
+                        transaction,
+                        state.InTransaction,
+                        () => ReadReferences(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan))));
                 }
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
@@ -312,6 +319,79 @@ public static class DatabaseResetExtensions
     {
         using var command = CreateCommand(connection, transaction, sql);
         return command.ExecuteScalar();
+    }
+
+    // PostgreSQL aborts the caller's whole transaction on any error, a cancelled or timed-out catalog
+    // query included. Inside one, the check runs under a savepoint of its own, so a failure there costs
+    // the caller nothing it had already done.
+    private const string CheckSavepoint = "ef_toolkit_reset_check";
+
+    private static async Task<T> GuardedAsync<T>(
+        DbConnection connection,
+        DbTransaction? transaction,
+        bool inTransaction,
+        Func<CancellationToken, Task<T>> read,
+        CancellationToken cancellationToken)
+    {
+        if (!inTransaction)
+        {
+            return await read(cancellationToken).ConfigureAwait(false);
+        }
+
+        await ExecuteRawAsync(connection, transaction, $"SAVEPOINT {CheckSavepoint};", CancellationToken.None).ConfigureAwait(false);
+        T result;
+        try
+        {
+            result = await read(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await ExecuteRawAsync(connection, transaction, $"ROLLBACK TO SAVEPOINT {CheckSavepoint};", CancellationToken.None).ConfigureAwait(false);
+            await ExecuteRawAsync(connection, transaction, $"RELEASE SAVEPOINT {CheckSavepoint};", CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        await ExecuteRawAsync(connection, transaction, $"RELEASE SAVEPOINT {CheckSavepoint};", CancellationToken.None).ConfigureAwait(false);
+        return result;
+    }
+
+    private static T Guarded<T>(DbConnection connection, DbTransaction? transaction, bool inTransaction, Func<T> read)
+    {
+        if (!inTransaction)
+        {
+            return read();
+        }
+
+        ExecuteRaw(connection, transaction, $"SAVEPOINT {CheckSavepoint};");
+        T result;
+        try
+        {
+            result = read();
+        }
+        catch
+        {
+            ExecuteRaw(connection, transaction, $"ROLLBACK TO SAVEPOINT {CheckSavepoint};");
+            ExecuteRaw(connection, transaction, $"RELEASE SAVEPOINT {CheckSavepoint};");
+            throw;
+        }
+
+        ExecuteRaw(connection, transaction, $"RELEASE SAVEPOINT {CheckSavepoint};");
+        return result;
+    }
+
+    private static async Task ExecuteRawAsync(DbConnection connection, DbTransaction? transaction, string sql, CancellationToken cancellationToken)
+    {
+        var command = CreateCommand(connection, transaction, sql);
+        await using (command.ConfigureAwait(false))
+        {
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static void ExecuteRaw(DbConnection connection, DbTransaction? transaction, string sql)
+    {
+        using var command = CreateCommand(connection, transaction, sql);
+        command.ExecuteNonQuery();
     }
 
     private static async Task<List<DatabaseReference>> ReadReferencesAsync(
