@@ -132,7 +132,7 @@ public sealed class ResetSqlGeneratorTests
             Default with { SqliteHasSequenceTable = true });
 
         script.Prologue.ShouldBe(["PRAGMA foreign_keys = OFF;"]);
-        script.Body.ShouldBe(
+        script.Body.Skip(2).ShouldBe(
         [
             "DELETE FROM \"main\".\"Lines\";",
             "DELETE FROM \"main\".\"O'Brien\";",
@@ -144,7 +144,7 @@ public sealed class ResetSqlGeneratorTests
     [Fact]
     public void Sqlite_does_not_name_a_sequence_table_that_does_not_exist()
         => Generate(DatabaseEngine.Sqlite, ResetPlan.Create([Lines]), Default with { SqliteHasSequenceTable = false })
-            .Body.ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
+            .Body.Skip(2).ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
 
     [Fact]
     public void Sqlite_leaves_the_sequence_alone_when_identity_continues()
@@ -152,7 +152,7 @@ public sealed class ResetSqlGeneratorTests
                 DatabaseEngine.Sqlite,
                 ResetPlan.Create([Lines]),
                 Default with { RestartIdentity = false, SqliteHasSequenceTable = true })
-            .Body.ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
+            .Body.Skip(2).ShouldBe(["DELETE FROM \"main\".\"Lines\";"]);
 
     [Fact]
     public void Sqlite_leaves_foreign_keys_off_when_they_were_off()
@@ -191,7 +191,8 @@ public sealed class ResetSqlGeneratorTests
     [InlineData("Sqlite", "\"Odd]\"\"`'Name\"")]
     public void Identifiers_are_quoted_with_the_engine_quote_doubled(string engine, string quoted)
         => Generate(Enum.Parse<DatabaseEngine>(engine), ResetPlan.Create([Odd]), Default with { RestartIdentity = false })
-            .Body[0].ShouldContain(quoted);
+            .Body.First(s => s.Contains("DELETE", StringComparison.Ordinal) || s.Contains("TRUNCATE", StringComparison.Ordinal))
+            .ShouldContain(quoted);
 
     [Theory]
     [InlineData("SqlServer", false, "BEGIN TRANSACTION;", "COMMIT TRANSACTION;", "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;")]
@@ -204,7 +205,15 @@ public sealed class ResetSqlGeneratorTests
         var script = Generate(Enum.Parse<DatabaseEngine>(engine), ResetPlan.Create([Lines]), Default with { InTransaction = inTransaction });
 
         script.Begin.ShouldBe([begin]);
-        script.Commit.ShouldBe(commit.Length == 0 ? [] : [commit]);
+        if (commit.Length == 0)
+        {
+            script.Commit.ShouldBeEmpty();
+        }
+        else
+        {
+            script.Commit[^1].ShouldBe(commit);
+        }
+
         script.Rollback.ShouldBe(rollback.Split('|'));
     }
 
@@ -231,6 +240,19 @@ public sealed class ResetSqlGeneratorTests
         inside.Begin.ShouldBe(["SAVEPOINT ef_toolkit_reset;"]);
         inside.Commit.ShouldBe(["RELEASE SAVEPOINT ef_toolkit_reset;"]);
         inside.Rollback.ShouldBe(["ROLLBACK TO SAVEPOINT ef_toolkit_reset;"]);
+    }
+
+    [Fact]
+    public void Sqlite_verifies_the_whole_database_against_a_snapshot_in_one_statement_however_many_tables()
+    {
+        // One UNION ALL term per table broke past SQLite's 500-term limit; one whole-database check does not.
+        var many = ResetPlan.Create([.. Enumerable.Range(0, 600).Select(i => new ResetTable(null, $"T{i}"))]);
+        var script = Generate(DatabaseEngine.Sqlite, many);
+
+        script.Body[1].ShouldStartWith("CREATE TEMP TABLE \"ef_toolkit_fk_before\"");
+        script.Verify.ShouldHaveSingleItem().ShouldNotContain("UNION");
+        script.Verify[0].ShouldContain("FROM pragma_foreign_key_check AS c WHERE NOT EXISTS");
+        script.Commit[0].ShouldBe("DROP TABLE \"temp\".\"ef_toolkit_fk_before\";");
     }
 
     [Fact]

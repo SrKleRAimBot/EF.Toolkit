@@ -247,6 +247,49 @@ public sealed class ResetDataTests
     }
 
     [Fact]
+    public async Task A_trigger_writing_an_orphan_into_a_table_outside_the_reset_rolls_it_back()
+    {
+        // An audit trigger on a reset table writes to an unmapped table whose foreign key points at a
+        // row that does not exist. Only a whole-database check sees it.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE \"Actors\" (\"Id\" INTEGER PRIMARY KEY)", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Audit\" (\"Id\" INTEGER PRIMARY KEY, \"ActorId\" INTEGER NOT NULL REFERENCES \"Actors\" (\"Id\"))", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER \"AuditTags\" AFTER DELETE ON \"Tags\" BEGIN INSERT INTO \"Audit\" (\"ActorId\") VALUES (42); END", Ct);
+
+        (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+            .Message.ShouldContain("violate a foreign key");
+
+        (await ShopData.CountsAsync(context)).ShouldBe(before);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Audit\"")).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_violation_that_was_already_there_does_not_stop_the_reset()
+    {
+        // Rows written while foreign keys were off are not the reset's doing, and not its to refuse over.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE \"Actors\" (\"Id\" INTEGER PRIMARY KEY)", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Audit\" (\"Id\" INTEGER PRIMARY KEY, \"ActorId\" INTEGER NOT NULL REFERENCES \"Actors\" (\"Id\"))", Ct);
+        await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF;", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO \"Audit\" (\"ActorId\") VALUES (42)", Ct);
+        await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON;", Ct);
+
+        await context.Database.ResetDataAsync(cancellationToken: Ct);
+
+        (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v == 0);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Audit\"")).ShouldBe(1);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"temp\".\"sqlite_master\" WHERE \"name\" = 'ef_toolkit_fk_before'")).ShouldBe(0);
+    }
+
+    [Fact]
     public async Task A_temporary_table_shadowing_a_mapped_one_is_not_what_the_reset_empties()
     {
         // Unqualified, DELETE FROM "Customers" would empty temp."Customers" and orphan its temporary

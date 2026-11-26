@@ -258,9 +258,10 @@ internal static class ResetSqlGenerator
         // Qualified with main, where EF creates every table: unqualified, a temporary table of the same
         // name would shadow it and be emptied instead — one the foreign-key check, which reads main,
         // never looked at.
-        var body = plan.Tables
-            .Select(t => $"DELETE FROM \"main\".{Quote(t.Name, '"', '"')};")
-            .ToList();
+        // The snapshot of existing violations comes first, inside the unit: the verify step then fails
+        // only on violations the reset itself caused, wherever in the database they are.
+        List<string> body = [.. SqliteViolationSnapshot];
+        body.AddRange(plan.Tables.Select(t => $"DELETE FROM \"main\".{Quote(t.Name, '"', '"')};"));
 
         if (state.RestartIdentity && state.SqliteHasSequenceTable)
         {
@@ -276,8 +277,8 @@ internal static class ResetSqlGenerator
                 state.SqliteDeferForeignKeys ? [] : ["PRAGMA defer_foreign_keys = OFF;"])
             {
                 Begin = [$"SAVEPOINT {Savepoint};"],
-                Verify = [SqliteForeignKeyCheck(plan)],
-                Commit = [$"RELEASE SAVEPOINT {Savepoint};"],
+                Verify = [SqliteNewViolations],
+                Commit = [SqliteDropSnapshot, $"RELEASE SAVEPOINT {Savepoint};"],
                 Rollback = [$"ROLLBACK TO SAVEPOINT {Savepoint};", $"RELEASE SAVEPOINT {Savepoint};"],
             };
         }
@@ -289,21 +290,32 @@ internal static class ResetSqlGenerator
         return script with
         {
             Begin = ["BEGIN;"],
-            Verify = [SqliteForeignKeyCheck(plan)],
-            Commit = ["COMMIT;"],
+            Verify = [SqliteNewViolations],
+            Commit = [SqliteDropSnapshot, "COMMIT;"],
             Rollback = ["ROLLBACK;"],
         };
     }
 
     // Turning foreign_keys back on checks nothing already written, and switching defer_foreign_keys off
-    // discards what was deferred — so a row a trigger wrote mid-reset, pointing at one just deleted,
-    // would otherwise be committed. Every reset table was emptied, so any violation in one is new, and
-    // the guard has already refused tables outside the reset that reference them.
-    private static string SqliteForeignKeyCheck(ResetPlan plan)
-    {
-        var checks = plan.Tables.Select(t => $"SELECT 1 FROM pragma_foreign_key_check({SqlLiteral(t.Name)}, 'main')");
-        return $"SELECT COUNT(*) FROM ({string.Join(" UNION ALL ", checks)});";
-    }
+    // discards what was deferred — so a row a trigger wrote mid-reset pointing at a missing one would
+    // otherwise be committed, in a reset table or any other (an audit trigger writing to its own table,
+    // say). The whole database is checked, in one statement however many tables there are, against a
+    // snapshot taken at the start of the unit: violations that were already there are not the reset's
+    // to refuse over. The snapshot is a temporary table, created inside the unit, so a rollback removes
+    // it; the commit drops it.
+    private const string SqliteSnapshot = "\"temp\".\"ef_toolkit_fk_before\"";
+
+    private static readonly string[] SqliteViolationSnapshot =
+    [
+        $"DROP TABLE IF EXISTS {SqliteSnapshot};",
+        $"CREATE TEMP TABLE \"ef_toolkit_fk_before\" AS SELECT \"table\" AS t, \"rowid\" AS r, \"fkid\" AS f FROM pragma_foreign_key_check;",
+    ];
+
+    private const string SqliteNewViolations =
+        "SELECT COUNT(*) FROM pragma_foreign_key_check AS c WHERE NOT EXISTS ("
+        + $"SELECT 1 FROM {SqliteSnapshot} AS b WHERE b.t = c.\"table\" AND b.r IS c.\"rowid\" AND b.f = c.\"fkid\");";
+
+    private const string SqliteDropSnapshot = $"DROP TABLE {SqliteSnapshot};";
 
     private static string Quote(ResetTable table, char open, char close)
     {
