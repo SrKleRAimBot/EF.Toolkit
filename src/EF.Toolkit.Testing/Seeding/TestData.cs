@@ -443,13 +443,15 @@ public sealed class TestData
     /// </remarks>
     private static decimal GenerateDecimal(long n, IProperty? property)
     {
-        if (property?.GetPrecision() is not { } precision)
+        // HasColumnType("numeric(2,2)") sets no precision facet; only the resolved type mapping knows it.
+        var mapping = property?.FindRelationalTypeMapping();
+        if ((property?.GetPrecision() ?? mapping?.Precision) is not { } precision)
         {
             return n;
         }
 
         var digits = Math.Clamp(precision, 1, 18);
-        var scale = Math.Clamp(property.GetScale() ?? 0, 0, 28);
+        var scale = Math.Clamp(property!.GetScale() ?? mapping?.Scale ?? 0, 0, 28);
         return n % (long)Pow10(digits) / Pow10(scale);
     }
 
