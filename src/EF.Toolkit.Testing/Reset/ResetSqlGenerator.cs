@@ -311,9 +311,17 @@ internal static class ResetSqlGenerator
         $"CREATE TEMP TABLE \"ef_toolkit_fk_before\" AS SELECT \"table\" AS t, \"rowid\" AS r, \"fkid\" AS f FROM pragma_foreign_key_check;",
     ];
 
+    // Rows with a rowid are compared one by one. A WITHOUT ROWID table reports no rowid, so its
+    // violations cannot be told apart; for those the count per table and foreign key must not grow —
+    // one old orphan must not hide any number of new ones.
     private const string SqliteNewViolations =
-        "SELECT COUNT(*) FROM pragma_foreign_key_check AS c WHERE NOT EXISTS ("
-        + $"SELECT 1 FROM {SqliteSnapshot} AS b WHERE b.t = c.\"table\" AND b.r IS c.\"rowid\" AND b.f = c.\"fkid\");";
+        "SELECT "
+        + "(SELECT COUNT(*) FROM pragma_foreign_key_check AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS ("
+        + $"SELECT 1 FROM {SqliteSnapshot} AS b WHERE b.t = c.\"table\" AND b.r = c.\"rowid\" AND b.f = c.\"fkid\"))"
+        + " + (SELECT COUNT(*) FROM ("
+        + "SELECT c.\"table\" AS t, c.\"fkid\" AS f, COUNT(*) AS n FROM pragma_foreign_key_check AS c "
+        + "WHERE c.\"rowid\" IS NULL GROUP BY c.\"table\", c.\"fkid\") AS a "
+        + $"WHERE a.n > (SELECT COUNT(*) FROM {SqliteSnapshot} AS b WHERE b.t = a.t AND b.f = a.f AND b.r IS NULL));";
 
     private const string SqliteDropSnapshot = $"DROP TABLE {SqliteSnapshot};";
 

@@ -268,6 +268,34 @@ public sealed class ResetDataTests
         (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Audit\"")).ShouldBe(0);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_new_orphan_is_caught_beside_an_old_one(bool withoutRowId)
+    {
+        // A WITHOUT ROWID table reports no rowid for its violations, so a snapshot comparison by rowid
+        // took the new orphan for the old one.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE \"Actors\" (\"Id\" INTEGER PRIMARY KEY)", Ct);
+        var audit = "CREATE TABLE \"Audit\" (\"Id\" INTEGER PRIMARY KEY, \"ActorId\" INTEGER NOT NULL REFERENCES \"Actors\" (\"Id\"))"
+            + (withoutRowId ? " WITHOUT ROWID" : "");
+        await context.Database.ExecuteSqlRawAsync(audit, Ct);
+        await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF;", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO \"Audit\" VALUES (1, 42)", Ct);
+        await context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON;", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER \"AuditTags\" AFTER DELETE ON \"Tags\" BEGIN INSERT OR IGNORE INTO \"Audit\" VALUES (2, 43); END", Ct);
+
+        (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+            .Message.ShouldContain("violate a foreign key");
+
+        (await ShopData.CountsAsync(context)).ShouldBe(before);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Audit\"")).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_violation_that_was_already_there_does_not_stop_the_reset()
     {
