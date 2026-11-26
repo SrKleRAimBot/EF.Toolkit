@@ -121,6 +121,44 @@ internal sealed class ResetPlan
         bool hasExclusions = false)
         => new(tables, new HashSet<ResetTable>(cyclicTables ?? []), hasExclusions);
 
+    /// <summary>
+    ///     Refuses the reset if the database has a foreign key, from a table outside the reset, into one
+    ///     the reset empties — the catalog's view, covering tables the model does not map.
+    /// </summary>
+    /// <remarks>
+    ///     Names are compared without regard to case: both engines that need this can resolve a name in
+    ///     either case, so a match that differs only in case is still the same table.
+    /// </remarks>
+    /// <param name="references">The catalog's foreign keys.</param>
+    /// <param name="defaultSchema">
+    ///     The schema a model table without one lives in, for engines whose catalog reports schemas
+    ///     (SQL Server's <c>dbo</c>); <see langword="null" /> to compare names alone.
+    /// </param>
+    internal void RefuseUnplannedReferences(IEnumerable<DatabaseReference> references, string? defaultSchema = null)
+    {
+        string Key(string? schema, string name)
+            => defaultSchema is null ? name : (schema ?? defaultSchema) + "." + name;
+
+        var reset = new HashSet<string>(Tables.Select(t => Key(t.Schema, t.Name)), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var reference in references)
+        {
+            if (!reset.Contains(Key(reference.ReferencedSchema, reference.ReferencedTable)))
+            {
+                continue;
+            }
+
+            if (reference.OutsideDatabase || !reset.Contains(Key(reference.TableSchema, reference.Table)))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot reset '{reference.ReferencedTable}': '{reference.Table}', which the reset does not "
+                    + "empty, references it, and the reset suspends foreign-key checks while it deletes — its "
+                    + "rows would be deleted with it or left pointing at rows that no longer exist. Map the "
+                    + "table in the model so the reset empties it too, or remove the foreign key.");
+            }
+        }
+    }
+
     // Every engine's reset suspends or defers foreign-key enforcement while it deletes, so a table
     // left out of the reset that references one being emptied would not stop the delete: on SQLite its
     // rows could be cascade-deleted at commit, and everywhere else they would be left pointing at rows

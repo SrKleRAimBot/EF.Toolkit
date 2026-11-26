@@ -406,10 +406,10 @@ backing field EF maps.
   each. For the same reason, while an isolated scope is open on one, a context created from the
   database directly rather than from the scope cannot run a command: the shared connection has a
   transaction that context is not enlisted in.
-- **The reset only knows the model.** A table the model does not map is not emptied, and a foreign
-  key from one into a mapped table makes the reset fail on PostgreSQL and SQL Server. On MySQL and
-  SQLite, which suspend foreign-key checks while they delete, it leaves that table's rows pointing at
-  rows that are gone — map the table, or empty it yourself first.
+- **The reset only knows the model.** A table the model does not map is not emptied. If one has a
+  foreign key into a mapped table, the reset is refused before anything is deleted: on SQLite, MySQL
+  and SQL Server it reads the database's own foreign keys first, and on PostgreSQL the single
+  `TRUNCATE` fails as a whole. Map the table, or drop the foreign key.
 - **Excluding a table that references a reset one is refused** before anything runs, on every engine:
   the reset would either delete the kept rows with their principals or orphan them. Exclude the
   principal too, or stop excluding the dependent.

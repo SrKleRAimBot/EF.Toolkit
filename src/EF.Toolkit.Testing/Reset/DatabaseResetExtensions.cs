@@ -51,6 +51,13 @@ public static class DatabaseResetExtensions
                 var transaction = database.CurrentTransaction?.GetDbTransaction();
                 var state = await ReadStateAsync(engine, connection, transaction, options, cancellationToken)
                     .ConfigureAwait(false);
+                if (DatabaseForeignKeys.Query(engine) is { } query)
+                {
+                    plan.RefuseUnplannedReferences(
+                        await ReadReferencesAsync(connection, transaction, query, cancellationToken).ConfigureAwait(false),
+                        DatabaseForeignKeys.DefaultSchema(engine));
+                }
+
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
 
                 foreach (var sql in script.Prologue)
@@ -105,6 +112,12 @@ public static class DatabaseResetExtensions
                 var connection = database.GetDbConnection();
                 var transaction = database.CurrentTransaction?.GetDbTransaction();
                 var state = ReadState(engine, connection, transaction, options);
+                if (DatabaseForeignKeys.Query(engine) is { } query)
+                {
+                    plan.RefuseUnplannedReferences(
+                        ReadReferences(connection, transaction, query), DatabaseForeignKeys.DefaultSchema(engine));
+                }
+
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
 
                 foreach (var sql in script.Prologue)
@@ -303,5 +316,41 @@ public static class DatabaseResetExtensions
     {
         using var command = CreateCommand(connection, transaction, sql);
         return command.ExecuteScalar();
+    }
+
+    private static async Task<List<DatabaseReference>> ReadReferencesAsync(
+        DbConnection connection,
+        DbTransaction? transaction,
+        string sql,
+        CancellationToken cancellationToken)
+    {
+        var references = new List<DatabaseReference>();
+        var command = CreateCommand(connection, transaction, sql);
+        await using (command.ConfigureAwait(false))
+        {
+            var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await using (reader.ConfigureAwait(false))
+            {
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    references.Add(DatabaseForeignKeys.Read(reader));
+                }
+            }
+        }
+
+        return references;
+    }
+
+    private static List<DatabaseReference> ReadReferences(DbConnection connection, DbTransaction? transaction, string sql)
+    {
+        var references = new List<DatabaseReference>();
+        using var command = CreateCommand(connection, transaction, sql);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            references.Add(DatabaseForeignKeys.Read(reader));
+        }
+
+        return references;
     }
 }

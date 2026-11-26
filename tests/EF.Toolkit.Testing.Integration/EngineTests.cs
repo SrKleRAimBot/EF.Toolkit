@@ -28,6 +28,34 @@ public abstract class EngineTests(EngineFixture fixture) : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>
+    ///     Creates a table the model does not map, with a foreign key into Customers and one row, runs the
+    ///     reset expecting <typeparamref name="TException" />, and checks nothing was lost.
+    /// </summary>
+    protected async Task AssertUnmappedReferenceStopsResetAsync<TException>(string createTable, string dropTable)
+        where TException : Exception
+    {
+        SkipIfUnavailable();
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync(createTable, Ct);
+        try
+        {
+            var customer = await context.Customers.Select(c => c.Id).FirstAsync(Ct);
+            await context.Database.ExecuteSqlRawAsync("INSERT INTO Unmapped (Id, CustomerId) VALUES (1, {0})", [customer], Ct);
+
+            await Should.ThrowAsync<TException>(() => context.Database.ResetDataAsync(cancellationToken: Ct));
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM Unmapped")).ShouldBe(1);
+            (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v > 0);
+            await AssertConstraintsRestoredAsync(context);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(dropTable, Ct);
+        }
+    }
+
     private void SkipIfUnavailable() => Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
 
     protected static async Task<long> ScalarAsync(DbContext context, string sql)
@@ -253,6 +281,14 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
 [Collection("testing-sqlserver")]
 public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests(fixture)
 {
+    [Fact]
+    public Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset()
+        // Its constraint stays enforced, but the reset deletes table by table: without the catalog check
+        // it failed only after emptying every table ahead of Customers.
+        => AssertUnmappedReferenceStopsResetAsync<InvalidOperationException>(
+            "CREATE TABLE Unmapped (Id int PRIMARY KEY, CustomerId int NOT NULL REFERENCES Customers (Id))",
+            "DROP TABLE Unmapped");
+
     /// <summary>The cyclic tables' constraints are back on, and trusted — re-checked, not merely re-enabled.</summary>
     protected override async Task AssertConstraintsRestoredAsync(ShopContext context)
         => (await ScalarAsync(context, "SELECT COUNT(*) FROM sys.foreign_keys WHERE is_disabled = 1 OR is_not_trusted = 1"))
@@ -263,6 +299,13 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
 [Collection("testing-mysql")]
 public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture)
 {
+    [Fact]
+    public Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset()
+        // FOREIGN_KEY_CHECKS = 0 would let the truncate through, so the catalog check refuses first.
+        => AssertUnmappedReferenceStopsResetAsync<InvalidOperationException>(
+            "CREATE TABLE Unmapped (Id int PRIMARY KEY, CustomerId int NOT NULL, FOREIGN KEY (CustomerId) REFERENCES Customers (Id))",
+            "DROP TABLE Unmapped");
+
     protected override async Task AssertConstraintsRestoredAsync(ShopContext context)
         => (await ScalarAsync(context, "SELECT @@FOREIGN_KEY_CHECKS")).ShouldBe(1);
 }

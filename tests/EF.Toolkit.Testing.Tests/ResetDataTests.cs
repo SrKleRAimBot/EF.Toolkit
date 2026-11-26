@@ -160,6 +160,48 @@ public sealed class ResetDataTests
         (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v > 0);
     }
 
+    [Theory]
+    [InlineData("CASCADE", false)]
+    [InlineData("CASCADE", true)]
+    [InlineData("NO ACTION", false)]
+    [InlineData("NO ACTION", true)]
+    public async Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset(string onDelete, bool inTransaction)
+    {
+        // The model cannot see this table, and SQLite's reset defers or suspends foreign keys: with
+        // CASCADE its rows went with the customers, with NO ACTION they were left dangling.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var customer = await context.Customers.Select(c => c.Id).FirstAsync(Ct);
+        var ddl = "CREATE TABLE \"Unmapped\" (\"Id\" INTEGER PRIMARY KEY, \"CustomerId\" INTEGER NOT NULL "
+            + "REFERENCES \"Customers\" (\"Id\") ON DELETE " + onDelete + ")";
+        await context.Database.ExecuteSqlRawAsync(ddl, Ct);
+        await context.Database.ExecuteSqlAsync($"INSERT INTO \"Unmapped\" VALUES (1, {customer})", Ct);
+
+        await using var transaction = inTransaction ? await context.Database.BeginTransactionAsync(Ct) : null;
+        var error = await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct));
+
+        error.Message.ShouldContain("'Unmapped', which the reset does not empty, references it");
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Unmapped\"")).ShouldBe(1);
+        (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v > 0);
+        (await ScalarAsync(context, "PRAGMA foreign_keys;")).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_table_outside_the_model_with_no_foreign_key_into_it_does_not_stop_the_reset()
+    {
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE \"Standalone\" (\"Id\" INTEGER PRIMARY KEY)", Ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT INTO \"Standalone\" VALUES (1)", Ct);
+
+        context.Database.ResetData();
+
+        (await ShopData.CountsAsync(context)).Values.ShouldAllBe(v => v == 0);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Standalone\"")).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_reset_inside_a_transaction_is_rolled_back_with_it()
     {

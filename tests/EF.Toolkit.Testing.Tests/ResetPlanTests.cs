@@ -112,6 +112,37 @@ public sealed class ResetPlanTests
     }
 
     [Fact]
+    public void Catalog_references_from_outside_the_reset_are_refused_and_from_inside_allowed()
+    {
+        var plan = ResetPlan.Create([new ResetTable(null, "Orders"), new ResetTable(null, "Customers")]);
+
+        // Inside the reset, or into a table the reset keeps: nothing at risk.
+        plan.RefuseUnplannedReferences([new DatabaseReference("Orders", "Customers"), new DatabaseReference("Notes", "Archive")]);
+
+        Should.Throw<InvalidOperationException>(() => plan.RefuseUnplannedReferences([new DatabaseReference("audit", "CUSTOMERS")]))
+            .Message.ShouldContain("'audit', which the reset does not empty");
+
+        // A table of the same name in another MySQL database is still outside the reset.
+        Should.Throw<InvalidOperationException>(() => plan.RefuseUnplannedReferences([new DatabaseReference("Orders", "Customers", OutsideDatabase: true)]));
+    }
+
+    [Fact]
+    public void With_schemas_a_same_named_table_in_another_schema_is_outside_the_reset()
+    {
+        var plan = ResetPlan.Create([new ResetTable(null, "Orders"), new ResetTable("sales", "Customers")]);
+
+        // dbo.Orders -> sales.Customers is inside the reset.
+        plan.RefuseUnplannedReferences([new DatabaseReference("Orders", "Customers", TableSchema: "dbo", ReferencedSchema: "sales")], "dbo");
+
+        // audit.Orders is not dbo.Orders.
+        Should.Throw<InvalidOperationException>(() => plan.RefuseUnplannedReferences(
+            [new DatabaseReference("Orders", "Customers", TableSchema: "audit", ReferencedSchema: "sales")], "dbo"));
+
+        // And a key into dbo.Customers — not a table this reset empties — is no concern of it.
+        plan.RefuseUnplannedReferences([new DatabaseReference("X", "Customers", TableSchema: "dbo", ReferencedSchema: "dbo")], "dbo");
+    }
+
+    [Fact]
     public void Schemas_are_carried_through()
     {
         using var context = new SchemaContext(
