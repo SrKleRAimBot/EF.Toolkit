@@ -80,6 +80,12 @@ made to the entity before it was removed are discarded, exactly as a real delete
 to its own columns, its complex properties (including one set to `null`), and owned entities kept in
 its row.
 
+One exception to that: an optional complex value whose members were **all at their defaults** (`0`,
+`false`, `null`) and which was set to `null` before `Remove()`. EF keeps no record of whether an optional
+complex value was present — an absent one reads back as all defaults too — so the two cannot be told
+apart, and on EF Core 11 that clear is written with the soft delete. To keep such a value, leave it
+assigned when calling `Remove()`.
+
 On EF Core 10 one edit cannot be discarded: an element added to, or removed from, a **complex
 collection** that already had elements. EF Core 10 cannot take the deleted entry back to unchanged in
 that state and has no way to restore the collection, so the save is refused with a message naming the
