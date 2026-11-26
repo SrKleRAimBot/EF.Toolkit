@@ -34,8 +34,7 @@ public static class DbContextSeedingExtensions
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(entities);
 
-        context.AddRange(entities);
-        await SaveAndClearAsync(context, CancellationToken.None).ConfigureAwait(false);
+        await SaveAndClearAsync(context, c => c.AddRange(entities), CancellationToken.None).ConfigureAwait(false);
         return entities;
     }
 
@@ -55,8 +54,7 @@ public static class DbContextSeedingExtensions
         ArgumentNullException.ThrowIfNull(entities);
 
         var materialized = entities as IReadOnlyList<TEntity> ?? [.. entities];
-        context.AddRange(materialized);
-        await SaveAndClearAsync(context, cancellationToken).ConfigureAwait(false);
+        await SaveAndClearAsync(context, c => c.AddRange(materialized), cancellationToken).ConfigureAwait(false);
         return materialized;
     }
 
@@ -75,8 +73,7 @@ public static class DbContextSeedingExtensions
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(entity);
 
-        context.Add(entity);
-        await SaveAndClearAsync(context, cancellationToken).ConfigureAwait(false);
+        await SaveAndClearAsync(context, c => c.Add(entity), cancellationToken).ConfigureAwait(false);
         return entity;
     }
 
@@ -89,8 +86,7 @@ public static class DbContextSeedingExtensions
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(entities);
 
-        context.AddRange(entities);
-        SaveAndClear(context);
+        SaveAndClear(context, c => c.AddRange(entities));
         return entities;
     }
 
@@ -106,15 +102,17 @@ public static class DbContextSeedingExtensions
         ArgumentNullException.ThrowIfNull(entities);
 
         var materialized = entities as IReadOnlyList<TEntity> ?? [.. entities];
-        context.AddRange(materialized);
-        SaveAndClear(context);
+        SaveAndClear(context, c => c.AddRange(materialized));
         return materialized;
     }
 
-    private static async Task SaveAndClearAsync(DbContext context, CancellationToken cancellationToken)
+    // Attaching sits inside the try too: AddRange tracks the entities one by one and throws part way on a
+    // duplicate key, which left the ones before it tracked for the test's next SaveChanges to insert.
+    private static async Task SaveAndClearAsync(DbContext context, Action<DbContext> add, CancellationToken cancellationToken)
     {
         try
         {
+            add(context);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -125,10 +123,11 @@ public static class DbContextSeedingExtensions
         }
     }
 
-    private static void SaveAndClear(DbContext context)
+    private static void SaveAndClear(DbContext context, Action<DbContext> add)
     {
         try
         {
+            add(context);
             context.SaveChanges();
         }
         finally

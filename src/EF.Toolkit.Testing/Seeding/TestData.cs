@@ -317,7 +317,9 @@ public sealed class TestData
         }
 
         var underlying = Nullable.GetUnderlyingType(elementClrType) ?? elementClrType;
-        var element = Generate(underlying, null);
+        // The element's store type is the column's without its [] — timestamp without time zone[] holds
+        // timestamp without time zone values, whose DateTime kind has to match.
+        var element = Generate(underlying, null, property.GetColumnType() is { } column && column.EndsWith("[]", StringComparison.Ordinal) ? column[..^2] : null);
         if (element is null)
         {
             return null;
@@ -345,7 +347,8 @@ public sealed class TestData
     /// <summary>A unique, valid value of <paramref name="type" />, or <see langword="null" /> if unsupported.</summary>
     /// <param name="type">The non-nullable CLR type.</param>
     /// <param name="property">The property, for its facets, if there is one.</param>
-    private object? Generate(Type type, IProperty? property)
+    /// <param name="storeType">The store type when there is no property — a collection's element.</param>
+    private object? Generate(Type type, IProperty? property, string? storeType = null)
     {
         var n = ++_counter;
 
@@ -381,7 +384,7 @@ public sealed class TestData
             _ when type == typeof(decimal) => GenerateDecimal(n, property),
             _ when type == typeof(char) => (char)('a' + (n % 26)),
             _ when type == typeof(Guid) => GenerateGuid(),
-            _ when type == typeof(DateTime) => GenerateDateTime(n, property),
+            _ when type == typeof(DateTime) => GenerateDateTime(n, storeType ?? property?.GetColumnType()),
             _ when type == typeof(DateTimeOffset) => new DateTimeOffset(BaseDate.AddMinutes(n % MaxMinutes)),
             _ when type == typeof(DateOnly) => DateOnly.FromDateTime(BaseDate).AddDays((int)(n % MaxDays)),
             _ when type == typeof(TimeOnly) => new TimeOnly(n % SecondsPerDay * TimeSpan.TicksPerSecond),
@@ -489,15 +492,19 @@ public sealed class TestData
     ///     <see cref="DateTime" /> — and what the other engines ignore. A column declared without a time
     ///     zone refuses UTC on Npgsql instead, so there the kind is left unspecified.
     /// </remarks>
-    private static DateTime GenerateDateTime(long n, IProperty? property)
+    private static DateTime GenerateDateTime(long n, string? storeType)
     {
-        var value = BaseDate.AddMinutes(n % MaxMinutes);
-
         // Without its precision, so timestamptz(3) is still the time-zone alias and timestamp(3) without
         // time zone still the plain one.
-        var columnType = property?.GetColumnType() is { } declared
+        var columnType = storeType is { } declared
             ? System.Text.RegularExpressions.Regex.Replace(declared, @"\s*\(\s*\d+\s*\)", "").Trim().ToLowerInvariant()
             : null;
+
+        // A date column keeps only the day: values a minute apart would be one value there, and a unique
+        // index on it would refuse the second row.
+        var value = columnType == "date"
+            ? BaseDate.AddDays(n % MaxDays)
+            : BaseDate.AddMinutes(n % MaxMinutes);
         return columnType is not null
             && columnType.StartsWith("timestamp", StringComparison.Ordinal)
             && !columnType.Contains("with time zone", StringComparison.Ordinal)

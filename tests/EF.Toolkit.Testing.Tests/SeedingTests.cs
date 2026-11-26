@@ -23,6 +23,33 @@ public sealed class SeedingTests
         context.ChangeTracker.Entries().ShouldBeEmpty();
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_seed_that_fails_while_attaching_leaves_nothing_tracked(bool async)
+    {
+        // AddRange tracked the first of two entities with one key and threw on the second, before the
+        // cleanup: the next SaveChanges inserted the first.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        var first = ShopData.Customer("First");
+        var second = ShopData.Customer("Second");
+        first.Id = second.Id = 42;
+
+        if (async)
+        {
+            await Should.ThrowAsync<InvalidOperationException>(() => context.SeedAsync(first, second));
+        }
+        else
+        {
+            Should.Throw<InvalidOperationException>(() => context.Seed(first, second));
+        }
+
+        context.ChangeTracker.Entries().ShouldBeEmpty();
+        await context.SaveChangesAsync(Ct);
+        (await context.Customers.CountAsync(Ct)).ShouldBe(0);
+    }
+
     [Fact]
     public async Task A_query_after_seeding_reads_the_database_not_the_seeded_instance()
     {

@@ -298,6 +298,7 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
         public decimal Fraction { get; set; }
         public decimal Declared { get; set; }
         public string Code { get; set; } = "";
+        public DateTime[] Moments { get; set; } = [];
         public DateTime TakenAt { get; set; }
         public DateTime LocalTime { get; set; }
     }
@@ -313,6 +314,7 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
                 // Precision only in the column type: no precision facet, just the resolved mapping.
                 b.Property(r => r.Declared).HasColumnType("numeric(2,2)");
                 b.Property(r => r.Code).HasColumnType("varchar(4)");
+                b.Property(r => r.Moments).HasColumnType("timestamp without time zone[]");
                 b.Property(r => r.TakenAt).HasColumnType("timestamptz(3)");
                 b.Property(r => r.LocalTime).HasColumnType("timestamp(3) without time zone");
             });
@@ -327,7 +329,7 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
         await using var context = new ReadingContext(
             new DbContextOptionsBuilder<ReadingContext>().UseNpgsql(Fixture.ConnectionString).Options);
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE TABLE \"Readings\" (\"Id\" serial PRIMARY KEY, \"Fraction\" numeric(18,18) NOT NULL, \"Declared\" numeric(2,2) NOT NULL, \"Code\" varchar(4) NOT NULL, "
+            "CREATE TABLE \"Readings\" (\"Id\" serial PRIMARY KEY, \"Fraction\" numeric(18,18) NOT NULL, \"Declared\" numeric(2,2) NOT NULL, \"Code\" varchar(4) NOT NULL, \"Moments\" timestamp without time zone[] NOT NULL, "
                 + "\"TakenAt\" timestamptz(3) NOT NULL, \"LocalTime\" timestamp(3) without time zone NOT NULL)",
             Ct);
         try
@@ -756,6 +758,44 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
         finally
         {
             await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS SoftDeleteCustomers", Ct);
+        }
+    }
+
+    private sealed class Holiday
+    {
+        public int Id { get; set; }
+        public DateTime Day { get; set; }
+    }
+
+    private sealed class HolidayContext(DbContextOptions<HolidayContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Holiday>(b =>
+            {
+                b.ToTable("Holidays");
+                b.Property(h => h.Day).HasColumnType("date");
+                b.HasIndex(h => h.Day).IsUnique();
+            });
+    }
+
+    [Fact]
+    public async Task Generated_DateTimes_in_a_date_column_are_distinct_days()
+    {
+        // A minute apart, two generated values were one date: the unique index refused the second row.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new HolidayContext(
+            new DbContextOptionsBuilder<HolidayContext>().UseSqlServer(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE Holidays (Id int IDENTITY PRIMARY KEY, Day date NOT NULL UNIQUE)", Ct);
+        try
+        {
+            var holidays = await context.CreateManyAsync<Holiday>(3, cancellationToken: Ct);
+
+            holidays.Select(h => h.Day.Date).Distinct().Count().ShouldBe(3);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Holidays", Ct);
         }
     }
 
