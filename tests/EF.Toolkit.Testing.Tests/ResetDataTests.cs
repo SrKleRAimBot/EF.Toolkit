@@ -369,6 +369,23 @@ public sealed class ResetDataTests
     }
 
     [Fact]
+    public async Task A_trigger_that_keeps_a_row_fails_the_reset_and_every_table_is_rolled_back()
+    {
+        // RAISE(IGNORE) skips the delete without an error: the reset committed with the protected row still there.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER \"KeepTags\" BEFORE DELETE ON \"Tags\" BEGIN SELECT RAISE(IGNORE); END", Ct);
+
+        (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+            .Message.ShouldContain("The reset left rows in 'Tags'");
+
+        (await ShopData.CountsAsync(context)).ShouldBe(before);
+    }
+
+    [Fact]
     public async Task A_temporary_table_of_the_caller_s_keeps_its_rows_whatever_it_is_called()
     {
         // The snapshot used one fixed name and dropped any table already called that before creating its own.

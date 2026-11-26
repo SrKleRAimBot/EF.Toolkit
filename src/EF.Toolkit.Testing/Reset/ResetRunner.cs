@@ -24,6 +24,10 @@ internal static class ResetRunner
         "The reset left rows that violate a foreign key — a trigger on a reset table wrote them while checks "
         + "were suspended. It has been rolled back.";
 
+    internal static string KeptRows(string table)
+        => $"The reset left rows in '{table}': a trigger kept them (one that ignores the delete, say). It has been "
+            + "rolled back. Exclude the table from the reset, or drop the trigger for it.";
+
     internal const string AfterCommitFailed =
         "The reset deleted the rows and committed, but restarting the identity counters afterwards failed, "
         + "so new rows will not start at 1 — see the inner exception. On MySQL that needs the ALTER privilege.";
@@ -63,6 +67,14 @@ internal static class ResetRunner
                 if (await count(sql, cancellationToken).ConfigureAwait(false) != 0)
                 {
                     throw new InvalidOperationException(VerifyFailed);
+                }
+            }
+
+            foreach (var (sql, table) in script.VerifyEmpty)
+            {
+                if (await count(sql, cancellationToken).ConfigureAwait(false) != 0)
+                {
+                    throw new InvalidOperationException(KeptRows(table));
                 }
             }
 
@@ -141,6 +153,14 @@ internal static class ResetRunner
                 if (count(sql) != 0)
                 {
                     throw new InvalidOperationException(VerifyFailed);
+                }
+            }
+
+            foreach (var (sql, table) in script.VerifyEmpty)
+            {
+                if (count(sql) != 0)
+                {
+                    throw new InvalidOperationException(KeptRows(table));
                 }
             }
 

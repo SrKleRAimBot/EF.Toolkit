@@ -105,6 +105,12 @@ internal sealed record ResetScript
     /// </summary>
     public IReadOnlyList<string> Verify { get; init; } = [];
 
+    /// <summary>
+    ///     Queries run with <see cref="Verify" />, one per table, each counting the rows left in that table,
+    ///     which must be none: a trigger can keep a row the delete was meant to remove.
+    /// </summary>
+    public IReadOnlyList<(string Sql, string Table)> VerifyEmpty { get; init; } = [];
+
     /// <summary>Closes the unit once the body has succeeded.</summary>
     public IReadOnlyList<string> Commit { get; init; } = [];
 
@@ -125,7 +131,8 @@ internal sealed record ResetScript
 
     /// <summary>Every statement of a successful run, in execution order.</summary>
     public IEnumerable<string> All
-        => Prologue.Concat(Begin).Concat(Body).Concat(Verify).Concat(Commit).Concat(AfterCommit).Concat(Epilogue.Reverse());
+        => Prologue.Concat(Begin).Concat(Body).Concat(Verify).Concat(VerifyEmpty.Select(v => v.Sql))
+            .Concat(Commit).Concat(AfterCommit).Concat(Epilogue.Reverse());
 }
 
 /// <summary>Turns a <see cref="ResetPlan" /> into SQL for one engine.</summary>
@@ -390,6 +397,7 @@ internal static class ResetSqlGenerator
             {
                 Begin = [$"SAVEPOINT {savepoint};"],
                 Verify = [SqliteNewViolations(snapshot)],
+                VerifyEmpty = SqliteEmpty(plan),
                 Commit = [SqliteDropSnapshot(snapshot), $"RELEASE SAVEPOINT {savepoint};"],
                 Rollback = [$"ROLLBACK TO SAVEPOINT {savepoint};", $"RELEASE SAVEPOINT {savepoint};"],
             };
@@ -403,6 +411,7 @@ internal static class ResetSqlGenerator
         {
             Begin = ["BEGIN;"],
             Verify = [SqliteNewViolations(snapshot)],
+            VerifyEmpty = SqliteEmpty(plan),
             Commit = [SqliteDropSnapshot(snapshot), "COMMIT;"],
             Rollback = ["ROLLBACK;"],
         };
@@ -432,6 +441,11 @@ internal static class ResetSqlGenerator
             + "WHERE c.\"rowid\" IS NULL GROUP BY c.\"table\", c.\"fkid\") AS a "
             + $"WHERE a.n > (SELECT COUNT(*) FROM {snapshot} AS b WHERE b.t = a.t AND b.f = a.f AND b.r IS NULL));";
     }
+
+    // A BEFORE DELETE trigger that calls RAISE(IGNORE) skips the row without an error, so a protected
+    // fixture would survive a reset that reported success.
+    private static (string Sql, string Table)[] SqliteEmpty(ResetPlan plan)
+        => [.. plan.Tables.Select(t => ($"SELECT COUNT(*) FROM \"main\".{Quote(t.Name, '"', '"')};", t.Name))];
 
     private static string SqliteDropSnapshot(string name) => $"DROP TABLE \"temp\".\"{name}\";";
 
