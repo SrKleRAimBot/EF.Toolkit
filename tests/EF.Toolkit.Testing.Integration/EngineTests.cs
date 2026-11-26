@@ -292,6 +292,32 @@ public sealed class MySqlCollectionDefinition : ICollectionFixture<MySqlFixture>
 public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture)
 {
     [Fact]
+    public async Task An_unmapped_table_inheriting_from_a_reset_one_stops_the_reset()
+    {
+        // TRUNCATE without ONLY empties every descendant: the archive would go with Customers.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE \"CustomersArchive\" () INHERITS (\"Customers\")", Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "INSERT INTO \"CustomersArchive\" SELECT * FROM ONLY \"Customers\" LIMIT 1", Ct);
+            var before = await ShopData.CountsAsync(context);
+
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("'\"CustomersArchive\"' does but is not part of the reset");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM \"CustomersArchive\"")).ShouldBe(1);
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE \"CustomersArchive\"", Ct);
+        }
+    }
+
+    [Fact]
     public async Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset()
     {
         // Without CASCADE the TRUNCATE refuses, rather than emptying a table nobody asked it to touch.

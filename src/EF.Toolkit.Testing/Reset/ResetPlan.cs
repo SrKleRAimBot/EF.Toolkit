@@ -22,12 +22,17 @@ internal sealed class ResetPlan
     private ResetPlan(
         IReadOnlyList<ResetTable> tables,
         IReadOnlySet<ResetTable> cyclicTables,
-        bool hasExclusions)
+        bool hasExclusions,
+        IReadOnlyList<ResetTable>? retained = null)
     {
         Tables = tables;
         CyclicTables = cyclicTables;
         HasExclusions = hasExclusions;
+        Retained = retained ?? [];
     }
+
+    /// <summary>Tables the model maps that this reset leaves alone — the excluded ones.</summary>
+    public IReadOnlyList<ResetTable> Retained { get; }
 
     /// <summary>Every table to empty, dependents before the principals they reference.</summary>
     public IReadOnlyList<ResetTable> Tables { get; }
@@ -65,7 +70,12 @@ internal sealed class ResetPlan
                 .Select(fk => new ResetTable(fk.PrincipalTable.Schema, fk.PrincipalTable.Name))
                 .Where(included.ContainsKey));
 
-        return new ResetPlan(ordered, cyclic, options.HasExclusions);
+        var retained = relational.Tables
+            .Select(t => new ResetTable(t.Schema, t.Name))
+            .Where(t => !included.ContainsKey(t))
+            .ToList();
+
+        return new ResetPlan(ordered, cyclic, options.HasExclusions, retained);
     }
 
     /// <summary>
@@ -118,8 +128,25 @@ internal sealed class ResetPlan
     internal static ResetPlan Create(
         IReadOnlyList<ResetTable> tables,
         IEnumerable<ResetTable>? cyclicTables = null,
-        bool hasExclusions = false)
-        => new(tables, new HashSet<ResetTable>(cyclicTables ?? []), hasExclusions);
+        bool hasExclusions = false,
+        IReadOnlyList<ResetTable>? retained = null)
+        => new(tables, new HashSet<ResetTable>(cyclicTables ?? []), hasExclusions, retained);
+
+    /// <summary>
+    ///     Refuses a PostgreSQL reset whose <c>TRUNCATE</c> would reach a table it was not asked to
+    ///     empty, from rows produced by <see cref="DatabaseForeignKeys.PostgreSqlDescendants" />.
+    /// </summary>
+    internal static void RefuseTruncatedDescendants(IEnumerable<DatabaseReference> descendants)
+    {
+        if (descendants.FirstOrDefault() is { } descendant)
+        {
+            throw new InvalidOperationException(
+                $"Cannot reset '{descendant.ReferencedTable}': PostgreSQL truncates every table that inherits "
+                + $"from it, and '{descendant.Table}' does but is not part of the reset — an unmapped child "
+                + "table, or a partition the reset was told to keep. Its rows would be emptied too. Map "
+                + "the table, stop excluding it, or exclude its parent as well.");
+        }
+    }
 
     /// <summary>
     ///     A copy of this plan with every unqualified table given the schema the database resolved it to,
@@ -134,7 +161,8 @@ internal sealed class ResetPlan
         ResetTable Qualify(ResetTable table)
             => table.Schema is null && schemas.TryGetValue(table.Name, out var schema) ? table with { Schema = schema } : table;
 
-        return new ResetPlan([.. Tables.Select(Qualify)], new HashSet<ResetTable>(CyclicTables.Select(Qualify)), HasExclusions);
+        return new ResetPlan(
+            [.. Tables.Select(Qualify)], new HashSet<ResetTable>(CyclicTables.Select(Qualify)), HasExclusions, Retained);
     }
 
     /// <summary>

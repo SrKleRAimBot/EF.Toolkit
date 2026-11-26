@@ -261,6 +261,21 @@ public sealed class ResetSqlGeneratorTests
     }
 
     [Fact]
+    public void The_PostgreSQL_descendant_query_resolves_every_name_as_TRUNCATE_will()
+    {
+        var sql = DatabaseForeignKeys.PostgreSqlDescendants(
+            ResetPlan.Create([Odd, new ResetTable("sales", "Orders")], retained: [new ResetTable(null, "Kept")]));
+
+        sql.ShouldContain("to_regclass('\"Odd]\"\"`''Name\"')");
+        sql.ShouldContain("to_regclass('\"sales\".\"Orders\"')");
+        sql.ShouldContain("kept(oid) AS (SELECT k FROM unnest(ARRAY[to_regclass('\"Kept\"')]::regclass[])");
+        sql.ShouldContain("root.relkind <> 'p'");
+
+        // Nothing kept is an empty, typed array rather than a syntax error.
+        DatabaseForeignKeys.PostgreSqlDescendants(ResetPlan.Create([Odd])).ShouldContain("ARRAY[]::regclass[]");
+    }
+
+    [Fact]
     public void SqlServer_literals_double_single_quotes()
         => Generate(DatabaseEngine.SqlServer, ResetPlan.Create([Odd])).Body[1]
             .ShouldContain("N'[Odd]]\"`''Name]'");

@@ -417,6 +417,10 @@ backing field EF maps.
   foreign key into a mapped table, the reset is refused before anything is deleted: on SQLite, MySQL
   and SQL Server it reads the database's own foreign keys first, and on PostgreSQL the single
   `TRUNCATE` fails as a whole. Map the table, or drop the foreign key.
+- **PostgreSQL inheritance is checked too.** `TRUNCATE` empties every table that inherits from the ones
+  it names. Partitions of a mapped partitioned table are that table's rows and are emptied with it,
+  but an unmapped `INHERITS` child — an archive, say — or a partition the reset was told to keep makes
+  the reset refuse instead.
 - **Excluding a table that references a reset one is refused** before anything runs, on every engine:
   the reset would either delete the kept rows with their principals or orphan them. Exclude the
   principal too, or stop excluding the dependent.

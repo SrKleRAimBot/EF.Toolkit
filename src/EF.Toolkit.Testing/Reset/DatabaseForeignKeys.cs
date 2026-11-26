@@ -78,6 +78,44 @@ internal static class DatabaseForeignKeys
         })) + ";";
     }
 
+    /// <summary>
+    ///     PostgreSQL: every table a <c>TRUNCATE</c> of the plan would also empty without being asked —
+    ///     rows of (descendant, plan table).
+    /// </summary>
+    /// <remarks>
+    ///     <c>TRUNCATE</c> without <c>ONLY</c> empties every descendant. For a partitioned table that is
+    ///     the point — its partitions hold its rows — unless a partition is one the reset was told to
+    ///     keep. For ordinary inheritance it is not: an <c>INHERITS</c> child is a table of its own. Names
+    ///     go through <c>to_regclass</c>, resolving exactly as the <c>TRUNCATE</c> will; a table that does
+    ///     not exist resolves to nothing rather than failing here.
+    /// </remarks>
+    internal static string PostgreSqlDescendants(ResetPlan plan)
+    {
+        static string RegClasses(IEnumerable<ResetTable> tables)
+            => string.Join(", ", tables.Select(t =>
+            {
+                var quoted = (t.Schema is null ? "" : Quote(t.Schema) + ".") + Quote(t.Name);
+                return "to_regclass('" + quoted.Replace("'", "''", StringComparison.Ordinal) + "')";
+            }));
+
+        static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
+        return $"""
+            WITH RECURSIVE
+                reset(oid) AS (SELECT r FROM unnest(ARRAY[{RegClasses(plan.Tables)}]::regclass[]) AS r WHERE r IS NOT NULL),
+                kept(oid) AS (SELECT k FROM unnest(ARRAY[{RegClasses(plan.Retained)}]::regclass[]) AS k WHERE k IS NOT NULL),
+                tree(root, rel) AS (
+                    SELECT oid, oid FROM reset
+                    UNION ALL
+                    SELECT tree.root, i.inhrelid::regclass FROM tree JOIN pg_catalog.pg_inherits AS i ON i.inhparent = tree.rel)
+            SELECT tree.rel::text, tree.root::text, 0
+            FROM tree JOIN pg_catalog.pg_class AS root ON root.oid = tree.root
+            WHERE tree.rel <> tree.root
+              AND tree.rel NOT IN (SELECT oid FROM reset)
+              AND (root.relkind <> 'p' OR tree.rel IN (SELECT oid FROM kept));
+            """;
+    }
+
     /// <summary>The schema of a model table that names none, where the catalog reports schemas.</summary>
     /// <remarks>
     ///     <c>dbo</c> is SQL Server's default for the login EF connects as unless the model says

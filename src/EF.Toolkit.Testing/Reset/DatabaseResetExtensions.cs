@@ -65,6 +65,13 @@ public static class DatabaseResetExtensions
                         DatabaseForeignKeys.DefaultSchema(engine));
                 }
 
+                if (engine == DatabaseEngine.PostgreSql)
+                {
+                    ResetPlan.RefuseTruncatedDescendants(
+                        await ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan), cancellationToken)
+                            .ConfigureAwait(false));
+                }
+
                 var script = ResetSqlGenerator.Generate(engine, plan, state);
 
                 await ResetRunner.RunAsync(
@@ -113,6 +120,12 @@ public static class DatabaseResetExtensions
                 {
                     plan.RefuseUnplannedReferences(
                         ReadReferences(connection, transaction, query), DatabaseForeignKeys.DefaultSchema(engine));
+                }
+
+                if (engine == DatabaseEngine.PostgreSql)
+                {
+                    ResetPlan.RefuseTruncatedDescendants(
+                        ReadReferences(connection, transaction, DatabaseForeignKeys.PostgreSqlDescendants(plan)));
                 }
 
                 var script = ResetSqlGenerator.Generate(engine, plan, state);

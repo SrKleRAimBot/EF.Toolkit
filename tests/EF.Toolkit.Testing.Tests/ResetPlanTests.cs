@@ -143,6 +143,26 @@ public sealed class ResetPlanTests
     }
 
     [Fact]
+    public void The_plan_remembers_what_it_keeps()
+    {
+        using var context = Contexts.Sqlite();
+
+        var plan = Plan(context, o => o.ExcludeTable("Tags"));
+
+        plan.Retained.Select(t => t.Name).ShouldBe(["Tags"]);
+        Plan(context).Retained.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_truncated_descendant_is_refused_by_name()
+    {
+        ResetPlan.RefuseTruncatedDescendants([]);
+
+        Should.Throw<InvalidOperationException>(() => ResetPlan.RefuseTruncatedDescendants([new DatabaseReference("archive", "customers")]))
+            .Message.ShouldContain("Cannot reset 'customers': PostgreSQL truncates every table that inherits from it, and 'archive'");
+    }
+
+    [Fact]
     public void Schemas_are_carried_through()
     {
         using var context = new SchemaContext(
