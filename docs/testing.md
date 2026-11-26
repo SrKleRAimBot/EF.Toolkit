@@ -210,9 +210,11 @@ rows are already gone and the error says so. Before the unit closes, every table
 trigger could have kept a row or put one back — an `INSTEAD OF DELETE` soft delete on SQL Server, a
 `RAISE(IGNORE)` on SQLite, an audit trigger writing into a table MySQL already emptied, an `AFTER
 TRUNCATE` trigger on PostgreSQL — and a table left with rows fails the reset, names the table and rolls
-it back. On PostgreSQL that check covers the tables with a `TRUNCATE` trigger, the only kind that runs;
-one under row-level security that applies to the login is refused, since a count it filters could not
-show what is left. The unit's savepoint gets a fresh name for every reset,
+it back. On PostgreSQL the check runs when a `TRUNCATE` trigger — the only kind
+that fires — sits on any reset table or on a partition or child `TRUNCATE` reaches through one, and then
+covers every reset table, since such a trigger can write anywhere; a reset table under row-level
+security that applies to the login is refused then, since a count it filters could not show what is
+left. The unit's savepoint gets a fresh name for every reset,
 so it can never take the place of one of yours.
 
 Whatever is suspended is restored even when a statement fails, and every restore is attempted even if

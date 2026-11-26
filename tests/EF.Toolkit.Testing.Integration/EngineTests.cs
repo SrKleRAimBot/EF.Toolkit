@@ -291,6 +291,82 @@ public sealed class MySqlCollectionDefinition : ICollectionFixture<MySqlFixture>
 [Collection("testing-postgres")]
 public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTests(fixture)
 {
+    [Fact]
+    public async Task A_truncate_trigger_writing_into_another_reset_table_fails_the_reset()
+    {
+        // The trigger is on Customers but writes into Tags, which was truncated in the same statement:
+        // only the trigger's own table was counted, and the reset committed with Tags holding a row.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE FUNCTION audit_tags() RETURNS trigger LANGUAGE plpgsql AS "
+                + "$$ BEGIN INSERT INTO \"Tags\" (\"Code\", \"Label\") VALUES ('audit', 'written by a trigger'); RETURN NULL; END $$; "
+                + "CREATE TRIGGER audit_tags AFTER TRUNCATE ON \"Customers\" FOR EACH STATEMENT EXECUTE FUNCTION audit_tags();",
+            Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("Tags'");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS audit_tags ON \"Customers\"; DROP FUNCTION IF EXISTS audit_tags();", Ct);
+        }
+    }
+
+    private sealed class Happening
+    {
+        public int Id { get; set; }
+
+        public int Year { get; set; }
+    }
+
+    private sealed class HappeningContext(DbContextOptions<HappeningContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Happening>(b =>
+            {
+                b.ToTable("Happenings");
+                b.HasKey(h => new { h.Id, h.Year });
+            });
+    }
+
+    [Fact]
+    public async Task A_truncate_trigger_on_a_partition_only_the_parent_maps_fails_the_reset()
+    {
+        // TRUNCATE Happenings fires the partition's trigger too, but the search looked at mapped tables only.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new HappeningContext(
+            new DbContextOptionsBuilder<HappeningContext>().UseNpgsql(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE "Happenings" ("Id" int NOT NULL, "Year" int NOT NULL) PARTITION BY RANGE ("Year");
+            CREATE TABLE "HappeningsOld" PARTITION OF "Happenings" FOR VALUES FROM (2000) TO (2020);
+            CREATE TABLE "HappeningsNew" PARTITION OF "Happenings" FOR VALUES FROM (2020) TO (2100);
+            INSERT INTO "Happenings" VALUES (1, 2010), (2, 2025);
+            CREATE FUNCTION refill_happenings() RETURNS trigger LANGUAGE plpgsql AS
+                $$ BEGIN INSERT INTO "Happenings" VALUES (99, 2011); RETURN NULL; END $$;
+            CREATE TRIGGER refill_happenings AFTER TRUNCATE ON "HappeningsOld" FOR EACH STATEMENT EXECUTE FUNCTION refill_happenings();
+            """,
+            Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("Happenings'");
+
+            (await context.Set<Happening>().Select(h => h.Id).OrderBy(id => id).ToListAsync(Ct)).ShouldBe([1, 2]);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "DROP TABLE IF EXISTS \"Happenings\"; DROP FUNCTION IF EXISTS refill_happenings();", Ct);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -265,12 +265,15 @@ internal static class DatabaseForeignKeys
     ///     not exist resolves to nothing rather than failing here.
     /// </remarks>
     /// <summary>
-    ///     PostgreSQL: each reset table with a user <c>TRUNCATE</c> trigger — rows of (its index in the plan,
-    ///     whether row-level security applies to this session on it).
+    ///     PostgreSQL: every reset table — rows of (its index in the plan, whether row-level security applies
+    ///     to this session on it, whether it or anything TRUNCATE reaches through it has a user
+    ///     <c>TRUNCATE</c> trigger).
     /// </summary>
     /// <remarks>
-    ///     pg_trigger is readable by every role, so no such trigger is hidden. Row-level security would hide
-    ///     rows from the emptiness check that follows, which then could not be trusted.
+    ///     TRUNCATE empties a table's inheritance children and partitions with it and fires their triggers
+    ///     too, so the search walks the same tree. pg_trigger is readable by every role, so no such trigger
+    ///     is hidden. Row-level security would hide rows from the emptiness check that follows, which then
+    ///     could not be trusted.
     /// </remarks>
     internal static string PostgreSqlTruncateTriggers(ResetPlan plan)
     {
@@ -280,11 +283,17 @@ internal static class DatabaseForeignKeys
             return "to_regclass('" + quoted.Replace("'", "''", StringComparison.Ordinal) + "')";
         }));
         return $"""
-            SELECT (t.n - 1)::int, CASE WHEN pg_catalog.row_security_active(t.r) THEN 1 ELSE 0 END
-            FROM unnest(ARRAY[{classes}]::regclass[]) WITH ORDINALITY AS t(r, n)
-            WHERE t.r IS NOT NULL
-              AND EXISTS (SELECT 1 FROM pg_catalog.pg_trigger AS g
-                          WHERE g.tgrelid = t.r AND NOT g.tgisinternal AND (g.tgtype & 32) <> 0);
+            WITH RECURSIVE
+                reset(r, n) AS (SELECT t.r, t.n FROM unnest(ARRAY[{classes}]::regclass[]) WITH ORDINALITY AS t(r, n) WHERE t.r IS NOT NULL),
+                tree(n, rel) AS (
+                    SELECT n, r FROM reset
+                    UNION ALL
+                    SELECT tree.n, i.inhrelid::regclass FROM tree JOIN pg_catalog.pg_inherits AS i ON i.inhparent = tree.rel)
+            SELECT (reset.n - 1)::int,
+                   CASE WHEN pg_catalog.row_security_active(reset.r) THEN 1 ELSE 0 END,
+                   CASE WHEN EXISTS (SELECT 1 FROM tree JOIN pg_catalog.pg_trigger AS g ON g.tgrelid = tree.rel
+                                     WHERE tree.n = reset.n AND NOT g.tgisinternal AND (g.tgtype & 32) <> 0) THEN 1 ELSE 0 END
+            FROM reset;
             """;
     }
 

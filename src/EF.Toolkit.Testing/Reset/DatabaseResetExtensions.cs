@@ -500,10 +500,17 @@ public static class DatabaseResetExtensions
         }
     }
 
-    // A TRUNCATE trigger can put rows back, so such a table is counted before the commit — but under
-    // row-level security the count sees only what the session may, and could be zero with rows left.
+    // A TRUNCATE trigger runs after the whole statement and can write into any table — its own, another
+    // reset table, the parent of the partition it sits on — so if one can fire, every reset table is
+    // counted before the commit. Under row-level security the count sees only what the session may, and
+    // could be zero with rows left, so such a table is refused then.
     internal static List<ResetTable> TruncateTriggered(ResetPlan plan, List<string[]> rows)
     {
+        if (!rows.Any(r => r[2] != "0"))
+        {
+            return [];
+        }
+
         var tables = new List<ResetTable>();
         foreach (var row in rows)
         {
@@ -511,10 +518,10 @@ public static class DatabaseResetExtensions
             if (row[1] != "0")
             {
                 throw new InvalidOperationException(
-                    $"Cannot reset '{table}': it has a TRUNCATE trigger, which could put rows back, and row-level "
-                    + "security applies to this login on it, so the reset could not see whether the table was left "
-                    + "empty. Run the reset as the table's owner (without FORCE ROW LEVEL SECURITY), as a role with "
-                    + "BYPASSRLS, or drop the trigger.");
+                    $"Cannot reset '{table}': a TRUNCATE trigger among the reset tables could put rows back, and "
+                    + "row-level security applies to this login on this one, so the reset could not see whether it "
+                    + "was left empty. Run the reset as the table's owner (without FORCE ROW LEVEL SECURITY), as a "
+                    + "role with BYPASSRLS, or drop the trigger.");
             }
 
             tables.Add(table);
