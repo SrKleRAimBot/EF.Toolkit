@@ -67,6 +67,23 @@ public sealed class SqliteRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Inside_a_callers_transaction_a_failed_replacement_cannot_be_committed_half_done()
+    {
+        // SQLite keeps the transaction committable after a failed statement: without a savepoint, a
+        // caller that caught the error and committed kept the DROP VIEW and lost the view.
+        await _context.Database.CreateDatabaseObjectsAsync(ActiveCustomers);
+        var replacement = new ViewDefinition("ActiveCustomers", "SELEC nothing");
+
+        await using (var transaction = await _context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken))
+        {
+            await Should.ThrowAsync<SqliteException>(() => _context.Database.CreateDatabaseObjectsAsync(replacement));
+            await transaction.CommitAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await _context.ActiveCustomers.CountAsync(TestContext.Current.CancellationToken)).ShouldBe(2);
+    }
+
+    [Fact]
     public async Task A_callers_transaction_is_joined_rather_than_nested()
     {
         await using (var transaction = await _context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken))

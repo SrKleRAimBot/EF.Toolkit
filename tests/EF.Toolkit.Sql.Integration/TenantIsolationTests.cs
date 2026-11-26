@@ -185,6 +185,25 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task Inside_a_callers_transaction_a_failed_replacement_leaves_it_usable_and_the_policy_intact()
+    {
+        // PostgreSQL aborts a transaction on any error; rolling back to the savepoint is what lets the
+        // caller carry on and commit, with the original policy still in place.
+        var broken = new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "no_such_type");
+
+        await using var admin = fixture.CreateAdminContext();
+        await using (var transaction = await admin.Database.BeginTransactionAsync(Token))
+        {
+            await Should.ThrowAsync<PostgresException>(() => admin.Database.CreateDatabaseObjectsAsync(broken));
+            (await admin.Documents.CountAsync(Token)).ShouldBe(3);
+            await transaction.CommitAsync(Token);
+        }
+
+        await using var one = AppContext(() => 1);
+        (await TitlesAsync(one)).ShouldBe(["one-a", "one-b"]);
+    }
+
+    [Fact]
     public async Task Each_tenant_sees_only_its_own_rows()
     {
         await using (var one = AppContext(() => 1))

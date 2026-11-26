@@ -400,8 +400,9 @@ await context.Database.DropDatabaseObjectsAsync(Schema.ActiveCustomers, Schema.O
 
 Objects are created in the order given and dropped in reverse, so list dependencies first. Every
 statement is rendered before the first one runs, so an object the engine cannot have refuses the whole
-call without leaving half of it applied. The statements then run as **one transaction** — or inside
-yours, if one is open — so a statement the database rejects rolls back the ones before it. That
+call without leaving half of it applied. The statements then run as **one transaction** — or, inside
+yours, under a savepoint — so a statement the database rejects rolls back the ones before it, and your
+transaction is left as it was and still usable. That
 matters most when replacing a definition, which is a drop followed by a create: re-applying tenant
 isolation never shows another session a moment with the tenant policy gone and the grant still in
 place. MySQL commits each DDL statement implicitly, so there the calls stay statement by statement. `IDatabaseObject` is the interface all of the definitions

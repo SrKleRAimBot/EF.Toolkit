@@ -260,8 +260,30 @@ public static class SqlDatabaseFacadeExtensions
         List<string> statements,
         CancellationToken cancellationToken)
     {
+        if (database.CurrentTransaction is { SupportsSavepoints: true } current)
+        {
+            // Inside the caller's transaction, a savepoint gives the set the same all-or-nothing: some
+            // engines leave the transaction committable after a failed statement, so without it a caller
+            // that caught the error and committed would commit the drop without the create.
+            await current.CreateSavepointAsync(Savepoint, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await ExecuteEachAsync(database, statements, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                await current.RollbackToSavepointAsync(Savepoint, CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+
+            await current.ReleaseSavepointAsync(Savepoint, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (database.CurrentTransaction is not null || System.Transactions.Transaction.Current is not null)
         {
+            // A transaction without savepoints, or an ambient one: the set joins it, and its atomicity
+            // is the caller's to decide.
             await ExecuteEachAsync(database, statements, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -283,6 +305,8 @@ public static class SqlDatabaseFacadeExtensions
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    private const string Savepoint = "ef_toolkit_objects";
 
     private static async Task ExecuteEachAsync(
         DatabaseFacade database,
