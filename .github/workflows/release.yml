@@ -73,6 +73,12 @@ jobs:
       - name: Unit tests (conventions)
         run: dotnet test tests/EF.Toolkit.Conventions.Tests -c Release --no-build $EF --verbosity normal
 
+      - name: Unit tests (sql)
+        run: dotnet test tests/EF.Toolkit.Sql.Tests -c Release --no-build $EF --verbosity normal
+
+      - name: Integration tests (sql)
+        run: dotnet test tests/EF.Toolkit.Sql.Integration -c Release --no-build $EF --verbosity normal
+
       # The differential harnesses are the primary correctness gate, so a release runs them
       # rather than trusting that the tagged commit was already validated on a branch.
       - name: Equivalence tests (bulk)
@@ -142,7 +148,8 @@ jobs:
             artifacts/EF.Toolkit.Audit.Sqlite.*.nupkg \
             artifacts/EF.Toolkit.Audit.Bulk.*.nupkg \
             artifacts/EF.Toolkit.Query.[0-9]*.nupkg \
-            artifacts/EF.Toolkit.Conventions.[0-9]*.nupkg
+            artifacts/EF.Toolkit.Conventions.[0-9]*.nupkg \
+            artifacts/EF.Toolkit.Sql.[0-9]*.nupkg
           do
             echo "::group::push $pkg"
             dotnet nuget push "$pkg" \

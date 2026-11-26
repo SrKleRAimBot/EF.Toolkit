@@ -30,6 +30,8 @@ jobs:
         run: dotnet test tests/EF.Toolkit.Query.Tests -c Release --no-build --verbosity normal
       - name: Unit tests (conventions)
         run: dotnet test tests/EF.Toolkit.Conventions.Tests -c Release --no-build --verbosity normal
+      - name: Unit tests (sql)
+        run: dotnet test tests/EF.Toolkit.Sql.Tests -c Release --no-build --verbosity normal
       - name: Pack
         run: dotnet pack -c Release --no-build -o artifacts
       - uses: actions/upload-artifact@v4
@@ -61,6 +63,8 @@ jobs:
         run: dotnet test tests/EF.Toolkit.Query.Tests -c Release --no-build $EF --verbosity normal
       - name: Unit tests (conventions)
         run: dotnet test tests/EF.Toolkit.Conventions.Tests -c Release --no-build $EF --verbosity normal
+      - name: Unit tests (sql)
+        run: dotnet test tests/EF.Toolkit.Sql.Tests -c Release --no-build $EF --verbosity normal
       - name: Equivalence tests (SQLite)
         run: |
           for suite in Bulk Audit Query; do
@@ -107,4 +111,10 @@ jobs:
       - name: Equivalence tests (query)
         run: >
           dotnet test tests/EF.Toolkit.Query.Equivalence -c Release --no-build --verbosity normal
+          --filter "Engine=${{ matrix.engine }}"
+      # Real-engine scenarios for the newer packages. Not every package has every engine, so a matrix
+      # entry with no matching scenario is expected to find nothing to run.
+      - name: Integration tests (sql)
+        run: >
+          dotnet test tests/EF.Toolkit.Sql.Integration -c Release --no-build --verbosity normal
           --filter "Engine=${{ matrix.engine }}"
