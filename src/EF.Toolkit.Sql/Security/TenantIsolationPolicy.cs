@@ -155,10 +155,38 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
     // removed. Only when its name fits: a longer one would be truncated to some other name (the tenant
     // policy's own, for a 63-byte policyName), and an install with the grant refuses such a name anyway,
     // so there is nothing of that name to remove.
+    //
+    // And only when it is that grant: a policy of someone else's that happens to carry the name — a
+    // restrictive one, say — is left alone, since dropping it would widen what the table shows. The
+    // grant is recognised by what the toolkit writes: permissive, FOR ALL, TO PUBLIC, true both ways.
     private IReadOnlyList<string> WithdrawnAccess()
-        => System.Text.Encoding.UTF8.GetByteCount(AccessPolicyName) <= PostgreSqlIdentifierBytes
-            ? PostgreSqlAccessPolicy().GetDropSql(SqlDialect.PostgreSql)
-            : [];
+    {
+        if (System.Text.Encoding.UTF8.GetByteCount(AccessPolicyName) > PostgreSqlIdentifierBytes)
+        {
+            return [];
+        }
+
+        var relation = SqlSyntax.Literal(SqlDialect.PostgreSql, SqlSyntax.Qualify(SqlDialect.PostgreSql, Table, Schema));
+        var name = SqlSyntax.Literal(SqlDialect.PostgreSql, AccessPolicyName);
+        const string publicOnly = "'{0}'";
+        var body = $"""
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_policy AS p
+                    WHERE p.polrelid = {relation}::pg_catalog.regclass
+                      AND p.polname = {name}
+                      AND p.polpermissive
+                      AND p.polcmd = '*'
+                      AND p.polroles = {publicOnly}::pg_catalog.oid[]
+                      AND pg_catalog.pg_get_expr(p.polqual, p.polrelid) = 'true'
+                      AND pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) = 'true')
+                THEN
+                    {PostgreSqlAccessPolicy().GetDropSql(SqlDialect.PostgreSql)[0]};
+                END IF;
+            END
+            """;
+        return ["DO " + SqlSyntax.DollarQuote(body)];
+    }
 
     // PostgreSQL truncates identifiers past 63 bytes without an error. Two names that agree on their
     // first 63 bytes are then one policy — and since each create is preceded by DROP POLICY IF EXISTS,
@@ -275,7 +303,7 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         var body = $"""
             BEGIN
                 IF NOT EXISTS (
-                    SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = {relation}::regclass)
+                    SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = {relation}::pg_catalog.regclass)
                 THEN
                     ALTER TABLE {target} NO FORCE ROW LEVEL SECURITY;
                     ALTER TABLE {target} DISABLE ROW LEVEL SECURITY;

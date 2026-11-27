@@ -168,6 +168,38 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_restriction_of_someone_else_s_named_like_the_grant_survives_the_drop()
+    {
+        // A separate restrictive policy happened to be named like the "_access" grant. The drop removed
+        // it by name, and a USING (true) policy left behind then showed rows it had kept back.
+        var guard = new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "integer", policyName: "tenant_guard", grantAccess: false);
+
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.DropDatabaseObjectsAsync(Isolation);
+        await admin.Database.CreateDatabaseObjectsAsync(guard);
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE POLICY tenant_guard_access ON \"Documents\" AS RESTRICTIVE USING (\"Title\" LIKE '%-a'); "
+                + "CREATE POLICY see_all ON \"Documents\" AS PERMISSIVE USING (true)",
+            Token);
+        try
+        {
+            await admin.Database.DropDatabaseObjectsAsync(guard);
+
+            await using var one = AppContext(() => 1);
+            var titles = await TitlesAsync(one);
+            titles.ShouldNotBeEmpty();
+            titles.ShouldAllBe(t => t.EndsWith("-a", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync(
+                "DROP POLICY IF EXISTS tenant_guard_access ON \"Documents\"; DROP POLICY IF EXISTS see_all ON \"Documents\"", Token);
+            await admin.Database.DropDatabaseObjectsAsync(guard);
+            await admin.Database.CreateDatabaseObjectsAsync(Isolation);
+        }
+    }
+
+    [Fact]
     public async Task Reapplying_without_the_base_grant_withdraws_the_one_an_earlier_install_left()
     {
         // Installed with the grant, then reapplied without it: the old "_access" policy stayed and went on

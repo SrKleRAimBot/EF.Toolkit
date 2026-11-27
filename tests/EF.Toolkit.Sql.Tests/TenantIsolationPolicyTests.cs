@@ -42,13 +42,13 @@ public sealed class TenantIsolationPolicyTests
         drop[0].ShouldBe("DROP POLICY IF EXISTS \"iso_access\" ON \"shop\".\"Orders\"");
         drop[1].ShouldBe("DROP POLICY IF EXISTS \"iso\" ON \"shop\".\"Orders\"");
         drop[2].ShouldContain("IF NOT EXISTS (");
-        drop[2].ShouldContain("WHERE polrelid = '\"shop\".\"Orders\"'::regclass");
+        drop[2].ShouldContain("WHERE polrelid = '\"shop\".\"Orders\"'::pg_catalog.regclass");
         drop[2].ShouldContain("ALTER TABLE \"shop\".\"Orders\" DISABLE ROW LEVEL SECURITY;");
     }
 
     [Fact]
     public void PostgreSql_drop_in_the_default_schema_resolves_the_table_the_way_ALTER_TABLE_does()
-        => Policy.GetDropSql(SqlDialect.PostgreSql)[2].ShouldContain("polrelid = '\"Orders\"'::regclass");
+        => Policy.GetDropSql(SqlDialect.PostgreSql)[2].ShouldContain("polrelid = '\"Orders\"'::pg_catalog.regclass");
 
     [Theory]
     [InlineData("orders$tenant_isolation$archive")]
@@ -105,14 +105,17 @@ public sealed class TenantIsolationPolicyTests
         create.Count.ShouldBe(5);
         create.ShouldNotContain(sql => sql.StartsWith("CREATE POLICY \"Orders_tenant_isolation_access\"", StringComparison.Ordinal));
 
-        // An earlier install with the grant left it behind; it is withdrawn, after the tenant policy is in place.
-        create[^1].ShouldBe("DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"");
+        // An earlier install with the grant left it behind; it is withdrawn, after the tenant policy is in
+        // place — and only if it is that grant, as the catalog describes it.
+        create[^1].ShouldStartWith("DO $");
+        create[^1].ShouldContain("DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"");
+        create[^1].ShouldContain("AND p.polpermissive");
 
         // Dropping removes any "_access" grant too, whichever grantAccess this definition says: one left
         // behind by an install with the grant would go on granting every tenant's rows.
         var drop = policy.GetDropSql(SqlDialect.PostgreSql);
         drop.Count.ShouldBe(3);
-        drop[0].ShouldBe("DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"");
+        drop[0].ShouldBe(create[^1]);
 
         // A name only the restrictive policy carries may use the whole limit — and then no "_access" name is
         // dropped, since truncated to 63 bytes it would be the tenant policy's own.
