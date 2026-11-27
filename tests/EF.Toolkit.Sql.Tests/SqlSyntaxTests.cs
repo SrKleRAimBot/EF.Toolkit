@@ -110,6 +110,7 @@ public sealed class SqlSyntaxTests
     [InlineData("SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value;", "SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value", SqlDialect.PostgreSql)]
     [InlineData("SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value;", "SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value", SqlDialect.SqlServer)]
     [InlineData("SELECT /* a /* b */ 1;", "SELECT /* a /* b */ 1", SqlDialect.MySql)]
+    [InlineData("SELECT 3--\u0085x + LENGTH('x\n;-- tail') AS v;", "SELECT 3--\u0085x + LENGTH('x\n;-- tail') AS v", SqlDialect.MySql)]
     public void Queries_lose_surrounding_whitespace_and_trailing_semicolons(string sql, string expected, SqlDialect dialect)
         => SqlSyntax.TrimQuery(sql, dialect).ShouldBe(expected);
 

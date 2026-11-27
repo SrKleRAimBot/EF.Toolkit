@@ -176,8 +176,9 @@ internal static partial class SqlSyntax
     // a comment or a semicolon; null if the text ends inside a quoted string, a quoted identifier, a
     // block comment or a dollar quote. Comments are read as the engine reads them — a comment taken
     // for code could hide a quote, and code taken for a comment could hide one too:
-    //   -- starts a comment, ending at a line feed or a carriage return; on MySQL only when whitespace,
-    //        a control character or the end follows it (3--2 is 3 - -2 there);
+    //   -- starts a comment, ending at a line feed or a carriage return; on MySQL only when an ASCII
+    //        space or control character or the end follows it (3--2 is 3 - -2 there, and so is
+    //        --\u0085x: MySQL reads its bytes, not .NET's wider idea of a control character);
     //   #  starts one on MySQL alone — on PostgreSQL it is an operator (#>);
     //   /* */ is a comment, but /*! … */ and /*+ … */ are MySQL's executable comments and hints.
     private static List<int>? TrailingSemicolons(string sql, SqlDialect dialect)
@@ -198,7 +199,7 @@ internal static partial class SqlSyntax
                 i++;
             }
             else if ((c == '-' && next == '-'
-                    && (dialect != SqlDialect.MySql || i + 2 == sql.Length || IsSqlWhitespace(sql[i + 2]) || char.IsControl(sql[i + 2])))
+                    && (dialect != SqlDialect.MySql || i + 2 == sql.Length || sql[i + 2] is <= ' ' or '\x7F'))
                 || (c == '#' && dialect == SqlDialect.MySql))
             {
                 // PostgreSQL and SQL Server end it at a carriage return as well; MySQL and SQLite only
