@@ -184,7 +184,8 @@ var value = total.Value;   // set by the procedure
 EF names the parameters it generates `p0`, `p1`, … and keeps a `DbParameter`'s own name, so a
 `DbParameter` named `p0` to `p{n-1}` (for a call of n arguments), or like another `DbParameter` in the
 same call, is refused before anything runs: two arguments could be bound under one name. Give it a
-name of its own, or none.
+name of its own, or none. One `DbParameter` object passed as two arguments is refused too — it is one
+parameter — so pass a separate one for each.
 
 PostgreSQL matches arguments by name (`CALL p(a => @p0)`), so order does not matter and a procedure's
 defaults can be left out. SQL Server matches by name too (`EXEC p @a = @p0`, with `OUTPUT` added for

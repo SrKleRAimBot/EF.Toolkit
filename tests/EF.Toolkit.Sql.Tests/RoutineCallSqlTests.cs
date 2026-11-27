@@ -156,6 +156,12 @@ public sealed class RoutineArgumentsTests
         Should.Throw<ArgumentException>(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { a, b }))
             .Message.ShouldContain("'a' and 'b'");
 
+        // One object passed twice is one parameter, named or not: EF named it on its first use and bound the
+        // second under the same name.
+        var shared = new SqlParameter { SqlDbType = SqlDbType.Int, Direction = ParameterDirection.InputOutput, Value = 0 };
+        Should.Throw<ArgumentException>(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { first = shared, second = shared }))
+            .Message.ShouldContain("'first' and 'second' are the same DbParameter object");
+
         // Unnamed DbParameters are EF's to name; p2 and p01 are names no argument of a two-argument call gets.
         var unnamed = new SqlParameter { Value = 1 };
         Should.NotThrow(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { unnamed, c = 3 }));

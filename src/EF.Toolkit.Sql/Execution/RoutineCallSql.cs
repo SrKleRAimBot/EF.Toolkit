@@ -93,8 +93,18 @@ internal static class RoutineCallSql
     private static object?[] Values(IReadOnlyList<(string Name, object? Value)> arguments)
     {
         var named = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var instances = new Dictionary<DbParameter, string>(ReferenceEqualityComparer.Instance);
         foreach (var (argument, value) in arguments)
         {
+            // One DbParameter object is one parameter, however it is named: EF names an unnamed one on its
+            // first use and binds the second use under that name too.
+            if (value is DbParameter instance && !instances.TryAdd(instance, argument))
+            {
+                throw new ArgumentException(
+                    $"Arguments '{instances[instance]}' and '{argument}' are the same DbParameter object, so they would be "
+                    + "bound as one parameter. Pass a separate DbParameter for each.");
+            }
+
             var given = (value as DbParameter)?.ParameterName.TrimStart('@', ':', '?', '$');
             if (string.IsNullOrEmpty(given))
             {
