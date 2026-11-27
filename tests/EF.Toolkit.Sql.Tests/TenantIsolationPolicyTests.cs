@@ -108,9 +108,11 @@ public sealed class TenantIsolationPolicyTests
         // An earlier install with the grant left it behind; it is withdrawn, after the tenant policy is in place.
         create[^1].ShouldBe("DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"");
 
+        // Dropping removes any "_access" grant too, whichever grantAccess this definition says: one left
+        // behind by an install with the grant would go on granting every tenant's rows.
         var drop = policy.GetDropSql(SqlDialect.PostgreSql);
-        drop.Count.ShouldBe(2);
-        drop.ShouldNotContain(sql => sql.Contains("_access", StringComparison.Ordinal));
+        drop.Count.ShouldBe(3);
+        drop[0].ShouldBe("DROP POLICY IF EXISTS \"Orders_tenant_isolation_access\" ON \"Orders\"");
 
         // A name only the restrictive policy carries may use the whole limit — and then no "_access" name is
         // dropped, since truncated to 63 bytes it would be the tenant policy's own.

@@ -143,6 +143,31 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task Dropping_without_the_base_grant_removes_the_one_an_earlier_install_left()
+    {
+        // Installed with the grant, dropped through a definition without it: the "_access" policy stayed,
+        // and with another policy keeping RLS on it granted every tenant's rows.
+        var narrow = new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "integer", grantAccess: false);
+
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.CreateDatabaseObjectsAsync(Isolation);
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE POLICY a_titles_only ON \"Documents\" AS PERMISSIVE USING (\"Title\" LIKE '%-a')", Token);
+        try
+        {
+            await admin.Database.DropDatabaseObjectsAsync(narrow);
+
+            var grants = $"SELECT COUNT(*)::int AS \"Value\" FROM pg_policies WHERE tablename = 'Documents' AND policyname = '{Isolation.AccessPolicyName}'";
+            (await admin.Database.SqlQueryRaw<int>(grants).SingleAsync(Token)).ShouldBe(0);
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP POLICY IF EXISTS a_titles_only ON \"Documents\"", Token);
+            await admin.Database.CreateDatabaseObjectsAsync(Isolation);
+        }
+    }
+
+    [Fact]
     public async Task Reapplying_without_the_base_grant_withdraws_the_one_an_earlier_install_left()
     {
         // Installed with the grant, then reapplied without it: the old "_access" policy stayed and went on

@@ -139,7 +139,10 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         {
             SqlDialect.PostgreSql =>
             [
-                .. (GrantsAccess ? PostgreSqlAccessPolicy().GetDropSql(dialect) : []),
+                // The "_access" grant goes whichever grantAccess this definition says: one dropped with
+                // grantAccess false after an install with it would otherwise leave the grant behind,
+                // granting every tenant's rows once the restrictive policy is gone.
+                .. (GrantsAccess ? PostgreSqlAccessPolicy().GetDropSql(dialect) : WithdrawnAccess()),
                 .. PostgreSqlPolicy().GetDropSql(dialect),
                 DisableIfUnpoliced(),
             ],

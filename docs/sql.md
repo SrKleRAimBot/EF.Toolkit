@@ -353,9 +353,10 @@ otherwise go on granting every row of the tenant.
 PostgreSQL silently truncates identifiers past 63 bytes, which could merge the tenant policy with its
 `_access` counterpart. A name that would be truncated is refused; pass a shorter `policyName`.
 
-`DropTenantIsolation` removes both policies and switches row-level security off again **only if no
-other policy remains on the table**, so a rollback never leaves someone else's policy defined but
-unenforced.
+`DropTenantIsolation` removes both policies — the `_access` grant too, whichever `grantAccess` the
+definition it is given says, so a drop never leaves a grant across tenants behind — and switches
+row-level security off again **only if no other policy remains on the table**, so a rollback never
+leaves someone else's policy defined but unenforced.
 
 `FORCE` is the line that is easy to miss: without it the table's **owner** bypasses every policy, and
 the owner is usually the role the application connects as. Superusers and `BYPASSRLS` roles bypass
