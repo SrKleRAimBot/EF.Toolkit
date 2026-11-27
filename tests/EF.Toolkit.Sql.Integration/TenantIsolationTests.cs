@@ -417,6 +417,9 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
             (await IdsAs("2026-11-27")).ShouldBe([1]);
             (await IdsAs(new DateTime(2026, 11, 27))).ShouldBe([1]);
             (await IdsAs(new DateTime(2026, 11, 27, 12, 34, 56))).ShouldBeEmpty();
+
+            // One tick past midnight: the timestamp cast rounds it back to midnight.
+            (await IdsAs(new DateTime(2026, 11, 27).AddTicks(4))).ShouldBeEmpty();
         }
         finally
         {

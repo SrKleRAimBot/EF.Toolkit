@@ -274,7 +274,7 @@ prints with a space; `12:30:00.4` against that column matches nothing. Most type
 (`integer`, `uuid`, `text`) lose nothing on the cast and get no second comparison. A `date` does: it
 drops the time of day, so a `date` tenant also requires the setting, read as a timestamp, to be that
 date's midnight — a `DateOnly`, a date string or a `DateTime` at 00:00 matches, 12:34 that day does
-not. A bare `character`
+not, nor does a tick past midnight. A bare `character`
 or `bit` is the exception: without a length it means length 1, so it is compared like `character(1)`;
 likewise `name`, which keeps only its first 63 bytes. And PostgreSQL keeps a `timestamp` or `time`
 only to the microsecond, rounding finer digits away even without a modifier, so a session value with a
@@ -285,6 +285,9 @@ outright: its input takes fractions of any unit (`0.4 microseconds`) and rounds 
 on the session value could keep the cast lossless. So is a floating-point one (`real`, `double
 precision`, `float`), which rounds to its nearest value — `16777217` as `real` is `16777216`. A column
 type containing a SQL comment is refused on every engine, since it could hide what the cast is to.
+An array is judged by its element type, however its brackets are written, so `real[]` and
+`interval[]` are refused too — and so is `date[]`, whose elements drop their time of day with no
+array comparison that could catch it.
 The type is read by its name, as EF and you write it: a domain or other type of your own is cast by its
 own rules, which the policy cannot see into, so a domain over a type that rounds is yours to keep
 lossless.

@@ -196,7 +196,7 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("\"pg_catalog\".\"timestamp\"", true)]
     [InlineData("pg_catalog . timestamp", true)]
     [InlineData("\"pg_catalog\" . timestamptz(3)", true)]
-    [InlineData("date", false)]
+    [InlineData("date", true)]
     [InlineData("timeline", false)]
     [InlineData("\"Timestamp\"", false)]
     public void PostgreSql_refuses_a_temporal_setting_finer_than_a_microsecond(string storeType, bool guarded)
@@ -217,6 +217,13 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("double precision")]
     [InlineData("float(24)")]
     [InlineData("real[]")]
+    [InlineData("real []")]
+    [InlineData("real[][]")]
+    [InlineData("\"real\"[]")]
+    [InlineData("pg_catalog.float8 [ 3 ]")]
+    [InlineData("interval[]")]
+    [InlineData("date[]")]
+    [InlineData("pg_catalog.date []")]
     public void PostgreSql_refuses_a_tenant_type_whose_cast_rounds(string storeType)
     {
         // '0.4 microseconds' rounds to the tenant keyed by 0 seconds; no check on the text can prevent it.
@@ -238,6 +245,11 @@ public sealed class TenantIsolationPolicyTests
     public void A_column_type_with_a_comment_is_refused(string storeType)
         => Should.Throw<ArgumentException>(() => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType))
             .ParamName.ShouldBe("columnStoreType");
+
+    [Fact]
+    public void PostgreSql_refuses_a_date_setting_finer_than_a_microsecond()
+        => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "date").GetCreateSql(SqlDialect.PostgreSql)[3]
+            .ShouldContain("!~ '[.][0-9]{6}[0-9]*[1-9]'");
 
     [Fact]
     public void PostgreSql_requires_a_date_tenant_s_setting_to_be_a_date()

@@ -185,8 +185,9 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         // input takes fractions of any unit — '0.4 microseconds' — and rounds them away to the microsecond;
         // a floating-point type rounds to its nearest value — 16777217 as real is 16777216. No check on
         // the text can stop a session value from landing on a tenant it does not name.
-        var typeName = PostgreSqlTypeName(ColumnStoreType);
-        if (UnkeyableName().IsMatch(typeName))
+        // An array of a type casts each element as that type, so it is judged by its element type.
+        var typeName = PostgreSqlTypeName(ColumnStoreType, out var isArray);
+        if (UnkeyableName().IsMatch(typeName) || (isArray && typeName == "date"))
         {
             throw new ArgumentException(
                 $"'{ColumnStoreType}' cannot be a PostgreSQL tenant key: a cast to it rounds, so a session value "
@@ -217,7 +218,7 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         // PostgreSQL keeps time to the microsecond and rounds finer digits away on any cast, bare type
         // or not: 12:30:00.0000004 would match the tenant stored as 12:30:00. So a temporal setting with
         // a nonzero digit past the sixth is refused; trailing zeros, as .NET writes seven digits, are not.
-        if (IsPostgreSqlTemporal(ColumnStoreType))
+        if (IsPostgreSqlTemporal(ColumnStoreType) || typeName == "date")
         {
             condition += $" AND {setting} !~ {SubMicrosecondPattern}";
         }
@@ -413,12 +414,19 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
     /// <summary>
     ///     The type's own name without modifier or pg_catalog schema: lower-cased, or as written if quoted.
     /// </summary>
-    private static string PostgreSqlTypeName(string storeType)
+    private static string PostgreSqlTypeName(string storeType) => PostgreSqlTypeName(storeType, out _);
+
+    /// <inheritdoc cref="PostgreSqlTypeName(string)" />
+    /// <param name="storeType">The column's store type.</param>
+    /// <param name="isArray">Whether it is an array, whose name is then its element type's.</param>
+    private static string PostgreSqlTypeName(string storeType, out bool isArray)
     {
         var bare = TightenDots(Whitespace().Replace(TypeModifier().Replace(storeType, "").Trim(), " "));
-        bare = bare.StartsWith("pg_catalog.", StringComparison.OrdinalIgnoreCase) ? bare[11..]
-            : bare.StartsWith("\"pg_catalog\".", StringComparison.Ordinal) ? bare[13..]
-            : bare;
+        var element = ArraySuffix().Replace(bare, "");
+        isArray = element.Length != bare.Length;
+        bare = element.StartsWith("pg_catalog.", StringComparison.OrdinalIgnoreCase) ? element[11..]
+            : element.StartsWith("\"pg_catalog\".", StringComparison.Ordinal) ? element[13..]
+            : element;
         return bare.Length > 2 && bare[0] == '"' && bare[^1] == '"' ? bare[1..^1] : bare.ToLowerInvariant();
     }
 
@@ -434,8 +442,14 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
     private static partial Regex TemporalName();
 
     // Whole names: interval_id or a type called "realm" is someone's own type, not these.
-    [GeneratedRegex(@"^(interval\b(?!_)|(real|float|float4|float8|double precision)(\[\])?$)", RegexOptions.CultureInvariant)]
+    // A date array is refused too: its elements drop their time of day, and PostgreSQL has no
+    // date[] = timestamp[] comparison to catch it with.
+    [GeneratedRegex(@"^(interval\b(?!_)|(real|float|float4|float8|double precision)$)", RegexOptions.CultureInvariant)]
     private static partial Regex UnkeyableName();
+
+    // Any number of dimensions, spaced or not, sized or not: real [], real[][], date[3].
+    [GeneratedRegex(@"(\s*\[\s*\d*\s*\])+$", RegexOptions.CultureInvariant)]
+    private static partial Regex ArraySuffix();
 
     [GeneratedRegex(@"\s*\(\s*-?\d+\s*(,\s*-?\d+\s*)?\)", RegexOptions.CultureInvariant)]
     private static partial Regex TypeModifier();
