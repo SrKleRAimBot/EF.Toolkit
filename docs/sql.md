@@ -567,7 +567,8 @@ names must be plain identifiers too, as input, because the routine body you writ
 they are rendered, in the definition and in named calls, depends on the engine: PostgreSQL quotes them
 in their lower-case form (`"tenantid"`), the name an unquoted reference folds to; MySQL quotes them as
 written (`` `TenantId` ``); SQL Server writes them unquoted with `@` in front (`@TenantId`). In a
-PostgreSQL or MySQL body, refer to an ordinary name unquoted and to a key-word name quoted (`"from"`). Runtime values never
+PostgreSQL or MySQL body, refer to an ordinary name unquoted and to a key-word name quoted — `"from"` on
+PostgreSQL, `` `from` `` on MySQL, where `"from"` is a string. Runtime values never
 reach SQL text: they are `{0}` placeholders that EF binds as parameters. The literals this package
 renders are in generated DDL only — a session-context key inside a policy, and the names of the
 objects a catalog lookup checks (a table for row-level security, a materialized view being replaced,
