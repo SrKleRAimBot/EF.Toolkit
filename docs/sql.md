@@ -285,6 +285,9 @@ outright: its input takes fractions of any unit (`0.4 microseconds`) and rounds 
 on the session value could keep the cast lossless. So is a floating-point one (`real`, `double
 precision`, `float`), which rounds to its nearest value — `16777217` as `real` is `16777216`. A column
 type containing a SQL comment is refused on every engine, since it could hide what the cast is to.
+The type is read by its name, as EF and you write it: a domain or other type of your own is cast by its
+own rules, which the policy cannot see into, so a domain over a type that rounds is yours to keep
+lossless.
 
 On SQL Server a string holding a GUID followed by anything converts to that GUID, and its string
 equality ignores trailing spaces. There the converted value must either equal the session value as a
