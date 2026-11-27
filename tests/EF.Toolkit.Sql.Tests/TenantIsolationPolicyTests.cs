@@ -181,10 +181,29 @@ public sealed class TenantIsolationPolicyTests
     [Theory]
     [InlineData("integer")]
     [InlineData("uuid")]
-    [InlineData("pg_catalog.timestamp")]
+    [InlineData("pg_catalog.date")]
     public void PostgreSql_needs_no_second_comparison_for_a_type_without_modifiers(string storeType)
         => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3]
             .ShouldContain($"USING (\"TenantId\" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS {storeType}))\n");
+
+    [Theory]
+    [InlineData("pg_catalog.timestamp", true)]
+    [InlineData("timestamp(3) with time zone", true)]
+    [InlineData("timestamptz", true)]
+    [InlineData("time(0)", true)]
+    [InlineData("TimeTZ", true)]
+    [InlineData("interval", true)]
+    [InlineData("\"pg_catalog\".\"timestamp\"", true)]
+    [InlineData("date", false)]
+    [InlineData("timeline", false)]
+    [InlineData("\"Timestamp\"", false)]
+    public void PostgreSql_refuses_a_temporal_setting_finer_than_a_microsecond(string storeType, bool guarded)
+    {
+        // PostgreSQL rounds finer digits away on any cast, bare type or not.
+        var sql = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3];
+
+        sql.Contains("!~ '[.][0-9]{6}[0-9]*[1-9]'", StringComparison.Ordinal).ShouldBe(guarded);
+    }
 
     [Theory]
     [InlineData("varchar(10)")]

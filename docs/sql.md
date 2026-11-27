@@ -273,7 +273,11 @@ the ISO 8601 timestamp `UseSessionContext` writes for a `DateTime` matches the `
 prints with a space; `12:30:00.4` against that column matches nothing. A type with no modifier
 (`integer`, `uuid`, `text`) loses nothing on the cast and gets no second comparison. A bare `character`
 or `bit` is the exception: without a length it means length 1, so it is compared like `character(1)`;
-likewise `name`, which keeps only its first 63 bytes.
+likewise `name`, which keeps only its first 63 bytes. And PostgreSQL keeps a `timestamp`, `time` or
+`interval` only to the microsecond, rounding finer digits away even without a modifier, so a session
+value with a nonzero digit past the sixth (`12:30:00.0000004`) matches nothing; the seven digits .NET
+writes for a `DateTime` still match when the last is `0`. A `DateTime` with ticks finer than a
+microsecond is a different instant from any stored one, and reaches no rows.
 
 On SQL Server a string holding a GUID followed by anything converts to that GUID, and its string
 equality ignores trailing spaces. There the converted value must either equal the session value as a

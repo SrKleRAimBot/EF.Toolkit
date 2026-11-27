@@ -354,6 +354,42 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
         }
     }
 
+    [Theory]
+    [InlineData("timestamp(6)")]
+    [InlineData("timestamp")]
+    public async Task A_timestamp_session_value_finer_than_a_microsecond_reaches_nothing(string columnType)
+    {
+        // PostgreSQL keeps microseconds, and the bare type rounds just as the constrained one does: both
+        // casts turned 12:30:00.0000004 into the stored 12:30:00, and the row was admitted for a value
+        // that is not its tenant. Trailing zeros, as the setter writes them, are still the same instant.
+        var cohorts = new TenantIsolationPolicy("Cohorts", "Tenant", "app.tenant_at", columnType, policyName: "cohorts_iso");
+        await using var admin = fixture.CreateAdminContext();
+        var create = $"CREATE TABLE \"Cohorts\" (\"Id\" int PRIMARY KEY, \"Tenant\" {columnType} NOT NULL); "
+            + "INSERT INTO \"Cohorts\" VALUES (1, '2026-04-03 12:30:00'); "
+            + $"ALTER TABLE \"Cohorts\" OWNER TO {PostgreSqlFixture.AppUser};";
+        await admin.Database.ExecuteSqlRawAsync(create, Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(cohorts);
+
+            async Task<List<int>> IdsAs(string at)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set("app.tenant_at", () => at))
+                    .Options);
+                return await context.Database.SqlQueryRaw<int>("SELECT \"Id\" AS \"Value\" FROM \"Cohorts\"").ToListAsync(Token);
+            }
+
+            (await IdsAs("2026-04-03 12:30:00.000000")).ShouldBe([1]);
+            (await IdsAs("2026-04-03T12:30:00.0000000")).ShouldBe([1]);
+            (await IdsAs("2026-04-03T12:30:00.0000004")).ShouldBeEmpty();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Cohorts\"", Token);
+        }
+    }
+
     [Fact]
     public async Task A_bare_character_tenant_is_one_character_long_and_a_longer_session_value_reaches_nothing()
     {
