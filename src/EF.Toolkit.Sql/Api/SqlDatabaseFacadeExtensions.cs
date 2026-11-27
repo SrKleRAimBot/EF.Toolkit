@@ -189,8 +189,9 @@ public static class SqlDatabaseFacadeExtensions
 
     /// <summary>Queries a table-valued function as a composable query.</summary>
     /// <typeparam name="T">
-    ///     The row type: an unmapped class whose properties match the function's columns, or a scalar
-    ///     whose column is named <c>Value</c>.
+    ///     The row type: an unmapped class whose properties match the function's columns, or a scalar.
+    ///     Read directly, a scalar's single column may have any name; to compose LINQ over the query,
+    ///     name it <c>Value</c>, which EF's outer query refers to.
     /// </typeparam>
     /// <param name="database">The context's database facade.</param>
     /// <param name="name">The function name.</param>
