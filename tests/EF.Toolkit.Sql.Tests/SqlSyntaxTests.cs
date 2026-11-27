@@ -75,6 +75,16 @@ public sealed class SqlSyntaxTests
     [InlineData("SELECT 1", "SELECT 1")]
     [InlineData("  SELECT 1;  ", "SELECT 1")]
     [InlineData("SELECT 1; ;\n", "SELECT 1")]
+    [InlineData("SELECT 1 AS id; -- initial query", "SELECT 1 AS id")]
+    [InlineData("SELECT 1 -- note", "SELECT 1")]
+    [InlineData("SELECT 1; /* done */ ;\n-- end", "SELECT 1")]
+    [InlineData("SELECT ';-- not a comment'", "SELECT ';-- not a comment'")]
+    [InlineData("SELECT 'it''s'; -- note", "SELECT 'it''s'")]
+    [InlineData("SELECT \"a;--b\" FROM t;", "SELECT \"a;--b\" FROM t")]
+    [InlineData("SELECT $body$ ; -- $body$", "SELECT $body$ ; -- $body$")]
+    [InlineData("SELECT $1; -- p", "SELECT $1")]
+    [InlineData("SELECT data #> '{a}' FROM t;", "SELECT data #> '{a}' FROM t")]
+    [InlineData("SELECT 'it\\'s';", "SELECT 'it\\'s'")]
     public void Queries_lose_surrounding_whitespace_and_trailing_semicolons(string sql, string expected)
         => SqlSyntax.TrimQuery(sql).ShouldBe(expected);
 

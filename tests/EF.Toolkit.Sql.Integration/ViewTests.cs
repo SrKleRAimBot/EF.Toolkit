@@ -45,6 +45,25 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_materialized_view_query_ending_in_a_comment_keeps_with_no_data_in_its_statement()
+    {
+        // The semicolon before the comment was left in: WITH NO DATA started a statement of its own.
+        await using var context = fixture.CreateAdminContext();
+        var noted = new MaterializedViewDefinition("noted_totals", "SELECT 1 AS id; -- initial query", withNoData: true);
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(noted);
+
+            var populated = "SELECT relispopulated AS \"Value\" FROM pg_class WHERE relname = 'noted_totals'";
+            (await context.Database.SqlQueryRaw<bool>(populated).SingleAsync(Token)).ShouldBeFalse();
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(noted);
+        }
+    }
+
+    [Fact]
     public async Task A_materialized_view_holds_its_snapshot_until_refreshed()
     {
         await using var context = fixture.CreateAdminContext();

@@ -90,9 +90,14 @@ public sealed class SqlCaptureInterceptor : DbCommandInterceptor
     {
         if (SqlCapture.AnyActive)
         {
-            SqlCapture.Record(eventData.Context, this, () => Capture(command, eventData, succeeded));
+            RecordActive(command, eventData, succeeded);
         }
     }
+
+    // Apart from Record: a lambda capturing the arguments makes the compiler allocate its closure on
+    // entry to the method that holds it, before any guard — every command would pay for it.
+    private void RecordActive(DbCommand command, CommandEndEventData eventData, bool succeeded)
+        => SqlCapture.Record(eventData.Context, this, () => Capture(command, eventData, succeeded));
 
     private static CapturedCommand Capture(DbCommand command, CommandEndEventData eventData, bool succeeded)
     {

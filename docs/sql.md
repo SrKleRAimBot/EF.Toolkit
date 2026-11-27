@@ -84,7 +84,7 @@ modelBuilder.Entity<ActiveCustomer>().HasNoKey().ToView("ActiveCustomers");
 
 Redefining a view replaces it in place on PostgreSQL, SQL Server and MySQL, so grants on it survive.
 SQLite has no replace, so there it is dropped and created again — SQLite has no grants to lose. The
-query is yours and must be valid on the engine that runs it; a trailing semicolon is ignored. Drops are
+query is yours and must be valid on the engine that runs it; trailing semicolons and comments are ignored. Drops are
 always `IF EXISTS`.
 
 ## Materialized views

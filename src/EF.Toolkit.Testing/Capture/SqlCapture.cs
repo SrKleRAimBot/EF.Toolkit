@@ -165,7 +165,12 @@ public sealed class SqlCapture : IDisposable
     /// <summary>Stops recording. What was recorded stays readable.</summary>
     public void Dispose()
     {
-        _disposed = true;
+        // Under the lock a recording appends under: once Dispose returns, no command still being
+        // snapshotted on another task can land in the capture.
+        lock (_lock)
+        {
+            _disposed = true;
+        }
 
         // Only removable from the flow that holds it; anywhere else, the flag alone stops recording.
         if (Active.Value is { } active && active.Contains(this))
@@ -190,10 +195,15 @@ public sealed class SqlCapture : IDisposable
         {
             if (!capture._disposed && capture._accepts(context, interceptor))
             {
+                // Outside the lock — a snapshot reads parameter values, which can take any time — and
+                // checked again inside it, since the capture may have been disposed meanwhile.
                 command ??= snapshot();
                 lock (capture._lock)
                 {
-                    capture._commands.Add(command);
+                    if (!capture._disposed)
+                    {
+                        capture._commands.Add(command);
+                    }
                 }
             }
         }

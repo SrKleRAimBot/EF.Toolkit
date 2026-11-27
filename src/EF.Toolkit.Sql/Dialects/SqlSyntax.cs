@@ -137,6 +137,18 @@ internal static partial class SqlSyntax
     public static string TrimQuery(string sql)
     {
         ArgumentNullException.ThrowIfNull(sql);
+
+        // A semicolon followed only by a comment ends the statement just as one at the very end does:
+        // "SELECT 1; -- note" embedded before WITH NO DATA would make that a second statement. So the
+        // query is cut after its last significant character — not whitespace, a comment or a semicolon
+        // — found by a scan that steps over quoted text, quoted identifiers and dollar-quoted bodies.
+        if (LastSignificantEnd(sql) is { } end)
+        {
+            return sql[..end].Trim();
+        }
+
+        // A string or comment the scan could not see the end of — a MySQL backslash escape, say: the
+        // trailing semicolons alone are trimmed, as they always were.
         var trimmed = sql.Trim();
         while (trimmed.EndsWith(';'))
         {
@@ -145,6 +157,70 @@ internal static partial class SqlSyntax
 
         return trimmed;
     }
+
+    // The index just past the last character that is not whitespace, a comment or a semicolon; null if
+    // the text ends inside a quoted string, a quoted identifier, a block comment or a dollar quote.
+    // Only -- and /* */ are comments: # is one on MySQL alone, and an operator on PostgreSQL (#>).
+    private static int? LastSignificantEnd(string sql)
+    {
+        var end = 0;
+        var i = 0;
+        while (i < sql.Length)
+        {
+            var c = sql[i];
+            if (char.IsWhiteSpace(c) || c == ';')
+            {
+                i++;
+            }
+            else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+            {
+                var newline = sql.IndexOf('\n', i);
+                i = newline < 0 ? sql.Length : newline + 1;
+            }
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+            {
+                var close = sql.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                if (close < 0)
+                {
+                    return null;
+                }
+
+                i = close + 2;
+            }
+            else if (c is '\'' or '"' or '`' or '[')
+            {
+                // Doubling the quote escapes it inside, which the scan sees as two quoted runs.
+                var closing = c == '[' ? ']' : c;
+                var close = sql.IndexOf(closing, i + 1);
+                if (close < 0)
+                {
+                    return null;
+                }
+
+                i = end = close + 1;
+            }
+            else if (c == '$' && DollarTag().Match(sql, i) is { Success: true } tag)
+            {
+                var close = sql.IndexOf(tag.Value, i + tag.Length, StringComparison.Ordinal);
+                if (close < 0)
+                {
+                    return null;
+                }
+
+                i = end = close + tag.Length;
+            }
+            else
+            {
+                i = end = i + 1;
+            }
+        }
+
+        return end;
+    }
+
+    // $$ or $tag$ opening a dollar-quoted body; $1 is a parameter, not a quote.
+    [GeneratedRegex(@"\G\$([A-Za-z_][A-Za-z0-9_]*)?\$", RegexOptions.CultureInvariant)]
+    private static partial Regex DollarTag();
 
     /// <summary>
     ///     Escapes composite-format braces so text survives EF's raw-SQL formatting, which runs
