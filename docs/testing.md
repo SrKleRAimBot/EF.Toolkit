@@ -189,7 +189,8 @@ exclusion still matches it — erring toward keeping rows.
 
 Every table the model maps is emptied: tables only, not views, `ToSqlQuery` entities or keyless types
 without a table, and only this context's — a migrations history table, or the tables of another
-context sharing the database, are left alone. The order comes from the model's foreign keys,
+context sharing the database, are left alone — though SQL Server itself writes a temporal table's
+deleted rows into its history table (see the limitations below). The order comes from the model's foreign keys,
 dependents first. Identity counters restart at the table's own start: the next row gets the first id
 the column would have given an empty table — 1 by default, the declared seed for a SQL Server
 `IDENTITY(100, 5)`, and on MySQL the first value `auto_increment_offset` and `auto_increment_increment`
@@ -494,7 +495,12 @@ backing field EF maps.
   from every client short of a server-wide privilege. Run the reset as a login that can see every
   database that references the test database.
 - **SQL Server re-enables every constraint on a cyclic table**, including one that was disabled on
-  purpose. Temporal tables keep their history.
+  purpose.
+- **A SQL Server temporal table's history grows, and is kept.** Deleting from a system-versioned
+  table is itself versioned: the engine writes every row the reset deletes into the history table,
+  which the reset never empties — EF does not map it as a table of its own, and an excluded or unmapped
+  history table is not the reset's to touch. Turn `SYSTEM_VERSIONING` off around the reset, or clear
+  the history yourself, when a test needs it empty.
 - **`ResetDataAsync` clears the change tracker, and `SeedAsync` saves everything pending.** Both act on
   the whole context, by design.
 - **The builder does not satisfy every model.** A required reference without a navigation, a required

@@ -30,7 +30,8 @@ internal static class ResetRunner
 
     internal const string AfterCommitFailed =
         "The reset deleted the rows and committed, but restarting the identity counters afterwards failed, "
-        + "so new rows will not start at 1 — see the inner exception. On MySQL that needs the ALTER privilege.";
+        + "so some may still continue from where they were rather than from the table's start — see the inner "
+        + "exception. On MySQL that needs the ALTER privilege.";
 
     internal static async Task RunAsync(
         ResetScript script,
