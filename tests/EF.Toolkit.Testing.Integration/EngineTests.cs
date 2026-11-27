@@ -588,13 +588,16 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
     [Fact]
     public async Task A_catalog_check_that_fails_inside_a_transaction_leaves_it_usable()
     {
-        // A cancelled or timed-out catalog query aborts the whole transaction on PostgreSQL. Shadowing
-        // to_regclass for this transaction is a deterministic stand-in for that server-side error.
+        // A cancelled or timed-out catalog query aborts the whole transaction on PostgreSQL. An operator
+        // the catalog query resolves through the search_path — <> on regclass, raising — is a
+        // deterministic stand-in for that server-side error (its functions are named with pg_catalog). Cheap
+        // enough that the planner evaluates it before the condition it is ANDed with.
         Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
         await using var context = Fixture.CreateContext();
         await ShopData.SeedEverythingAsync(context);
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE FUNCTION public.to_regclass(text) RETURNS regclass LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'catalog check failed'; END $$",
+            "CREATE FUNCTION public.fail_ne(regclass, regclass) RETURNS boolean LANGUAGE plpgsql COST 0.001 AS $$ BEGIN RAISE EXCEPTION 'catalog check failed'; END $$; "
+                + "CREATE OPERATOR public.<> (LEFTARG = regclass, RIGHTARG = regclass, FUNCTION = public.fail_ne)",
             Ct);
         try
         {
@@ -615,7 +618,8 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
         }
         finally
         {
-            await context.Database.ExecuteSqlRawAsync("DROP FUNCTION IF EXISTS public.to_regclass(text)", Ct);
+            await context.Database.ExecuteSqlRawAsync(
+                "DROP OPERATOR IF EXISTS public.<> (regclass, regclass); DROP FUNCTION IF EXISTS public.fail_ne(regclass, regclass)", Ct);
         }
     }
 

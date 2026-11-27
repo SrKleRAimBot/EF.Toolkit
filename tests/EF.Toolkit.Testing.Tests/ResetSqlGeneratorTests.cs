@@ -440,11 +440,11 @@ public sealed class ResetSqlGeneratorTests
 
         sql.ShouldContain("to_regclass('\"Odd]\"\"`''Name\"')");
         sql.ShouldContain("to_regclass('\"sales\".\"Orders\"')");
-        sql.ShouldContain("kept(oid) AS (SELECT k FROM unnest(ARRAY[to_regclass('\"Kept\"')]::regclass[])");
+        sql.ShouldContain("kept(oid) AS (SELECT k FROM pg_catalog.unnest(ARRAY[pg_catalog.to_regclass('\"Kept\"')]::pg_catalog.regclass[])");
         sql.ShouldContain("root.relkind <> 'p'");
 
         // Nothing kept is an empty, typed array rather than a syntax error.
-        DatabaseForeignKeys.PostgreSqlDescendants(ResetPlan.Create([Odd])).ShouldContain("ARRAY[]::regclass[]");
+        DatabaseForeignKeys.PostgreSqlDescendants(ResetPlan.Create([Odd])).ShouldContain("ARRAY[]::pg_catalog.regclass[]");
     }
 
     [Fact]
