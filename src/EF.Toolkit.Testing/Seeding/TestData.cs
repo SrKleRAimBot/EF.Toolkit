@@ -104,8 +104,10 @@ public sealed class TestData
 
             if (customize is not null)
             {
+                var before = new Dictionary<object, Dictionary<IForeignKey, object?[]>>(ReferenceEqualityComparer.Instance);
+                DropReplacedPrincipals(entity, entityType, built, before, record: true);
                 customize(entity);
-                DropReplacedPrincipals(entity, entityType, built, new HashSet<object>(ReferenceEqualityComparer.Instance));
+                DropReplacedPrincipals(entity, entityType, built, before, record: false);
             }
 
             return entity;
@@ -254,15 +256,29 @@ public sealed class TestData
     ///     principal's, so <c>o => o.CustomerId = alice.Id</c> would silently not mean Alice. A
     ///     principal the test attached itself is never dropped. Owned references and the generated
     ///     principals that stay are checked the same way, so <c>o => o.Customer.RegionId = east.Id</c>
-    ///     holds too.
+    ///     holds too. "Set" means changed by the callback: the keys are recorded before it runs
+    ///     (<paramref name="record" />), so a property initializer such as <c>RegionId = -1</c> is not
+    ///     taken for the test's choice.
     /// </summary>
     private static void DropReplacedPrincipals(
-        object entity, IEntityType entityType, HashSet<object> built, HashSet<object> visited)
+        object entity,
+        IEntityType entityType,
+        HashSet<object> built,
+        Dictionary<object, Dictionary<IForeignKey, object?[]>> before,
+        bool record,
+        HashSet<object>? visited = null)
     {
         // The test can wire generated entities into a cycle; each is looked at once.
+        visited ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
         if (!visited.Add(entity))
         {
             return;
+        }
+
+        var recorded = before.GetValueOrDefault(entity);
+        if (record)
+        {
+            before[entity] = recorded = [];
         }
 
         foreach (var foreignKey in entityType.GetForeignKeys())
@@ -276,11 +292,18 @@ public sealed class TestData
                 continue;
             }
 
-            var keySet = foreignKey.Properties.Any(p =>
-                !p.IsShadowProperty()
-                && GetValue(entity, p) is var value
-                && value is not null
-                && !value.Equals(DefaultOf(p.ClrType)));
+            var values = foreignKey.Properties.Select(p => p.IsShadowProperty() ? null : GetValue(entity, p)).ToArray();
+            if (record)
+            {
+                recorded![foreignKey] = values;
+            }
+
+            // An entity the callback put in the graph has nothing recorded: there, only a key that is
+            // not the CLR default can have been set.
+            var keySet = !record
+                && (recorded?.GetValueOrDefault(foreignKey) is { } old
+                    ? values.Where((value, i) => !Equals(value, old[i])).Any()
+                    : values.Where((value, i) => value is not null && !value.Equals(DefaultOf(foreignKey.Properties[i].ClrType))).Any());
 
             if (keySet)
             {
@@ -289,7 +312,7 @@ public sealed class TestData
             else
             {
                 var principalType = entityType.Model.FindEntityType(principal.GetType()) ?? foreignKey.PrincipalEntityType;
-                DropReplacedPrincipals(principal, principalType, built, visited);
+                DropReplacedPrincipals(principal, principalType, built, before, record, visited);
             }
         }
 
@@ -301,7 +324,7 @@ public sealed class TestData
                 && !navigation.IsCollection
                 && GetValue(entity, navigation) is { } owned)
             {
-                DropReplacedPrincipals(owned, navigation.TargetEntityType, built, visited);
+                DropReplacedPrincipals(owned, navigation.TargetEntityType, built, before, record, visited);
             }
         }
     }

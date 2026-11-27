@@ -678,6 +678,53 @@ public sealed class TestDataTests
         (await fresh.Set<Region>().CountAsync(Ct)).ShouldBe(1);
     }
 
+    public sealed class Room
+    {
+        public int Id { get; set; }
+
+        /// <summary>Initialized to a key no floor has: only the generated floor makes the room valid.</summary>
+        public int FloorId { get; set; } = -1;
+
+        public Floor Floor { get; set; } = null!;
+    }
+
+    public sealed class Floor
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    public sealed class Booking
+    {
+        public int Id { get; set; }
+        public int RoomId { get; set; }
+        public Room Room { get; set; } = null!;
+    }
+
+    public sealed class BookingContext(DbContextOptions<BookingContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<Booking>().HasOne(b => b.Room).WithMany().HasForeignKey(b => b.RoomId).IsRequired();
+            modelBuilder.Entity<Room>().HasOne(r => r.Floor).WithMany().HasForeignKey(r => r.FloorId).IsRequired();
+        }
+    }
+
+    [Fact]
+    public async Task A_foreign_key_initializer_is_not_taken_for_one_the_test_set()
+    {
+        // FloorId starts at -1, not the CLR default, so the cleanup read it as set by the callback and
+        // dropped the generated floor: the room was saved pointing at floor -1, which does not exist.
+        await using var db = await SqliteTestDatabase<BookingContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+
+        await context.CreateAsync<Booking>(_ => { }, cancellationToken: Ct);
+
+        await using var fresh = db.CreateContext();
+        (await fresh.Set<Floor>().CountAsync(Ct)).ShouldBe(1);
+        (await fresh.Set<Room>().SingleAsync(Ct)).FloorId.ShouldBe((await fresh.Set<Floor>().SingleAsync(Ct)).Id);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {
