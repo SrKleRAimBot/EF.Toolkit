@@ -83,12 +83,13 @@ internal static partial class SessionContextSql
     {
         var statements = new List<string>(values.Count);
         var parameters = new List<(string, object)>();
+        var prefix = ParameterPrefix(values.Select(v => v.Key));
 
         for (var i = 0; i < values.Count; i++)
         {
             var (key, value) = values[i];
-            var keyName = string.Create(CultureInfo.InvariantCulture, $"@ef_toolkit_key{i}");
-            var valueName = string.Create(CultureInfo.InvariantCulture, $"@ef_toolkit_value{i}");
+            var keyName = string.Create(CultureInfo.InvariantCulture, $"@{prefix}key{i}");
+            var valueName = string.Create(CultureInfo.InvariantCulture, $"@{prefix}value{i}");
 
             statements.Add(Statement(dialect, key, keyName, valueName));
             if (BindsKey(dialect))
@@ -101,6 +102,23 @@ internal static partial class SessionContextSql
         }
 
         return (string.Join(";\n", statements), parameters);
+    }
+
+    /// <summary>
+    ///     A prefix no key begins with, so no parameter named from it can be a key. MySQL writes a key as
+    ///     the user variable @key beside the parameters, and a connector binds every @name it sees: a key
+    ///     named like a parameter would have the value bound in its place too — SET 7 = 7.
+    /// </summary>
+    public static string ParameterPrefix(IEnumerable<string> keys)
+    {
+        var all = keys.ToList();
+        var prefix = "ef_toolkit_";
+        while (all.Exists(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            prefix = "x" + prefix;
+        }
+
+        return prefix;
     }
 
     /// <summary>Creates the command from <see cref="ForCommand" /> on an open connection.</summary>

@@ -251,7 +251,20 @@ public static class SqlDatabaseFacadeExtensions
     {
         ArgumentNullException.ThrowIfNull(database);
 
-        var (sql, arguments) = SessionContextSql.ForRawSql(database.GetSqlDialect(), key, value);
+        var dialect = database.GetSqlDialect();
+        var (sql, arguments) = SessionContextSql.ForRawSql(dialect, key, value);
+
+        // EF names raw SQL's parameters p0, p1…, and a MySQL key of p0 would be bound as well — the key
+        // is the user variable @p0 in the text. A parameter of the toolkit's own, named from a prefix the
+        // key does not begin with, cannot be the key.
+        if (dialect == SqlDialect.MySql)
+        {
+            using var command = database.GetDbConnection().CreateCommand();
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = SessionContextSql.ParameterPrefix([key]) + "value";
+            parameter.Value = arguments[0] ?? DBNull.Value;
+            arguments = [parameter];
+        }
 
         // EF counts every OpenConnection and closes only when each is matched, so opening again on an
         // already-open connection would make the one CloseConnection the remarks promise insufficient.
