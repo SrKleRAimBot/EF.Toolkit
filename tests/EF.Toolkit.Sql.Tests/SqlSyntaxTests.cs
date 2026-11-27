@@ -103,6 +103,13 @@ public sealed class SqlSyntaxTests
     [InlineData("SELECT 1 #note'\n, 'x;-- tail' AS value;", "SELECT 1 #note'\n, 'x;-- tail' AS value", SqlDialect.MySql)]
     [InlineData("SELECT 1; # done", "SELECT 1 # done", SqlDialect.MySql)]
     [InlineData("SELECT * FROM #temp;", "SELECT * FROM #temp", SqlDialect.SqlServer)]
+    [InlineData("SELECT 1 -- note\r'\n + length('x;-- tail') AS value;", "SELECT 1 -- note\r'\n + length('x;-- tail') AS value", SqlDialect.Sqlite)]
+    [InlineData("SELECT 1 -- note\r'\n + LENGTH('x;-- tail') AS value;", "SELECT 1 -- note\r'\n + LENGTH('x;-- tail') AS value", SqlDialect.MySql)]
+    [InlineData("SELECT ARRAY[']; -- text'] AS value;", "SELECT ARRAY[']; -- text'] AS value", SqlDialect.PostgreSql)]
+    [InlineData("SELECT [a;b] FROM t;", "SELECT [a;b] FROM t", SqlDialect.SqlServer)]
+    [InlineData("SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value;", "SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value", SqlDialect.PostgreSql)]
+    [InlineData("SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value;", "SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value", SqlDialect.SqlServer)]
+    [InlineData("SELECT /* a /* b */ 1;", "SELECT /* a /* b */ 1", SqlDialect.MySql)]
     public void Queries_lose_surrounding_whitespace_and_trailing_semicolons(string sql, string expected, SqlDialect dialect)
         => SqlSyntax.TrimQuery(sql, dialect).ShouldBe(expected);
 

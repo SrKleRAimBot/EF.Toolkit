@@ -168,6 +168,19 @@ public sealed class SqliteRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_carriage_return_does_not_end_a_line_comment_on_SQLite()
+    {
+        // SQLite ends -- at a line feed only: the scan stopped at the carriage return, took the comment's
+        // apostrophe for a quote, and removed the semicolon in 'x;-- tail' — 10 became 9.
+        var view = new ViewDefinition("crlf", "SELECT 1 -- note\r'\n + length('x;-- tail') AS \"Value\"");
+
+        await _context.Database.CreateDatabaseObjectsAsync(view);
+
+        (await _context.Database.SqlQueryRaw<int>("SELECT \"Value\" FROM \"crlf\"").SingleAsync(TestContext.Current.CancellationToken))
+            .ShouldBe(10);
+    }
+
+    [Fact]
     public async Task A_callers_transaction_is_joined_rather_than_nested()
     {
         await using (var transaction = await _context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken))

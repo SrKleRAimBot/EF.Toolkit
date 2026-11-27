@@ -201,12 +201,16 @@ internal static partial class SqlSyntax
                     && (dialect != SqlDialect.MySql || i + 2 == sql.Length || IsSqlWhitespace(sql[i + 2]) || char.IsControl(sql[i + 2])))
                 || (c == '#' && dialect == SqlDialect.MySql))
             {
-                var lineEnd = sql.IndexOfAny(['\n', '\r'], i);
+                // PostgreSQL and SQL Server end it at a carriage return as well; MySQL and SQLite only
+                // at a line feed, so a carriage return there is still inside the comment.
+                var lineEnd = dialect is SqlDialect.PostgreSql or SqlDialect.SqlServer
+                    ? sql.IndexOfAny(['\n', '\r'], i)
+                    : sql.IndexOf('\n', i);
                 i = lineEnd < 0 ? sql.Length : lineEnd + 1;
             }
             else if (c == '/' && next == '*')
             {
-                var close = sql.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                var close = BlockCommentEnd(sql, i, nested: dialect is SqlDialect.PostgreSql or SqlDialect.SqlServer);
                 if (close < 0)
                 {
                     return null;
@@ -220,7 +224,11 @@ internal static partial class SqlSyntax
 
                 i = close + 2;
             }
-            else if (c is '\'' or '"' or '`' or '[')
+            // [ ] quotes an identifier on SQL Server and SQLite only — on PostgreSQL it subscripts and
+            // builds arrays, ARRAY[']; x'] — and backticks on MySQL and SQLite.
+            else if (c is '\'' or '"'
+                || (c == '[' && dialect is SqlDialect.SqlServer or SqlDialect.Sqlite)
+                || (c == '`' && dialect is SqlDialect.MySql or SqlDialect.Sqlite))
             {
                 // Doubling the quote escapes it inside, which the scan sees as two quoted runs.
                 var closing = c == '[' ? ']' : c;
@@ -265,6 +273,42 @@ internal static partial class SqlSyntax
         }
 
         return semicolons;
+    }
+
+    // Where the block comment opened at start ends: the index of its closing */, or -1. PostgreSQL and
+    // SQL Server nest them — /* a /* b */ still a */ — MySQL and SQLite end at the first */.
+    private static int BlockCommentEnd(string sql, int start, bool nested)
+    {
+        if (!nested)
+        {
+            return sql.IndexOf("*/", start + 2, StringComparison.Ordinal);
+        }
+
+        var depth = 1;
+        var j = start + 2;
+        while (j + 1 < sql.Length)
+        {
+            if (sql[j] == '/' && sql[j + 1] == '*')
+            {
+                depth++;
+                j += 2;
+            }
+            else if (sql[j] == '*' && sql[j + 1] == '/')
+            {
+                if (--depth == 0)
+                {
+                    return j;
+                }
+
+                j += 2;
+            }
+            else
+            {
+                j++;
+            }
+        }
+
+        return -1;
     }
 
     // $$ or $tag$ opening a dollar-quoted body. Wider than PostgreSQL's own tag syntax — any run with

@@ -103,6 +103,8 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
     [InlineData("SELECT $\u00E9$x;-- tail$\u00E9$ AS \"Value\"")]
     [InlineData("SELECT $\u00A0$x;-- tail$\u00A0$ AS \"Value\"")]
     [InlineData("SELECT 1 AS a$t$, $t$x;-- tail$t$ AS \"Value\"")]
+    [InlineData("SELECT /* outer /* inner */ ' */ 'x;-- tail' AS \"Value\"")]
+    [InlineData("SELECT (ARRAY['x;-- tail'])[1] AS \"Value\" -- [")]
     public async Task A_dollar_quote_with_a_non_ascii_tag_keeps_its_value(string query)
     {
         // $é$ and $\u00A0$ went unrecognised as quotes, and the $t$ ending the identifier a$t$ was taken
@@ -113,6 +115,24 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
         {
             await context.Database.CreateDatabaseObjectsAsync(view);
             (await context.Database.SqlQueryRaw<string>("SELECT \"Value\" FROM dollar_value").SingleAsync(Token)).ShouldBe("x;-- tail");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
+    public async Task An_array_element_holding_a_bracket_keeps_its_semicolon()
+    {
+        // [ ] is no quote on PostgreSQL: the scan ended the "identifier" at the ] inside the string
+        // and removed the semicolon after it.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("bracket_value", "SELECT (ARRAY[']; -- text'])[1] AS \"Value\"");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            (await context.Database.SqlQueryRaw<string>("SELECT \"Value\" FROM bracket_value").SingleAsync(Token)).ShouldBe("]; -- text");
         }
         finally
         {
