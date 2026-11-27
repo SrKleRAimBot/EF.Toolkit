@@ -144,8 +144,8 @@ to go through the `mysql` client, which no EF provider writes — apply those mi
 `Database.Migrate()` (or `migrations bundle`), which sends each statement on its own. Pass
 `language: "sql"` for a PostgreSQL procedure in plain SQL.
 
-Parameter names must be plain identifiers (letters, digits, underscores), because the body refers to
-them bare. SQL Server's `@` is added for you. On PostgreSQL every parameter name is quoted in its
+Parameter names must be plain identifiers (letters, digits, underscores) — the definition names them
+for you, but the body is yours and refers to them by name. SQL Server's `@` is added for you. On PostgreSQL every parameter name is quoted in its
 lower-case form, in the definition and in named calls (`"tenantid"`, `"from"`, `"timestamp"`): that is
 the name a bare spelling folds to, so the body's bare references still find it, and it lets a key word
 be a parameter at all — `from` is reserved, and even `timestamp`, which is not, cannot be written bare
@@ -562,13 +562,15 @@ way to emit SQL for the wrong engine.
 **Names and values.** Every name is quoted, with the engine's quote character doubled inside it
 (`"we""ird"`, `[a]]b]`, `` `a``b` ``), even names that would be legal bare — a reserved-word list per
 engine and version is never complete, and names EF mapped (`Order`, `User`) are exactly the ones that
-collide. The exceptions are PostgreSQL languages and routine parameter names, which must be plain
-identifiers because the body refers to them unquoted. PostgreSQL writes every parameter name quoted in
-its lower-case form, in the definition and in named calls — the name a bare spelling folds to, so the
-body's unquoted references still find it — and a body refers to a key-word name quoted; MySQL quotes
-every one as written. Values never reach SQL text at runtime: they are
-`{0}` placeholders that EF binds as parameters. The only literal this package renders is a
-session-context key inside a generated policy, escaped per engine.
+collide. PostgreSQL language names are the exception: they must be plain identifiers. Routine parameter
+names must be plain identifiers too, as input, because the routine body you write refers to them; they
+are still quoted when rendered — on PostgreSQL in their lower-case form, in the definition and in named
+calls, the name an unquoted reference folds to; on MySQL as written; on SQL Server they take `@`. In the
+body, refer to an ordinary name unquoted and to a key-word name quoted (`"from"`). Runtime values never
+reach SQL text: they are `{0}` placeholders that EF binds as parameters. The literals this package
+renders are in generated DDL only — a session-context key inside a policy, and the names of the
+objects a catalog lookup checks (a table for row-level security, a materialized view being replaced) —
+escaped per engine, as an escape string where a PostgreSQL value holds a backslash.
 
 **Statements, not scripts.** Each definition returns a list of statements, and each becomes its own
 `migrationBuilder.Sql(...)` operation or its own command. SQL Server requires `CREATE VIEW` and

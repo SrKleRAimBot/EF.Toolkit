@@ -5,10 +5,11 @@ namespace EFToolkit.Sql.Definitions;
 /// <summary>A parameter of a stored procedure or function.</summary>
 /// <remarks>
 ///     The name is written without a prefix; SQL Server's <c>@</c> is added when rendering for it (a
-///     leading <c>@</c> is accepted and ignored). It must be a plain identifier because the routine
-///     body refers to it unquoted. On PostgreSQL it is written quoted in its lower-case form, in the
-///     definition and in named calls: the name an unquoted reference folds to, and the only way a key
-///     word such as <c>timestamp</c> can be a parameter — which the body then refers to quoted.
+///     leading <c>@</c> is accepted and ignored). It must be a plain identifier, since the routine body
+///     you write refers to it by name. Rendered, it is quoted: on PostgreSQL in its lower-case form, in
+///     the definition and in named calls — the name an unquoted reference folds to, and the only way a
+///     key word such as <c>timestamp</c> can be a parameter. In the body, refer to an ordinary name
+///     unquoted and to a key-word name quoted.
 /// </remarks>
 public sealed class SqlParameterDefinition
 {
