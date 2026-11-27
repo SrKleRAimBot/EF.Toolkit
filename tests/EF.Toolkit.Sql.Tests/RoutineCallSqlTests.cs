@@ -130,6 +130,35 @@ public sealed class RoutineArgumentsTests
     public void Plain_classes_contribute_their_public_readable_properties()
         => RoutineArguments.From(new Args { Tenant = 4 }).ShouldBe([("Tenant", (object?)4)]);
 
+    [Theory]
+    [InlineData("@p0")]
+    [InlineData("P0")]
+    [InlineData("p0")]
+    public void A_DbParameter_named_like_a_generated_parameter_is_refused(string name)
+    {
+        // EF names the value at index 0 p0 too: the call rendered @tenant_id = @p0, @total = @p0 OUTPUT,
+        // and the two arguments could not bind apart.
+        var total = new SqlParameter(name, SqlDbType.Int) { Direction = ParameterDirection.Output };
+
+        Should.Throw<ArgumentException>(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "close_month", null, new { tenant_id = 7, total }))
+            .Message.ShouldContain("Arguments 'tenant_id' and 'total' would both be bound as parameter");
+        Should.Throw<ArgumentException>(() => RoutineCallSql.Function(SqlDialect.PostgreSql, "report", null, new { tenant_id = 7, total }));
+    }
+
+    [Fact]
+    public void Two_DbParameters_of_one_name_are_refused_and_distinct_names_are_not()
+    {
+        var a = new SqlParameter("@x", 1);
+        var b = new SqlParameter("@X", 2);
+        Should.Throw<ArgumentException>(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { a, b }))
+            .Message.ShouldContain("'a' and 'b'");
+
+        // A DbParameter with no name is named by its own position, and one named p1 at position 1 is its own.
+        var unnamed = new SqlParameter { Value = 1 };
+        var own = new SqlParameter("@p1", 2);
+        Should.NotThrow(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { unnamed, own, c = 3 }));
+    }
+
     [Fact]
     public void DbParameter_values_pass_through()
     {

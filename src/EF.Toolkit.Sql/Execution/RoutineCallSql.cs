@@ -84,8 +84,29 @@ internal static class RoutineCallSql
     private static string Target(SqlDialect dialect, string name, string? schema)
         => SqlSyntax.EscapeFormat(SqlSyntax.Qualify(dialect, name, SqlSyntax.OptionalName(schema, nameof(schema))));
 
+    // EF names the parameter for the value at index i p{i}, and binds a DbParameter under the name it
+    // already has (or that same p{i}, when it has none). A DbParameter named like another argument's
+    // generated name, or like another DbParameter, would put two arguments under one name: refused here,
+    // naming the one to rename. Compared without the prefix and ignoring case, as SQL Server does.
     private static object?[] Values(IReadOnlyList<(string Name, object? Value)> arguments)
-        => [.. arguments.Select(a => a.Value)];
+    {
+        var bound = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var given = (arguments[i].Value as DbParameter)?.ParameterName.TrimStart('@', ':', '?', '$');
+            var name = string.IsNullOrEmpty(given) ? string.Create(CultureInfo.InvariantCulture, $"p{i}") : given;
+            if (!bound.TryAdd(name, arguments[i].Name))
+            {
+                var (first, second) = (bound[name], arguments[i].Name);
+                throw new ArgumentException(
+                    $"Arguments '{first}' and '{second}' would both be bound as parameter '{name}': EF names an argument's "
+                    + "parameter p0, p1, ... by its position, and a DbParameter keeps the name it was given. Rename the "
+                    + "DbParameter, or give it no name and let EF name it.");
+            }
+        }
+
+        return [.. arguments.Select(a => a.Value)];
+    }
 
     private static string Placeholder(int index) => string.Create(CultureInfo.InvariantCulture, $"{{{index}}}");
 
