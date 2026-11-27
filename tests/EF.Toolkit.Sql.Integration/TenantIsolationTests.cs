@@ -388,6 +388,11 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
             // A zone-less column drops an offset: the same wall clock two hours east is another instant.
             (await IdsAs("2026-04-03T12:30:00.0000000+02:00")).ShouldBeEmpty();
             (await IdsAs("2026-04-03 12:30:00 UTC")).ShouldBeEmpty();
+
+            // Spellings PostgreSQL also takes, and casts onto the same key.
+            (await IdsAs("2026-04-03T123000")).ShouldBeEmpty();
+            (await IdsAs("2026-04-03T123000+02:00")).ShouldBeEmpty();
+            (await IdsAs("2026-04-03 12:30+02:00")).ShouldBeEmpty();
         }
         finally
         {
@@ -424,6 +429,12 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
 
             // One tick past midnight: the timestamp cast rounds it back to midnight.
             (await IdsAs(new DateTime(2026, 11, 27).AddTicks(4))).ShouldBeEmpty();
+
+            // A compact time is still a time of day; a compact or single-digit midnight with an offset is
+            // midnight somewhere else.
+            (await IdsAs("2026-11-27T123456")).ShouldBeEmpty();
+            (await IdsAs("2026-11-27T000000+02:00")).ShouldBeEmpty();
+            (await IdsAs("2026-11-27 0:0+02:00")).ShouldBeEmpty();
 
             // Midnight somewhere else is not this date's midnight.
             (await IdsAs(new DateTimeOffset(2026, 11, 27, 0, 0, 0, TimeSpan.FromHours(2)))).ShouldBeEmpty();

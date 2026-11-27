@@ -221,30 +221,25 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
             condition += $" AND {tenant} = CAST({setting} AS {unconstrained})";
         }
 
-        // PostgreSQL keeps time to the microsecond and rounds finer digits away on any cast, bare type
-        // or not: 12:30:00.0000004 would match the tenant stored as 12:30:00. So a temporal setting with
-        // a nonzero digit past the sixth is refused; trailing zeros, as .NET writes seven digits, are not.
-        if (IsPostgreSqlTemporal(ColumnStoreType) || typeName == "date")
+        // A type without a time zone takes far more than it keeps. PostgreSQL's date and time input
+        // accepts compact times (T123456), single-digit fields, offsets, zone names, and digits finer
+        // than the microsecond it rounds them to, and a cast to such a type drops what it does not keep:
+        // the time of day for a date, the zone for the others. A session value carrying any of that could
+        // land on another tenant's key. So for these the setting must be in one plain ISO 8601 form,
+        // which is what UseSessionContext writes for a DateOnly, a DateTime and a TimeOnly:
+        //   date       2026-11-27, or that day at an all-zero midnight
+        //   timestamp  2026-11-27T12:30:00.1234560 — a space for the T, seconds and fraction optional
+        //   time       12:30:00.1234560 — seconds and fraction optional
+        // with no more than six significant fractional digits and nothing after them.
+        if (ZonelessFormats.TryGetValue(typeName, out var format))
         {
+            condition += $" AND {setting} ~ {format}";
+        }
+        else if (IsPostgreSqlTemporal(ColumnStoreType))
+        {
+            // With a time zone, PostgreSQL keeps the instant to the microsecond and rounds finer digits
+            // away: 12:30:00.0000004 would match the tenant stored as 12:30:00.
             condition += $" AND {setting} !~ {SubMicrosecondPattern}";
-        }
-
-        // A date drops the time of day: the timestamp UseSessionContext writes for a DateTime at 12:34
-        // would match that day's tenant. Compared as values, the date must be the same instant as the
-        // setting read as a timestamp — a date alone, or one at midnight, as .NET writes it.
-        // A date alone skips the comparison, in a CASE so PostgreSQL never makes the cast: a date as late
-        // as 300000-01-01 is one, but past the end of timestamp's range.
-        if (typeName == "date")
-        {
-            condition += $" AND CASE WHEN {setting} ~ ':' THEN {tenant} = CAST({setting} AS pg_catalog.timestamp) ELSE true END";
-        }
-
-        // A type without a time zone ignores the one a setting carries: 12:00:00+02:00 is cast to
-        // 12:00:00, and the offset UseSessionContext writes for a DateTimeOffset is dropped. So for these a
-        // time followed by an offset, a Z or a zone name is refused.
-        if (ZonelessTypes.Contains(typeName))
-        {
-            condition += $" AND {setting} !~ {ZoneSuffixPattern}";
         }
 
         // Restrictive: PostgreSQL ORs permissive policies together, so a permissive tenant check
@@ -420,13 +415,19 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         return unbounded ?? (modified ? bare : null);
     }
 
-    private static readonly HashSet<string> ZonelessTypes = new(StringComparer.Ordinal)
-    {
-        "date", "timestamp", "timestamp without time zone", "time", "time without time zone",
-    };
+    // The one form a zone-less temporal setting may take. A fraction keeps at most six significant
+    // digits: 1234560 is allowed, 1234567 is not.
+    private const string IsoDate = "[0-9]{4,}-[0-9]{2}-[0-9]{2}";
+    private const string IsoTime = "[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{0,6}0*)?)?";
 
-    // A time (hh:mm, seconds and fraction optional) followed by Z, a numeric offset or a zone name.
-    private const string ZoneSuffixPattern = "'[0-9]:[0-9]{2}(:[0-9]{2})?([.][0-9]*)?[[:space:]]*([Zz]|[+-][0-9]|[A-Za-z])'";
+    private static readonly Dictionary<string, string> ZonelessFormats = new(StringComparer.Ordinal)
+    {
+        ["date"] = $"'^{IsoDate}([T ]00:00(:00([.]0*)?)?)?$'",
+        ["timestamp"] = $"'^{IsoDate}[T ]{IsoTime}$'",
+        ["timestamp without time zone"] = $"'^{IsoDate}[T ]{IsoTime}$'",
+        ["time"] = $"'^{IsoTime}$'",
+        ["time without time zone"] = $"'^{IsoTime}$'",
+    };
 
     // A fraction with a nonzero digit after its sixth: matched by PostgreSQL's ~, so no backslashes.
     private const string SubMicrosecondPattern = "'[.][0-9]{6}[0-9]*[1-9]'";
