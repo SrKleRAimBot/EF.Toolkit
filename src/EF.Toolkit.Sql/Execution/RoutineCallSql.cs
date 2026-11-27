@@ -84,29 +84,49 @@ internal static class RoutineCallSql
     private static string Target(SqlDialect dialect, string name, string? schema)
         => SqlSyntax.EscapeFormat(SqlSyntax.Qualify(dialect, name, SqlSyntax.OptionalName(schema, nameof(schema))));
 
-    // EF names the parameter for the value at index i p{i}, and binds a DbParameter under the name it
-    // already has (or that same p{i}, when it has none). A DbParameter named like another argument's
-    // generated name, or like another DbParameter, would put two arguments under one name: refused here,
-    // naming the one to rename. Compared without the prefix and ignoring case, as SQL Server does.
+    // EF names the parameters it generates p0, p1, ... — for a raw command, counting only the plain values
+    // and unnamed DbParameters, so which argument gets which name depends on how many named ones precede
+    // it — and binds a named DbParameter under its own name. A DbParameter named p0 .. p{n-1}, which some
+    // other argument may be given, or named like another DbParameter, would put two arguments under one
+    // name: refused, naming the one to rename. Compared without the prefix and ignoring case, as SQL
+    // Server does.
     private static object?[] Values(IReadOnlyList<(string Name, object? Value)> arguments)
     {
-        var bound = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < arguments.Count; i++)
+        var named = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (argument, value) in arguments)
         {
-            var given = (arguments[i].Value as DbParameter)?.ParameterName.TrimStart('@', ':', '?', '$');
-            var name = string.IsNullOrEmpty(given) ? string.Create(CultureInfo.InvariantCulture, $"p{i}") : given;
-            if (!bound.TryAdd(name, arguments[i].Name))
+            var given = (value as DbParameter)?.ParameterName.TrimStart('@', ':', '?', '$');
+            if (string.IsNullOrEmpty(given))
             {
-                var (first, second) = (bound[name], arguments[i].Name);
+                continue;
+            }
+
+            if (IsGeneratedName(given, arguments.Count))
+            {
                 throw new ArgumentException(
-                    $"Arguments '{first}' and '{second}' would both be bound as parameter '{name}': EF names an argument's "
-                    + "parameter p0, p1, ... by its position, and a DbParameter keeps the name it was given. Rename the "
-                    + "DbParameter, or give it no name and let EF name it.");
+                    $"Argument '{argument}' is a DbParameter named '{given}', a name EF gives the parameters it generates "
+                    + $"for this call (p0 to p{arguments.Count - 1}), so another argument could be bound under it too. "
+                    + "Rename the DbParameter, or give it no name and let EF name it.");
+            }
+
+            if (!named.TryAdd(given, argument))
+            {
+                throw new ArgumentException(
+                    $"Arguments '{named[given]}' and '{argument}' are DbParameters both named '{given}', so they would be "
+                    + "bound as one. Rename one of them, or give it no name and let EF name it.");
             }
         }
 
         return [.. arguments.Select(a => a.Value)];
     }
+
+    private static bool IsGeneratedName(string name, int count)
+        => name.Length > 1
+            && name[0] is 'p' or 'P'
+            && name.Skip(1).All(char.IsAsciiDigit)
+            && (name.Length == 2 || name[1] != '0')
+            && int.TryParse(name.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var index)
+            && index < count;
 
     private static string Placeholder(int index) => string.Create(CultureInfo.InvariantCulture, $"{{{index}}}");
 

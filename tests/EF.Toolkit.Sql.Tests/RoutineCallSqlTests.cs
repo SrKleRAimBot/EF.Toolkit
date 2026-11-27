@@ -134,29 +134,33 @@ public sealed class RoutineArgumentsTests
     [InlineData("@p0")]
     [InlineData("P0")]
     [InlineData("p0")]
+    [InlineData("@p1")]
     public void A_DbParameter_named_like_a_generated_parameter_is_refused(string name)
     {
-        // EF names the value at index 0 p0 too: the call rendered @tenant_id = @p0, @total = @p0 OUTPUT,
-        // and the two arguments could not bind apart.
+        // EF names the plain value p0 too: the call rendered @tenant_id = @p0, @total = @p0 OUTPUT, and the
+        // two arguments could not bind apart. Its counter skips named DbParameters, so the order matters:
+        // with the named one first, the plain value after it was given p0 as well.
         var total = new SqlParameter(name, SqlDbType.Int) { Direction = ParameterDirection.Output };
 
         Should.Throw<ArgumentException>(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "close_month", null, new { tenant_id = 7, total }))
-            .Message.ShouldContain("Arguments 'tenant_id' and 'total' would both be bound as parameter");
+            .Message.ShouldContain("Argument 'total' is a DbParameter named");
+        Should.Throw<ArgumentException>(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "close_month", null, new { total, tenant_id = 7 }));
         Should.Throw<ArgumentException>(() => RoutineCallSql.Function(SqlDialect.PostgreSql, "report", null, new { tenant_id = 7, total }));
     }
 
     [Fact]
-    public void Two_DbParameters_of_one_name_are_refused_and_distinct_names_are_not()
+    public void Two_DbParameters_of_one_name_are_refused_and_other_names_are_not()
     {
         var a = new SqlParameter("@x", 1);
         var b = new SqlParameter("@X", 2);
         Should.Throw<ArgumentException>(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { a, b }))
             .Message.ShouldContain("'a' and 'b'");
 
-        // A DbParameter with no name is named by its own position, and one named p1 at position 1 is its own.
+        // Unnamed DbParameters are EF's to name; p2 and p01 are names no argument of a two-argument call gets.
         var unnamed = new SqlParameter { Value = 1 };
-        var own = new SqlParameter("@p1", 2);
-        Should.NotThrow(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { unnamed, own, c = 3 }));
+        Should.NotThrow(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { unnamed, c = 3 }));
+        Should.NotThrow(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { c = 3, d = new SqlParameter("@p2", 1) }));
+        Should.NotThrow(() => RoutineCallSql.Procedure(SqlDialect.SqlServer, "p", null, new { c = 3, d = new SqlParameter("@p01", 1) }));
     }
 
     [Fact]
