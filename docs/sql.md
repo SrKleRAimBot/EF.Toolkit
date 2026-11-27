@@ -563,13 +563,15 @@ way to emit SQL for the wrong engine.
 (`"we""ird"`, `[a]]b]`, `` `a``b` ``), even names that would be legal bare — a reserved-word list per
 engine and version is never complete, and names EF mapped (`Order`, `User`) are exactly the ones that
 collide. PostgreSQL language names are the exception: they must be plain identifiers. Routine parameter
-names must be plain identifiers too, as input, because the routine body you write refers to them; they
-are still quoted when rendered — on PostgreSQL in their lower-case form, in the definition and in named
-calls, the name an unquoted reference folds to; on MySQL as written; on SQL Server they take `@`. In the
-body, refer to an ordinary name unquoted and to a key-word name quoted (`"from"`). Runtime values never
+names must be plain identifiers too, as input, because the routine body you write refers to them. How
+they are rendered, in the definition and in named calls, depends on the engine: PostgreSQL quotes them
+in their lower-case form (`"tenantid"`), the name an unquoted reference folds to; MySQL quotes them as
+written (`` `TenantId` ``); SQL Server writes them unquoted with `@` in front (`@TenantId`). In a
+PostgreSQL or MySQL body, refer to an ordinary name unquoted and to a key-word name quoted (`"from"`). Runtime values never
 reach SQL text: they are `{0}` placeholders that EF binds as parameters. The literals this package
 renders are in generated DDL only — a session-context key inside a policy, and the names of the
-objects a catalog lookup checks (a table for row-level security, a materialized view being replaced) —
+objects a catalog lookup checks (a table for row-level security, a materialized view being replaced,
+the `_access` policy name before it is withdrawn) —
 escaped per engine, as an escape string where a PostgreSQL value holds a backslash.
 
 **Statements, not scripts.** Each definition returns a list of statements, and each becomes its own

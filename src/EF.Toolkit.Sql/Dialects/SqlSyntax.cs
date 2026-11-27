@@ -82,9 +82,10 @@ internal static partial class SqlSyntax
     ///     underscores, not starting with a digit.
     /// </summary>
     /// <remarks>
-    ///     Used for names that cannot be quoted: routine parameter names, which the routine body
-    ///     refers to bare, and a PostgreSQL routine's language. Quoting a parameter would make
-    ///     <c>"TenantId"</c> in the signature a different name from <c>TenantId</c> in the body.
+    ///     Used for names given as input that must be usable by name in SQL the caller writes: routine
+    ///     parameter names, which the routine body refers to, and a PostgreSQL routine's language. How
+    ///     each engine then renders the name — quoted, lower-cased, prefixed with <c>@</c> — is up to
+    ///     the definition; this is the input rule alone.
     /// </remarks>
     public static string RequireSimpleIdentifier(string value, string paramName)
     {
@@ -94,7 +95,7 @@ internal static partial class SqlSyntax
         {
             throw new ArgumentException(
                 $"'{value}' is not a plain identifier. Use letters, digits and underscores only, "
-                + "not starting with a digit: the name appears unquoted in the generated SQL.",
+                + "not starting with a digit: SQL you write, such as a routine body, refers to it by name.",
                 paramName);
         }
 
