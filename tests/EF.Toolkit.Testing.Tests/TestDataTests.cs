@@ -560,6 +560,48 @@ public sealed class TestDataTests
         tiers.Select(t => t.Step).Distinct().Count().ShouldBe(256);
     }
 
+    public sealed class Branch
+    {
+        public byte Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    public sealed class Visit
+    {
+        public int Id { get; set; }
+        public byte BranchId { get; set; }
+        public Branch Branch { get; set; } = null!;
+    }
+
+    public sealed class BranchContext(DbContextOptions<BranchContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<Branch>().Property(b => b.Id).ValueGeneratedNever();
+            modelBuilder.Entity<Visit>().HasOne(v => v.Branch).WithMany().HasForeignKey(v => v.BranchId).IsRequired();
+        }
+    }
+
+    [Fact]
+    public async Task Nulling_the_navigation_points_a_required_foreign_key_at_a_principal_keyed_by_the_default()
+    {
+        // A foreign key set to 0 reads as unset, so the generated branch stays and EF repoints the visit at
+        // it. Nulling the navigation drops the generated branch, and the key that is saved is the one set.
+        await using var db = await SqliteTestDatabase<BranchContext>.CreateAsync(cancellationToken: Ct);
+        await using (var arrange = db.CreateContext())
+        {
+            arrange.Add(new Branch { Id = 0, Name = "head office" });
+            await arrange.SaveChangesAsync(Ct);
+        }
+
+        await using var context = db.CreateContext();
+        await context.CreateAsync<Visit>(v => { v.Branch = null!; v.BranchId = 0; }, cancellationToken: Ct);
+
+        await using var fresh = db.CreateContext();
+        (await fresh.Set<Visit>().SingleAsync(Ct)).BranchId.ShouldBe((byte)0);
+        (await fresh.Set<Branch>().CountAsync(Ct)).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {
