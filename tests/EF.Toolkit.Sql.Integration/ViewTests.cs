@@ -158,6 +158,57 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Replacing_an_unqualified_materialized_view_leaves_a_later_schema_s_view_alone()
+    {
+        // With search_path app, public and no app.order_totals_sp, the unqualified DROP found public's
+        // view and dropped it, index and all, before the CREATE made one in app.
+        await using var context = fixture.CreateAdminContext();
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE SCHEMA IF NOT EXISTS app; "
+                + "CREATE MATERIALIZED VIEW public.order_totals_sp AS SELECT 7 AS total; "
+                + "CREATE INDEX order_totals_sp_total ON public.order_totals_sp (total);",
+            Token);
+        await context.Database.OpenConnectionAsync(Token);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("SET search_path = app, public", Token);
+            await context.Database.CreateDatabaseObjectsAsync(new MaterializedViewDefinition("order_totals_sp", "SELECT 1 AS total"));
+
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM public.order_totals_sp").SingleAsync(Token)).ShouldBe(7);
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM app.order_totals_sp").SingleAsync(Token)).ShouldBe(1);
+            (await context.Database.SqlQueryRaw<int>(
+                    "SELECT COUNT(*)::int AS \"Value\" FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'order_totals_sp_total'")
+                .SingleAsync(Token)).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "SET search_path = public; DROP MATERIALIZED VIEW IF EXISTS app.order_totals_sp; "
+                    + "DROP MATERIALIZED VIEW IF EXISTS public.order_totals_sp; DROP SCHEMA IF EXISTS app CASCADE",
+                Token);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Replacing_an_unqualified_materialized_view_replaces_it()
+    {
+        // The drop by current_schema() must still find the view the CREATE made last time.
+        await using var context = fixture.CreateAdminContext();
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(new MaterializedViewDefinition("replaced_mv", "SELECT 1 AS total"));
+            await context.Database.CreateDatabaseObjectsAsync(new MaterializedViewDefinition("replaced_mv", "SELECT 2 AS total"));
+
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM replaced_mv").SingleAsync(Token)).ShouldBe(2);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP MATERIALIZED VIEW IF EXISTS replaced_mv", Token);
+        }
+    }
+
+    [Fact]
     public async Task A_materialized_view_holds_its_snapshot_until_refreshed()
     {
         await using var context = fixture.CreateAdminContext();

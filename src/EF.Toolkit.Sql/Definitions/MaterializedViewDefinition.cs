@@ -65,7 +65,30 @@ public sealed class MaterializedViewDefinition : IDatabaseObject
             create += "\nWITH NO DATA";
         }
 
-        return [.. DropSql(dialect, Name, Schema), create];
+        return [ReplaceDropSql(), create];
+    }
+
+    // Replacing drops the view the CREATE is about to make. With a schema that is plain. Without one,
+    // DROP and CREATE resolve the bare name differently: CREATE puts it in the first schema on the
+    // search_path, while DROP finds the first schema that has one — with search_path app, public and no
+    // app.order_totals, an unqualified DROP would remove public's view, indexes and all. So the drop
+    // names current_schema(), the schema the CREATE will use, worked out when it runs.
+    private string ReplaceDropSql()
+    {
+        if (Schema is not null)
+        {
+            return DropSql(SqlDialect.PostgreSql, Name, Schema)[0];
+        }
+
+        var name = SqlSyntax.Literal(SqlDialect.PostgreSql, Name);
+        var body = $"""
+            BEGIN
+                IF current_schema() IS NOT NULL THEN
+                    EXECUTE format('DROP MATERIALIZED VIEW IF EXISTS %I.%I', current_schema(), {name});
+                END IF;
+            END
+            """;
+        return $"DO {SqlSyntax.DollarQuote(body)}";
     }
 
     /// <inheritdoc />

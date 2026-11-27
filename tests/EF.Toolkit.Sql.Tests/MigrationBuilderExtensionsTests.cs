@@ -91,14 +91,15 @@ public sealed class MigrationBuilderExtensionsTests
             .CreateMaterializedView(new MaterializedViewDefinition("n", "SELECT 2"))
             .DropMaterializedView("m");
 
-        Sql(builder).ShouldBe(
-        [
-            "DROP MATERIALIZED VIEW IF EXISTS \"m\"",
-            "CREATE MATERIALIZED VIEW \"m\" AS\nSELECT 1\nWITH NO DATA",
-            "DROP MATERIALIZED VIEW IF EXISTS \"n\"",
-            "CREATE MATERIALIZED VIEW \"n\" AS\nSELECT 2",
-            "DROP MATERIALIZED VIEW IF EXISTS \"m\"",
-        ]);
+        // Replacing an unqualified view drops it from current_schema(), where the CREATE puts it.
+        var sql = Sql(builder);
+        sql.Count.ShouldBe(5);
+        sql[0].ShouldStartWith("DO $$");
+        sql[0].ShouldContain("format('DROP MATERIALIZED VIEW IF EXISTS %I.%I', current_schema(), 'm')");
+        sql[1].ShouldBe("CREATE MATERIALIZED VIEW \"m\" AS\nSELECT 1\nWITH NO DATA");
+        sql[2].ShouldContain("current_schema(), 'n')");
+        sql[3].ShouldBe("CREATE MATERIALIZED VIEW \"n\" AS\nSELECT 2");
+        sql[4].ShouldBe("DROP MATERIALIZED VIEW IF EXISTS \"m\"");
     }
 
     [Fact]
