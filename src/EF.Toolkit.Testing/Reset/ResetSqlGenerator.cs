@@ -310,7 +310,8 @@ internal static class ResetSqlGenerator
     ///     </para>
     ///     <para>
     ///         Counters restart with <c>ALTER TABLE ... AUTO_INCREMENT = 1</c>, which on an emptied table
-    ///         means the next row gets 1, after the commit: <c>ALTER TABLE</c> commits implicitly, so it
+    ///         means the next row gets the first value the session's <c>auto_increment_offset</c> and
+    ///         <c>auto_increment_increment</c> allow — 1 by default — after the commit: <c>ALTER TABLE</c> commits implicitly, so it
     ///         cannot run inside the unit. Inside the caller's transaction it would commit that too, so
     ///         there the counters keep going: an isolated scope that silently committed would be worse
     ///         than one whose ids are not 1.
