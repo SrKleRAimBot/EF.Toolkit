@@ -350,6 +350,7 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
     {
         public int Id { get; set; }
         public decimal Thousands { get; set; }
+        public decimal Trillions { get; set; }
     }
 
     private sealed class RoundingContext(DbContextOptions<RoundingContext> options) : DbContext(options)
@@ -360,6 +361,8 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
                 b.ToTable("Roundings");
                 b.Property(r => r.Thousands).HasColumnType("numeric(2,-3)");
                 b.HasIndex(r => r.Thousands).IsUnique();
+                b.Property(r => r.Trillions).HasColumnType("numeric(20,-12)");
+                b.HasIndex(r => r.Trillions).IsUnique();
             });
     }
 
@@ -367,20 +370,21 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
     public async Task Generated_decimals_stay_distinct_in_a_column_with_a_negative_scale()
     {
         // numeric(2,-3) rounds to thousands: 1 and 2 were both stored as 0, and the unique index refused
-        // the second row.
+        // the second row. numeric(20,-12) too, once the step was cut short to fit 20 digits in a decimal.
         Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
         await using var context = new RoundingContext(
             new DbContextOptionsBuilder<RoundingContext>().UseNpgsql(Fixture.ConnectionString).Options);
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE TABLE \"Roundings\" (\"Id\" serial PRIMARY KEY, \"Thousands\" numeric(2,-3) NOT NULL UNIQUE)", Ct);
+            "CREATE TABLE \"Roundings\" (\"Id\" serial PRIMARY KEY, \"Thousands\" numeric(2,-3) NOT NULL UNIQUE, \"Trillions\" numeric(20,-12) NOT NULL UNIQUE)", Ct);
         try
         {
             await context.CreateManyAsync<Rounding>(3, cancellationToken: Ct);
 
             await using var fresh = new RoundingContext(
                 new DbContextOptionsBuilder<RoundingContext>().UseNpgsql(Fixture.ConnectionString).Options);
-            var stored = await fresh.Set<Rounding>().Select(r => r.Thousands).ToListAsync(Ct);
-            stored.Distinct().Count().ShouldBe(3);
+            var stored = await fresh.Set<Rounding>().ToListAsync(Ct);
+            stored.Select(r => r.Thousands).Distinct().Count().ShouldBe(3);
+            stored.Select(r => r.Trillions).Distinct().Count().ShouldBe(3);
         }
         finally
         {

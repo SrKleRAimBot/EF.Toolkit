@@ -467,10 +467,12 @@ public sealed class TestData
         var digits = Math.Clamp(precision, 1, 18);
 
         // PostgreSQL's numeric(2,-3) rounds to thousands, so 1 and 2 are both stored as 0: step by the
-        // rounding unit instead, as far as a CLR decimal reaches (28 digits in all).
+        // rounding unit instead. A CLR decimal holds 28 digits, so the step keeps the column's unit and
+        // the counter gives up digits; a unit past 10^27 is out of a decimal's reach altogether.
         if (NegativeScale(property!.GetColumnType()) is { } rounding)
         {
-            return n % (long)Pow10(digits) * Pow10(Math.Min(rounding, 28 - digits));
+            var places = Math.Min(rounding, 27);
+            return n % (long)Pow10(Math.Clamp(28 - places, 1, digits)) * Pow10(places);
         }
 
         var scale = Math.Clamp(property!.GetScale() ?? mapping?.Scale ?? 0, 0, 28);
