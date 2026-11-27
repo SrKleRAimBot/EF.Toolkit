@@ -555,6 +555,39 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
     }
 
     [Fact]
+    public async Task A_truncate_trigger_that_moves_the_search_path_cannot_hide_the_rows_it_put_back()
+    {
+        // The emptiness check named the table as mapped, unqualified, and ran after the trigger: one that
+        // put a row back and pointed search_path at another schema's empty "Tags" had that one counted.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE SCHEMA shadow; CREATE TABLE shadow.\"Tags\" (\"Code\" text); "
+                + "CREATE FUNCTION public.refill_and_move() RETURNS trigger LANGUAGE plpgsql AS "
+                + "$$ BEGIN INSERT INTO public.\"Tags\" (\"Code\", \"Label\") VALUES ('back', 'put back'); "
+                + "PERFORM pg_catalog.set_config('search_path', 'shadow, public', true); RETURN NULL; END $$; "
+                + "CREATE TRIGGER refill_and_move AFTER TRUNCATE ON public.\"Tags\" FOR EACH STATEMENT EXECUTE FUNCTION public.refill_and_move();",
+            Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("Tags'");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await context.Tags.CountAsync(t => t.Code == "back", Ct)).ShouldBe(0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "DROP TRIGGER IF EXISTS refill_and_move ON public.\"Tags\"; DROP FUNCTION IF EXISTS public.refill_and_move(); "
+                    + "DROP SCHEMA IF EXISTS shadow CASCADE",
+                Ct);
+        }
+    }
+
+    [Fact]
     public async Task A_refused_reset_inside_a_transaction_leaves_it_usable()
     {
         // PostgreSQL aborts the whole transaction on any error. Without a savepoint, a TRUNCATE refused

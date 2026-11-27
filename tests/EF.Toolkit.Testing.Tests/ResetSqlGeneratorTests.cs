@@ -200,13 +200,15 @@ public sealed class ResetSqlGeneratorTests
         var plan = ResetPlan.Create([Lines, Orders]);
 
         // No trigger anywhere: nothing to count.
-        DatabaseResetExtensions.TruncateTriggered(plan, [["0", "0", "0"], ["1", "0", "0"]]).ShouldBeEmpty();
+        DatabaseResetExtensions.TruncateTriggered(plan, [["0", "0", "0", "public", "Lines"], ["1", "0", "0", "sales", "Orders"]]).ShouldBeEmpty();
 
-        // One trigger can write into any reset table, so every one is counted.
-        DatabaseResetExtensions.TruncateTriggered(plan, [["0", "0", "0"], ["1", "0", "1"]]).ShouldBe([Lines, Orders]);
+        // One trigger can write into any reset table, so every one is counted — by the schema it resolved
+        // to before the reset ran, which a trigger changing search_path cannot move.
+        DatabaseResetExtensions.TruncateTriggered(plan, [["0", "0", "0", "fixtures", "Lines"], ["1", "0", "1", "sales", "Orders"]])
+            .ShouldBe([new ResetTable("fixtures", "Lines"), Orders]);
 
         // ...and one the count could not see all of is refused, whichever table the trigger is on.
-        Should.Throw<InvalidOperationException>(() => DatabaseResetExtensions.TruncateTriggered(plan, [["0", "1", "0"], ["1", "0", "1"]]))
+        Should.Throw<InvalidOperationException>(() => DatabaseResetExtensions.TruncateTriggered(plan, [["0", "1", "0", "public", "Lines"], ["1", "0", "1", "sales", "Orders"]]))
             .Message.ShouldContain("Cannot reset 'Lines': a TRUNCATE trigger among the reset tables");
     }
 

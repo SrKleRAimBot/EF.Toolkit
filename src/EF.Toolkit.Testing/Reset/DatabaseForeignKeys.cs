@@ -317,8 +317,11 @@ internal static class DatabaseForeignKeys
             SELECT (reset.n - 1)::pg_catalog.int4,
                    CASE WHEN pg_catalog.row_security_active(reset.r) THEN 1 ELSE 0 END,
                    CASE WHEN EXISTS (SELECT 1 FROM tree JOIN pg_catalog.pg_trigger AS g ON g.tgrelid = tree.rel
-                                     WHERE tree.n = reset.n AND NOT g.tgisinternal AND (g.tgtype & 32) <> 0) THEN 1 ELSE 0 END
-            FROM reset;
+                                     WHERE tree.n = reset.n AND NOT g.tgisinternal AND (g.tgtype & 32) <> 0) THEN 1 ELSE 0 END,
+                   s.nspname, c.relname
+            FROM reset
+            JOIN pg_catalog.pg_class AS c ON c.oid = reset.r
+            JOIN pg_catalog.pg_namespace AS s ON s.oid = c.relnamespace;
             """;
     }
 

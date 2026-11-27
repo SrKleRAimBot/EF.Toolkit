@@ -596,7 +596,9 @@ public static class DatabaseResetExtensions
                     + "role with BYPASSRLS, or drop the trigger.");
             }
 
-            tables.Add(table);
+            // Counted by the schema and name the table resolved to now, before anything runs: a trigger
+            // can change search_path, and an unqualified count would then read another schema's table.
+            tables.Add(new ResetTable(row[3], row[4]));
         }
 
         return tables;
