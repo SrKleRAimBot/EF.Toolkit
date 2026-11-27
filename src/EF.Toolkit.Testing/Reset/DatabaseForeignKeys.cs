@@ -236,6 +236,31 @@ internal static class DatabaseForeignKeys
     ///     login's default schema first, then <c>dbo</c> — so the foreign-key check and the statements
     ///     that follow are guaranteed to be about the same table.
     /// </remarks>
+    /// <summary>
+    ///     SQL Server: the pairs of a kept table and a reset one that <c>OBJECT_ID</c> resolves to the same
+    ///     object — rows of (kept name, reset name), none when nothing is kept.
+    /// </summary>
+    internal static string SqlServerKeptAndReset(ResetPlan plan)
+    {
+        static string Names(IEnumerable<ResetTable> tables)
+            => string.Join(", ", tables.Select(t =>
+            {
+                var quoted = (t.Schema is null ? "" : "[" + t.Schema.Replace("]", "]]", StringComparison.Ordinal) + "].")
+                    + "[" + t.Name.Replace("]", "]]", StringComparison.Ordinal) + "]";
+                return "(N'" + quoted.Replace("'", "''", StringComparison.Ordinal) + "')";
+            }));
+
+        if (plan.Retained.Count == 0)
+        {
+            return "SELECT N'' AS n, N'' AS r, 0 AS o WHERE 1 = 0;";
+        }
+
+        return "SELECT k.n, r.n, 0 "
+            + $"FROM (VALUES {Names(plan.Retained)}) AS k(n) "
+            + $"JOIN (VALUES {Names(plan.Tables)}) AS r(n) ON OBJECT_ID(k.n) = OBJECT_ID(r.n) "
+            + "WHERE OBJECT_ID(k.n) IS NOT NULL;";
+    }
+
     internal static string ResolveSchemas(ResetPlan plan)
     {
         var unqualified = plan.Tables.Where(t => t.Schema is null).Select(t => t.Name).Distinct().ToList();

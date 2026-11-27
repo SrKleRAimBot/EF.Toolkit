@@ -179,10 +179,7 @@ internal sealed class ResetPlan
         // under one mapping's name, reset under another's that the database resolves to the same table.
         if (rows.FirstOrDefault(r => r.Table == r.ReferencedTable) is { } both)
         {
-            throw new InvalidOperationException(
-                $"Cannot reset '{both.Table}': it was excluded, but another mapping names the same table "
-                + "differently — with its schema written out, say, where the excluded one leaves it to the "
-                + "search_path — and would empty it. Exclude that mapping as well, or map both the same way.");
+            throw KeptAndReset(both.Table);
         }
 
         if (rows.FirstOrDefault() is { } descendant)
@@ -194,6 +191,53 @@ internal sealed class ResetPlan
                 + "the table, stop excluding it, or exclude its parent as well.");
         }
     }
+
+    /// <summary>
+    ///     SQL Server: refuses when a kept table is also a reset one, from rows of
+    ///     <see cref="DatabaseForeignKeys.SqlServerKeptAndReset" /> — the pairs whose names
+    ///     <c>OBJECT_ID</c> resolves to one object.
+    /// </summary>
+    internal static void RefuseKeptAndReset(IEnumerable<DatabaseReference> overlaps)
+    {
+        if (overlaps.FirstOrDefault() is { } overlap)
+        {
+            throw KeptAndReset(overlap.Table);
+        }
+    }
+
+    /// <summary>
+    ///     SQLite: refuses when a kept table is also a reset one. SQLite resolves a name without a schema
+    ///     in <c>main</c> and compares identifiers ignoring the case of ASCII letters, so <c>Settings</c>
+    ///     and <c>main.settings</c> are one table — compared here the same way, with no query needed.
+    /// </summary>
+    internal void RefuseSqliteKeptAndReset()
+    {
+        static string Identity(ResetTable table) => SqliteFold(table.Schema ?? "main") + "." + SqliteFold(table.Name);
+
+        var reset = Tables.Select(Identity).ToHashSet(StringComparer.Ordinal);
+        if (Retained.FirstOrDefault(t => reset.Contains(Identity(t))) is { } kept)
+        {
+            throw KeptAndReset(kept.Schema is null ? kept.Name : kept.Schema + "." + kept.Name);
+        }
+    }
+
+    // SQLite folds only A-Z: É and é stay two names.
+    private static string SqliteFold(string identifier)
+        => string.Create(identifier.Length, identifier, static (span, source) =>
+        {
+            for (var i = 0; i < source.Length; i++)
+            {
+                span[i] = source[i] is >= 'A' and <= 'Z' ? (char)(source[i] + 32) : source[i];
+            }
+        });
+
+    // Two mappings that name one table differently are one table to the database: excluded under one,
+    // the reset would still empty it under the other.
+    private static InvalidOperationException KeptAndReset(string table)
+        => new(
+            $"Cannot reset '{table}': it was excluded, but another mapping names the same table differently "
+            + "— with its schema written out where the excluded one leaves it to the default, say, or in "
+            + "another case — and would empty it. Exclude that mapping as well, or map both the same way.");
 
     /// <summary>
     ///     A copy of this plan with every unqualified table given the schema the database resolved it to,

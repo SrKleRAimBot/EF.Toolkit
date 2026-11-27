@@ -246,6 +246,50 @@ public sealed class ResetDataTests
         (await ScalarAsync(context, "SELECT COUNT(*) FROM pragma_foreign_key_check")).ShouldBe(0);
     }
 
+    private sealed class CasedSetting
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class LowerSetting
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    /// <summary>Settings and settings: two tables to the model, one to SQLite.</summary>
+    private sealed class CasedSettingsContext(DbContextOptions<CasedSettingsContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<CasedSetting>().ToTable("Settings");
+            modelBuilder.Entity<LowerSetting>().ToTable("settings");
+        }
+    }
+
+    [Fact]
+    public async Task A_table_kept_under_one_mapping_is_not_emptied_under_another_s_case()
+    {
+        // ExcludeEntity kept Settings, but DELETE FROM "main"."settings" emptied it: SQLite ignores the
+        // case of ASCII letters in names.
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(Ct);
+        await using var context = new CasedSettingsContext(
+            new DbContextOptionsBuilder<CasedSettingsContext>().UseSqlite(connection).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Settings\" (\"Id\" INTEGER PRIMARY KEY, \"Name\" TEXT NOT NULL); INSERT INTO \"Settings\" VALUES (1, 'keep me')",
+            Ct);
+
+        (await Should.ThrowAsync<InvalidOperationException>(
+                () => context.Database.ResetDataAsync(o => o.ExcludeEntity<CasedSetting>(), Ct)))
+            .Message.ShouldContain("Settings");
+
+        await using var count = connection.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM \"Settings\"";
+        ((long)(await count.ExecuteScalarAsync(Ct))!).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_trigger_writing_an_orphan_into_a_table_outside_the_reset_rolls_it_back()
     {

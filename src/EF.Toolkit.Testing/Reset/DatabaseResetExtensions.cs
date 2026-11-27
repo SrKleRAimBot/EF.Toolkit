@@ -51,9 +51,17 @@ public static class DatabaseResetExtensions
                 var transaction = database.CurrentTransaction?.GetDbTransaction();
                 if (engine == DatabaseEngine.SqlServer)
                 {
+                    ResetPlan.RefuseKeptAndReset(
+                        await ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.SqlServerKeptAndReset(plan), cancellationToken)
+                            .ConfigureAwait(false));
                     plan = plan.WithResolvedSchemas(
                         await ReadReferencesAsync(connection, transaction, DatabaseForeignKeys.ResolveSchemas(plan), cancellationToken)
                             .ConfigureAwait(false));
+                }
+
+                if (engine == DatabaseEngine.Sqlite)
+                {
+                    plan.RefuseSqliteKeptAndReset();
                 }
 
                 var state = await ReadStateAsync(database, engine, connection, transaction, options, cancellationToken)
@@ -167,8 +175,15 @@ public static class DatabaseResetExtensions
                 var transaction = database.CurrentTransaction?.GetDbTransaction();
                 if (engine == DatabaseEngine.SqlServer)
                 {
+                    ResetPlan.RefuseKeptAndReset(
+                        ReadReferences(connection, transaction, DatabaseForeignKeys.SqlServerKeptAndReset(plan)));
                     plan = plan.WithResolvedSchemas(
                         ReadReferences(connection, transaction, DatabaseForeignKeys.ResolveSchemas(plan)));
+                }
+
+                if (engine == DatabaseEngine.Sqlite)
+                {
+                    plan.RefuseSqliteKeptAndReset();
                 }
 
                 var state = ReadState(database, engine, connection, transaction, options);

@@ -959,6 +959,53 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
             });
     }
 
+    private sealed class LocalSetting
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class DboSetting
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    /// <summary>Two mappings of one table: one leaves the schema to the default, one writes dbo out.</summary>
+    private sealed class SettingsContext(DbContextOptions<SettingsContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<LocalSetting>().ToTable("Settings");
+            modelBuilder.Entity<DboSetting>().ToTable("Settings", "dbo");
+        }
+    }
+
+    [Fact]
+    public async Task A_table_kept_under_one_mapping_is_not_emptied_under_another()
+    {
+        // ExcludeEntity kept Settings, but the mapping naming dbo.Settings was still deleted from: by the
+        // model's names they were two tables, to SQL Server one.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new SettingsContext(
+            new DbContextOptionsBuilder<SettingsContext>().UseSqlServer(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE dbo.Settings (Id int PRIMARY KEY, Name nvarchar(50) NOT NULL); INSERT INTO dbo.Settings VALUES (1, N'keep me')",
+            Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => context.Database.ResetDataAsync(o => o.ExcludeEntity<LocalSetting>(), Ct)))
+                .Message.ShouldContain("Settings");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM dbo.Settings")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS dbo.Settings", Ct);
+        }
+    }
+
     [Fact]
     public async Task Generated_DateTimes_in_a_date_column_are_distinct_days()
     {
