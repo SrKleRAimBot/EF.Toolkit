@@ -276,7 +276,12 @@ public static class SqlMigrationBuilderExtensions
         var dialect = SqlDialectDetector.FromProviderName(migrationBuilder.ActiveProvider);
         foreach (var statement in render(dialect))
         {
-            migrationBuilder.Sql(dialect == SqlDialect.SqlServer ? SqlServerBatch(statement) : statement);
+            // Terminated: a migration applied directly runs each operation on its own, but a script
+            // (dotnet ef migrations script) runs them one after another, and EF adds no terminator to
+            // raw SQL — DROP VIEW followed by CREATE VIEW with nothing between is one broken statement.
+            // On a line of its own, so a trailing -- comment cannot swallow it.
+            var sql = dialect == SqlDialect.SqlServer ? SqlServerBatch(statement) : statement;
+            migrationBuilder.Sql(sql + "\n;");
         }
 
         return migrationBuilder;

@@ -3,6 +3,8 @@ using EFToolkit.Sql.Security;
 using EFToolkit.Sql.Sessions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace EFToolkit.Sql.Tests;
 
@@ -194,6 +196,28 @@ public sealed class SqliteRuntimeTests : IAsyncLifetime
         (await _context.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS \"Value\" FROM \"main\".\"ActiveCustomers\"")
             .SingleAsync(TestContext.Current.CancellationToken)).ShouldBe(2);
         await _context.Database.ExecuteSqlRawAsync("DROP VIEW \"temp\".\"ActiveCustomers\"", TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_migration_script_runs_its_view_statements_one_after_another()
+    {
+        // `migrations script` puts the operations one after another, and EF adds no terminator to raw
+        // SQL: DROP VIEW directly followed by CREATE VIEW was one statement SQLite refused near CREATE.
+        var builder = new Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder("Microsoft.EntityFrameworkCore.Sqlite");
+        builder.CreateView(ActiveCustomers);
+        builder.CreateView(ActiveCustomers);
+
+        var commands = _context.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrationsSqlGenerator>()
+            .Generate(builder.Operations, null, Microsoft.EntityFrameworkCore.Migrations.MigrationsSqlGenerationOptions.Script);
+        var script = string.Concat(commands.Select(c => c.CommandText));
+
+        await using (var command = _connection.CreateCommand())
+        {
+            command.CommandText = script;
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+
+        (await _context.ActiveCustomers.CountAsync(TestContext.Current.CancellationToken)).ShouldBe(2);
     }
 
     [Fact]

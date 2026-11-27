@@ -16,7 +16,9 @@ public sealed class MigrationBuilderExtensionsTests
     {
         builder.Operations.ShouldAllBe(o => o is SqlOperation);
         builder.Operations.Cast<SqlOperation>().ShouldAllBe(o => !o.SuppressTransaction);
-        return builder.Operations.Cast<SqlOperation>().Select(o => Unwrap(builder, o.Sql)).ToList();
+        // Every operation ends with a terminator on a line of its own, for scripts; the rest is compared.
+        builder.Operations.Cast<SqlOperation>().ShouldAllBe(o => o.Sql.EndsWith("\n;", StringComparison.Ordinal));
+        return builder.Operations.Cast<SqlOperation>().Select(o => Unwrap(builder, o.Sql[..^2])).ToList();
     }
 
     // SQL Server statements arrive wrapped in EXEC(N'...') for idempotent scripts; the assertions
@@ -42,7 +44,7 @@ public sealed class MigrationBuilderExtensionsTests
         builder.CreateView(new ViewDefinition("v", "SELECT N'it''s' AS x"));
 
         var sql = ((SqlOperation)builder.Operations.Single()).Sql;
-        sql.ShouldBe("EXEC(N'CREATE OR ALTER VIEW [v] AS\nSELECT N''it''''s'' AS x')");
+        sql.ShouldBe("EXEC(N'CREATE OR ALTER VIEW [v] AS\nSELECT N''it''''s'' AS x')\n;");
     }
 
     [Fact]

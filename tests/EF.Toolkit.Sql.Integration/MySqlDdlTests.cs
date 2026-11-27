@@ -44,6 +44,38 @@ public sealed class MySqlDdlTests(MySqlFixture fixture)
     }
 
     [Fact]
+    public async Task A_migration_s_terminated_procedure_statements_run_one_by_one_as_Migrate_runs_them()
+    {
+        // Each operation ends in a terminator on its own line, for scripts; applied one by one, as
+        // Migrate() applies them, MySQL must still take a procedure whose body ends in END followed by it.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        var builder = new Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder("Pomelo.EntityFrameworkCore.MySql");
+        Microsoft.EntityFrameworkCore.Migrations.SqlMigrationBuilderExtensions.CreateStoredProcedure(
+            builder,
+            new StoredProcedureDefinition("migrated_p", [new SqlParameterDefinition("a", "INT")], "BEGIN SELECT a + 1 AS Value; END"));
+
+        await using var context = fixture.CreateContext();
+        var connection = context.Database.GetDbConnection();
+        await context.Database.OpenConnectionAsync(Token);
+        try
+        {
+            foreach (var operation in builder.Operations.Cast<Microsoft.EntityFrameworkCore.Migrations.Operations.SqlOperation>())
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = operation.Sql;
+                await command.ExecuteNonQueryAsync(Token);
+            }
+
+            (await context.Database.SqlQueryRaw<long>("CALL migrated_p(41)").ToListAsync(Token)).ShouldBe([42]);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP PROCEDURE IF EXISTS migrated_p", Token);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task Inside_a_transaction_creating_objects_is_refused_before_any_DDL_so_earlier_work_can_still_roll_back()
     {
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
