@@ -767,6 +767,58 @@ public sealed class TestDataTests
         (await fresh.Set<Ledger>().CountAsync(Ct)).ShouldBe(1);
     }
 
+    public sealed class Payer
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    public sealed class Charge
+    {
+        private int _payerId = -7;
+
+        public int Id { get; set; }
+
+        /// <summary>EF reads and writes the field; the getter shows something else.</summary>
+        public int PayerId
+        {
+            get => Math.Abs(_payerId);
+            set => _payerId = value;
+        }
+
+        public Payer Payer { get; set; } = null!;
+    }
+
+    public sealed class ChargeContext(DbContextOptions<ChargeContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Charge>(b =>
+            {
+                b.Property(c => c.PayerId).HasField("_payerId").UsePropertyAccessMode(PropertyAccessMode.Field);
+                b.HasOne(c => c.Payer).WithMany().HasForeignKey(c => c.PayerId).IsRequired();
+            });
+    }
+
+    [Fact]
+    public async Task A_foreign_key_mapped_to_its_field_is_read_the_way_EF_reads_it()
+    {
+        // The getter read 7 before the callback and after it, so the key looked untouched: the generated
+        // payer stayed, and EF saved its key over the 7 the test chose.
+        await using var db = await SqliteTestDatabase<ChargeContext>.CreateAsync(cancellationToken: Ct);
+        await using (var arrange = db.CreateContext())
+        {
+            arrange.Add(new Payer { Id = 7, Name = "seven" });
+            await arrange.SaveChangesAsync(Ct);
+        }
+
+        await using var context = db.CreateContext();
+        await context.CreateAsync<Charge>(c => c.PayerId = 7, cancellationToken: Ct);
+
+        await using var fresh = db.CreateContext();
+        (await fresh.Set<Charge>().SingleAsync(Ct)).PayerId.ShouldBe(7);
+        (await fresh.Set<Payer>().CountAsync(Ct)).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {

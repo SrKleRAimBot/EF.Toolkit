@@ -651,22 +651,43 @@ public sealed class TestData
     private static bool CanSet(IPropertyBase property)
         => property.PropertyInfo?.SetMethod is not null || property.FieldInfo is not null;
 
+    // Through the member EF itself uses outside materialization, so a property mapped with
+    // PropertyAccessMode.Field is read and written where EF reads and writes it, whatever its getter shows.
     private static void SetValue(object instance, IPropertyBase property, object? value)
     {
-        if (property.PropertyInfo is { SetMethod: not null } propertyInfo)
+        switch (Member(property, forSet: true))
         {
-            propertyInfo.SetValue(instance, value);
-        }
-        else
-        {
-            property.FieldInfo!.SetValue(instance, value);
+            case PropertyInfo propertyInfo:
+                propertyInfo.SetValue(instance, value);
+                break;
+            case FieldInfo fieldInfo:
+                fieldInfo.SetValue(instance, value);
+                break;
         }
     }
 
     private static object? GetValue(object instance, IPropertyBase property)
-        => property.PropertyInfo is { GetMethod: not null } propertyInfo
-            ? propertyInfo.GetValue(instance)
-            : property.FieldInfo?.GetValue(instance);
+        => Member(property, forSet: false) switch
+        {
+            PropertyInfo propertyInfo => propertyInfo.GetValue(instance),
+            FieldInfo fieldInfo => fieldInfo.GetValue(instance),
+            _ => null,
+        };
+
+    private static MemberInfo? Member(IPropertyBase property, bool forSet)
+    {
+        try
+        {
+            return property.GetMemberInfo(forMaterialization: false, forSet: forSet);
+        }
+        catch (InvalidOperationException)
+        {
+            // No member for that access in this mode: fall back to whichever one there is.
+            return forSet
+                ? property.PropertyInfo is { SetMethod: not null } ? property.PropertyInfo : property.FieldInfo
+                : property.PropertyInfo is { GetMethod: not null } ? property.PropertyInfo : property.FieldInfo;
+        }
+    }
 
     private static object? DefaultOf(Type type)
         => type.IsValueType && Nullable.GetUnderlyingType(type) is null ? Activator.CreateInstance(type) : null;
