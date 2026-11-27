@@ -43,8 +43,13 @@ public sealed class TestData
 
     // A column with only so many values gets them in turn from a count of its own: the shared counter
     // moves once per generated value, so with three on a row a decimal(2,2) came round to a repeat after
-    // 34 rows of its 100. Keyed by hierarchy and column, so siblings sharing a TPH column share a count.
-    private readonly Dictionary<(IReadOnlyTypeBase Root, string Column), long> _boundedCounters = [];
+    // 34 rows of its 100. Keyed by the table and column the value lands in — TPH siblings sharing a
+    // column share its count, TPT and TPC tables each keep their own — or, for a primary key, which has
+    // to be unique across a TPC hierarchy's tables, and a column outside any table, by the hierarchy.
+    private readonly Dictionary<(object Scope, string Column), long> _boundedCounters = [];
+
+    // The entity whose own properties are being filled, for the table a base property lands in.
+    private IEntityType? _filling;
 
     /// <summary>Creates a builder.</summary>
     /// <param name="seed">Seeds the values. The same seed and the same calls build the same values.</param>
@@ -182,19 +187,28 @@ public sealed class TestData
         var instance = Instantiate(entityType.ClrType);
         var discriminator = entityType.FindDiscriminatorProperty();
 
-        foreach (var property in entityType.GetProperties())
+        var outer = _filling;
+        _filling = entityType;
+        try
         {
-            if (property == discriminator
-                || property.IsForeignKey()
-                || property.ValueGenerated != ValueGenerated.Never)
+            foreach (var property in entityType.GetProperties())
             {
-                continue;
+                if (property == discriminator
+                    || property.IsForeignKey()
+                    || property.ValueGenerated != ValueGenerated.Never)
+                {
+                    continue;
+                }
+
+                FillProperty(instance, property, fillOptional);
             }
 
-            FillProperty(instance, property, fillOptional);
+            FillComplexProperties(instance, entityType, fillOptional);
         }
-
-        FillComplexProperties(instance, entityType, fillOptional);
+        finally
+        {
+            _filling = outer;
+        }
 
         if (depth < MaxDepth)
         {
@@ -407,8 +421,12 @@ public sealed class TestData
             return n;
         }
 
-        IReadOnlyTypeBase root = property.DeclaringType.ContainingEntityType.GetRootType();
-        var key = (root, property.GetColumnName());
+        var column = property.IsPrimaryKey()
+            ? null
+            : _filling?.GetTableMappings().SelectMany(m => m.ColumnMappings).FirstOrDefault(c => c.Property == property)?.Column;
+        var key = column is not null
+            ? ((object)column.Table.SchemaQualifiedName, column.Name)
+            : (property.DeclaringType.ContainingEntityType.GetRootType(), property.GetColumnName());
         var next = _boundedCounters.GetValueOrDefault(key) + 1;
         _boundedCounters[key] = next;
         return next;

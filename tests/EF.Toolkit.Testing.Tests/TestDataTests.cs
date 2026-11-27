@@ -450,6 +450,85 @@ public sealed class TestDataTests
         discounts.Select(d => d.Level).Distinct().Count().ShouldBe(100);
     }
 
+    public abstract class Voucher
+    {
+        public Guid Id { get; set; }
+    }
+
+    public sealed class Gift : Voucher
+    {
+        public decimal Rate { get; set; }
+    }
+
+    public sealed class Refund : Voucher
+    {
+        public decimal Rate { get; set; }
+    }
+
+    /// <summary>Gift and Refund each declare a Rate of their own, in tables of their own.</summary>
+    public sealed class VoucherTptContext(DbContextOptions<VoucherTptContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<Voucher>().UseTptMappingStrategy();
+            modelBuilder.Entity<Gift>(b => { b.Property(g => g.Rate).HasPrecision(2, 2); b.HasIndex(g => g.Rate).IsUnique(); });
+            modelBuilder.Entity<Refund>(b => { b.Property(r => r.Rate).HasPrecision(2, 2); b.HasIndex(r => r.Rate).IsUnique(); });
+        }
+    }
+
+    public abstract class Coupon
+    {
+        public Guid Id { get; set; }
+        public decimal Rate { get; set; }
+    }
+
+    public sealed class Promo : Coupon;
+
+    public sealed class Rebate : Coupon;
+
+    /// <summary>One Rate, declared on the base, in a column of each concrete table.</summary>
+    public sealed class CouponTpcContext(DbContextOptions<CouponTpcContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Coupon>(b =>
+            {
+                b.UseTpcMappingStrategy();
+                b.Property(c => c.Rate).HasPrecision(2, 2);
+                b.HasIndex(c => c.Rate).IsUnique();
+                modelBuilder.Entity<Promo>();
+                modelBuilder.Entity<Rebate>();
+            });
+    }
+
+    [Fact]
+    public async Task Sibling_tables_of_a_TPT_hierarchy_count_their_bounded_columns_apart()
+    {
+        // Both Rate columns shared one count, keyed by hierarchy and column name: a gift, 99 refunds and
+        // another gift gave both gifts 0.01, in a table holding just the two.
+        await using var db = await SqliteTestDatabase<VoucherTptContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+
+        await context.CreateAsync<Gift>(cancellationToken: Ct);
+        await context.CreateManyAsync<Refund>(99, cancellationToken: Ct);
+        await context.CreateAsync<Gift>(cancellationToken: Ct);
+
+        (await context.Set<Gift>().Select(g => g.Rate).Distinct().CountAsync(Ct)).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Concrete_tables_of_a_TPC_hierarchy_count_a_bounded_base_column_apart()
+    {
+        // Rate is declared once, on the base, but each concrete table has a column and an index of its own.
+        await using var db = await SqliteTestDatabase<CouponTpcContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+
+        await context.CreateAsync<Promo>(cancellationToken: Ct);
+        await context.CreateManyAsync<Rebate>(99, cancellationToken: Ct);
+        await context.CreateAsync<Promo>(cancellationToken: Ct);
+
+        (await context.Set<Promo>().Select(p => p.Rate).Distinct().CountAsync(Ct)).ShouldBe(2);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {

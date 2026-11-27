@@ -276,11 +276,12 @@ var many = await context.CreateManyAsync<Customer>(50, (c, i) => c.Name = $"Cust
 ```
 
 `Build` reads the model and fills every **required** property with a value that is valid for its
-column and **unique** — one counter runs across every value produced, so two entities never share a
-generated string or number and a unique index is never tripped by accident. A column with only so many
-values repeats past them: a `decimal(2,2)` holds 100, a `bool` two. Such a column — a bounded
-`decimal`, `byte`, `sbyte`, `short`, `ushort` — counts on its own, so it gets every one of its values
-before the first comes round again, however many others the entity has.
+column and **unique** within it, so a unique index is never tripped by accident. One counter runs
+across strings, `int`s, `long`s, dates and the rest, so two entities never share one of those. A column
+with only so many values — a `decimal` with a precision, `byte`, `sbyte`, `short`, `ushort` — counts on
+its own instead, per table and column: it gets every one of its values before the first comes round
+again, however many other values the entity has, and the same value can turn up in another column. Past
+them it repeats: a `decimal(2,2)` holds 100, a `bool` two.
 
 | Type | Value |
 | --- | --- |
