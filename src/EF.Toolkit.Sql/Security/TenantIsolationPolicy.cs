@@ -76,6 +76,14 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantColumn);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(columnStoreType);
+
+        // The type is read to decide which comparisons make the cast lossless; a comment inside it
+        // ("pg_catalog /* … */ . interval") would hide what the database will actually cast to.
+        if (columnStoreType.Contains("--", StringComparison.Ordinal) || columnStoreType.Contains("/*", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("The column store type cannot contain a SQL comment.", nameof(columnStoreType));
+        }
+
         if (policyName is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(policyName);
@@ -173,14 +181,16 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         SessionContextSql.ValidateKey(SqlDialect.PostgreSql, SessionKey);
         RequireDistinctPostgreSqlNames();
 
-        // An interval's input takes fractions of any unit — '0.4 microseconds' — and rounds them away to
-        // the microsecond, so no check on the text can make the cast lossless. A tenant key that is a
-        // duration is not worth that hole: it is refused.
-        if (PostgreSqlTypeName(ColumnStoreType).StartsWith("interval", StringComparison.Ordinal))
+        // Two kinds of type cannot be cast losslessly from text, so they are refused as keys. An interval's
+        // input takes fractions of any unit — '0.4 microseconds' — and rounds them away to the microsecond;
+        // a floating-point type rounds to its nearest value — 16777217 as real is 16777216. No check on
+        // the text can stop a session value from landing on a tenant it does not name.
+        var typeName = PostgreSqlTypeName(ColumnStoreType);
+        if (UnkeyableName().IsMatch(typeName))
         {
             throw new ArgumentException(
-                "An interval cannot be a PostgreSQL tenant key: its input rounds fractions of any unit away, "
-                + "so a session value could match a tenant it does not name. Use a timestamp, an integer or text.",
+                $"'{ColumnStoreType}' cannot be a PostgreSQL tenant key: a cast to it rounds, so a session value "
+                + "could match a tenant it does not name. Use an integer, numeric, text, uuid or timestamp key.",
                 "columnStoreType");
         }
 
@@ -210,6 +220,14 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         if (IsPostgreSqlTemporal(ColumnStoreType))
         {
             condition += $" AND {setting} !~ {SubMicrosecondPattern}";
+        }
+
+        // A date drops the time of day: the timestamp UseSessionContext writes for a DateTime at 12:34
+        // would match that day's tenant. Compared as values, the date must be the same instant as the
+        // setting read as a timestamp — a date alone, or one at midnight, as .NET writes it.
+        if (typeName == "date")
+        {
+            condition += $" AND {tenant} = CAST({setting} AS pg_catalog.timestamp)";
         }
 
         // Restrictive: PostgreSQL ORs permissive policies together, so a permissive tenant check
@@ -412,8 +430,12 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
     [GeneratedRegex(@"(""(?:[^""]|"""")*"")|\s*\.\s*", RegexOptions.CultureInvariant)]
     private static partial Regex DotOrQuoted();
 
-    [GeneratedRegex(@"^(timestamp|timestamptz|time|timetz|interval)\b", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^(timestamp|timestamptz|time|timetz|interval)\b(?!_)", RegexOptions.CultureInvariant)]
     private static partial Regex TemporalName();
+
+    // Whole names: interval_id or a type called "realm" is someone's own type, not these.
+    [GeneratedRegex(@"^(interval\b(?!_)|(real|float|float4|float8|double precision)(\[\])?$)", RegexOptions.CultureInvariant)]
+    private static partial Regex UnkeyableName();
 
     [GeneratedRegex(@"\s*\(\s*-?\d+\s*(,\s*-?\d+\s*)?\)", RegexOptions.CultureInvariant)]
     private static partial Regex TypeModifier();

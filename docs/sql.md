@@ -270,8 +270,11 @@ USING ("TenantId" = CAST(s AS varchar(8)) AND CAST(s AS varchar(8)) = CAST(s AS 
 
 Values are compared, not their text, so `12.5` matches a `numeric(10,2)` tenant stored as `12.50`, and
 the ISO 8601 timestamp `UseSessionContext` writes for a `DateTime` matches the `timestamp(0)` PostgreSQL
-prints with a space; `12:30:00.4` against that column matches nothing. A type with no modifier
-(`integer`, `uuid`, `text`) loses nothing on the cast and gets no second comparison. A bare `character`
+prints with a space; `12:30:00.4` against that column matches nothing. Most types with no modifier
+(`integer`, `uuid`, `text`) lose nothing on the cast and get no second comparison. A `date` does: it
+drops the time of day, so a `date` tenant also requires the setting, read as a timestamp, to be that
+date's midnight — a `DateOnly`, a date string or a `DateTime` at 00:00 matches, 12:34 that day does
+not. A bare `character`
 or `bit` is the exception: without a length it means length 1, so it is compared like `character(1)`;
 likewise `name`, which keeps only its first 63 bytes. And PostgreSQL keeps a `timestamp` or `time`
 only to the microsecond, rounding finer digits away even without a modifier, so a session value with a
@@ -279,7 +282,9 @@ nonzero digit past the sixth (`12:30:00.0000004`) matches nothing; the seven dig
 `DateTime` still match when the last is `0`. A `DateTime` with ticks finer than a microsecond is a
 different instant from any stored one, and reaches no rows. An `interval` tenant column is refused
 outright: its input takes fractions of any unit (`0.4 microseconds`) and rounds them away, so no check
-on the session value could keep the cast lossless.
+on the session value could keep the cast lossless. So is a floating-point one (`real`, `double
+precision`, `float`), which rounds to its nearest value — `16777217` as `real` is `16777216`. A column
+type containing a SQL comment is refused on every engine, since it could hide what the cast is to.
 
 On SQL Server a string holding a GUID followed by anything converts to that GUID, and its string
 equality ignores trailing spaces. There the converted value must either equal the session value as a

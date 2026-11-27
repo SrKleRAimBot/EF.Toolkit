@@ -392,6 +392,39 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_date_tenant_matches_a_date_or_its_midnight_but_not_a_later_time_of_day()
+    {
+        // date drops the time of day: the timestamp the setter writes for 12:34 on that day matched it.
+        var days = new TenantIsolationPolicy("Days", "Tenant", "app.tenant_day", "date", policyName: "days_iso");
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Days\" (\"Id\" int PRIMARY KEY, \"Tenant\" date NOT NULL); "
+                + "INSERT INTO \"Days\" VALUES (1, '2026-11-27'); "
+                + $"ALTER TABLE \"Days\" OWNER TO {PostgreSqlFixture.AppUser};",
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(days);
+
+            async Task<List<int>> IdsAs(object at)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set("app.tenant_day", () => at))
+                    .Options);
+                return await context.Database.SqlQueryRaw<int>("SELECT \"Id\" AS \"Value\" FROM \"Days\"").ToListAsync(Token);
+            }
+
+            (await IdsAs("2026-11-27")).ShouldBe([1]);
+            (await IdsAs(new DateTime(2026, 11, 27))).ShouldBe([1]);
+            (await IdsAs(new DateTime(2026, 11, 27, 12, 34, 56))).ShouldBeEmpty();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Days\"", Token);
+        }
+    }
+
+    [Fact]
     public async Task A_bare_character_tenant_is_one_character_long_and_a_longer_session_value_reaches_nothing()
     {
         // character with no length is character(1): 'acme' casts to 'a'.

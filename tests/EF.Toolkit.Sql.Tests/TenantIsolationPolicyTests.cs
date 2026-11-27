@@ -181,7 +181,8 @@ public sealed class TenantIsolationPolicyTests
     [Theory]
     [InlineData("integer")]
     [InlineData("uuid")]
-    [InlineData("pg_catalog.date")]
+    [InlineData("pg_catalog.text")]
+    [InlineData("interval_id")]
     public void PostgreSql_needs_no_second_comparison_for_a_type_without_modifiers(string storeType)
         => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3]
             .ShouldContain($"USING (\"TenantId\" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS {storeType}))\n");
@@ -210,13 +211,38 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("interval")]
     [InlineData("interval day to second(3)")]
     [InlineData("pg_catalog . INTERVAL")]
-    public void PostgreSql_refuses_an_interval_tenant(string storeType)
+    [InlineData("real")]
+    [InlineData("float4")]
+    [InlineData("pg_catalog.float8")]
+    [InlineData("double precision")]
+    [InlineData("float(24)")]
+    [InlineData("real[]")]
+    public void PostgreSql_refuses_a_tenant_type_whose_cast_rounds(string storeType)
     {
         // '0.4 microseconds' rounds to the tenant keyed by 0 seconds; no check on the text can prevent it.
         var policy = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType);
 
         Should.Throw<ArgumentException>(() => policy.GetCreateSql(SqlDialect.PostgreSql)).ParamName.ShouldBe("columnStoreType");
     }
+
+    [Theory]
+    [InlineData("realm")]
+    [InlineData("interval_id")]
+    [InlineData("floating")]
+    public void PostgreSql_takes_a_type_whose_name_only_begins_like_a_refused_one(string storeType)
+        => Should.NotThrow(() => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql));
+
+    [Theory]
+    [InlineData("pg_catalog /* type */ . interval")]
+    [InlineData("timestamp -- note")]
+    public void A_column_type_with_a_comment_is_refused(string storeType)
+        => Should.Throw<ArgumentException>(() => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType))
+            .ParamName.ShouldBe("columnStoreType");
+
+    [Fact]
+    public void PostgreSql_requires_a_date_tenant_s_setting_to_be_a_date()
+        => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "date").GetCreateSql(SqlDialect.PostgreSql)[3]
+            .ShouldContain("AND CAST(NULLIF(current_setting('app.tenant_id', true), '') AS date) = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS pg_catalog.timestamp)");
 
     [Fact]
     public void PostgreSql_reads_a_qualified_type_with_spaces_around_its_dot()
