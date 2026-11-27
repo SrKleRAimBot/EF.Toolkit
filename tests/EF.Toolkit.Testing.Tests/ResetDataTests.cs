@@ -344,6 +344,41 @@ public sealed class ResetDataTests
     }
 
     [Fact]
+    public async Task A_trigger_writing_an_orphan_into_an_attached_database_rolls_the_reset_back()
+    {
+        // Both checks read pragma_foreign_key_check() unqualified, which is main alone: an orphan written
+        // into an attached database's table was not seen, and the reset committed it.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.OpenConnectionAsync(Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("ATTACH DATABASE ':memory:' AS aux", Ct);
+            await context.Database.ExecuteSqlRawAsync(
+                "CREATE TABLE aux.\"Actors\" (\"Id\" INTEGER PRIMARY KEY); "
+                    + "CREATE TABLE aux.\"Audit\" (\"Id\" INTEGER PRIMARY KEY, \"ActorId\" INTEGER NOT NULL REFERENCES \"Actors\" (\"Id\"))",
+                Ct);
+            await context.Database.ExecuteSqlRawAsync(
+                "CREATE TEMP TRIGGER \"AuditTags\" AFTER DELETE ON main.\"Tags\" BEGIN INSERT INTO aux.\"Audit\" (\"ActorId\") VALUES (42); END",
+                Ct);
+
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("violate a foreign key");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM aux.\"Audit\"")).ShouldBe(0);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TRIGGER IF EXISTS temp.\"AuditTags\"", Ct);
+            await context.Database.ExecuteSqlRawAsync("DETACH DATABASE aux", Ct);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task A_trigger_writing_an_orphan_into_a_table_outside_the_reset_rolls_it_back()
     {
         // An audit trigger on a reset table writes to an unmapped table whose foreign key points at a

@@ -460,7 +460,14 @@ internal static class ResetSqlGenerator
     // be read in the pragma's place, empty, and every violation would go unseen. With the parentheses
     // such a table cannot be called, and the statement fails instead.
     private static string SqliteViolationSnapshot(string name)
-        => $"CREATE TEMP TABLE \"{name}\" AS SELECT \"table\" AS t, \"rowid\" AS r, \"fkid\" AS f FROM pragma_foreign_key_check();";
+        => $"CREATE TEMP TABLE \"{name}\" AS SELECT c.s, c.t, c.r, c.f FROM {SqliteAllViolations} AS c;";
+
+    // Every schema the connection has — main, temp and each attached database: a trigger on a reset table
+    // can write anywhere, and an unqualified pragma_foreign_key_check() reads main alone. Called as
+    // functions, so that a table of the same name cannot stand in for either.
+    private const string SqliteAllViolations =
+        "(SELECT d.\"name\" AS s, k.\"table\" AS t, k.\"rowid\" AS r, k.\"fkid\" AS f "
+        + "FROM pragma_database_list() AS d, pragma_foreign_key_check(NULL, d.\"name\") AS k)";
 
     // Rows with a rowid are compared one by one. A WITHOUT ROWID table reports no rowid, so its
     // violations cannot be told apart; for those the count per table and foreign key must not grow —
@@ -469,12 +476,12 @@ internal static class ResetSqlGenerator
     {
         var snapshot = $"\"temp\".\"{name}\"";
         return "SELECT "
-            + "(SELECT COUNT(*) FROM pragma_foreign_key_check() AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS ("
-            + $"SELECT 1 FROM {snapshot} AS b WHERE b.t = c.\"table\" AND b.r = c.\"rowid\" AND b.f = c.\"fkid\"))"
+            + $"(SELECT COUNT(*) FROM {SqliteAllViolations} AS c WHERE c.r IS NOT NULL AND NOT EXISTS ("
+            + $"SELECT 1 FROM {snapshot} AS b WHERE b.s = c.s AND b.t = c.t AND b.r = c.r AND b.f = c.f))"
             + " + (SELECT COUNT(*) FROM ("
-            + "SELECT c.\"table\" AS t, c.\"fkid\" AS f, COUNT(*) AS n FROM pragma_foreign_key_check() AS c "
-            + "WHERE c.\"rowid\" IS NULL GROUP BY c.\"table\", c.\"fkid\") AS a "
-            + $"WHERE a.n > (SELECT COUNT(*) FROM {snapshot} AS b WHERE b.t = a.t AND b.f = a.f AND b.r IS NULL));";
+            + $"SELECT c.s, c.t, c.f, COUNT(*) AS n FROM {SqliteAllViolations} AS c "
+            + "WHERE c.r IS NULL GROUP BY c.s, c.t, c.f) AS a "
+            + $"WHERE a.n > (SELECT COUNT(*) FROM {snapshot} AS b WHERE b.s = a.s AND b.t = a.t AND b.f = a.f AND b.r IS NULL));";
     }
 
     // A BEFORE DELETE trigger that calls RAISE(IGNORE) skips the row without an error, so a protected

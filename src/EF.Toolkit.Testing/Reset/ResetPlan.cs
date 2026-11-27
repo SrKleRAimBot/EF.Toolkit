@@ -318,12 +318,13 @@ internal sealed class ResetPlan
         }
     }
 
-    // A table left out of the reset that references one being emptied cannot keep its rows intact. Its
-    // ON DELETE action still runs whatever the enforcement mode — CASCADE deletes them, SET NULL and SET
-    // DEFAULT rewrite them — and otherwise the foreign key either refuses the delete or, where the reset
-    // suspends or defers the checks (SQLite always, the other engines on a foreign-key cycle), leaves
-    // them pointing at rows that no longer exist. None of that is what "exclude this table" asks for,
-    // so the plan refuses it.
+    // A table left out of the reset that references one being emptied cannot keep its rows intact, though
+    // how it loses them depends on the engine and on how the reset holds the checks. Enforced — or merely
+    // deferred, as SQLite's are inside a transaction — the foreign key refuses the delete, or its ON DELETE
+    // action runs: CASCADE deletes the rows, SET NULL and SET DEFAULT rewrite them. Switched off — SQLite's
+    // PRAGMA foreign_keys outside a transaction, MySQL's FOREIGN_KEY_CHECKS and SQL Server's NOCHECK on a
+    // cycle — no action runs and the rows are left pointing at rows that no longer exist. None of that is
+    // what "exclude this table" asks for, so the plan refuses it.
     private static void RefuseRetainedDependents(
         IRelationalModel relational,
         Dictionary<ResetTable, ITable> included)
