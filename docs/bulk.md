@@ -120,7 +120,7 @@ BulkResult result = await context.BulkInsertAsync(orders);
 
 orders[0].Id;                    // populated — keys are always written back
 context.Entry(orders[0]).State;  // Detached — tracking is separate, and opt-in
-result.Inserted;                 // 50000
+var inserted = result.Inserted;  // 50000
 ```
 
 ### Update

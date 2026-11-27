@@ -20,7 +20,7 @@ public static class DbContextTestDataExtensions
     /// <example>
     ///     <code>
     ///     var order = context.Build&lt;Order&gt;(o => o.Total = 0m);
-    ///     order.Customer;   // built too: the reference is required
+    ///     var customer = order.Customer;   // built too: the reference is required
     ///     </code>
     /// </example>
     public static TEntity Build<TEntity>(this DbContext context, Action<TEntity>? customize = null, bool fillOptional = false)

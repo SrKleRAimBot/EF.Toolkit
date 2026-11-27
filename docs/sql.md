@@ -170,7 +170,7 @@ as is — which is how an output parameter comes back:
 ```csharp
 var total = new SqlParameter("@total", SqlDbType.Decimal) { Direction = ParameterDirection.Output };
 await context.Database.ExecuteProcedureAsync("close_month", new { tenant_id = 7, total });
-total.Value;   // set by the procedure
+var value = total.Value;   // set by the procedure
 ```
 
 PostgreSQL matches arguments by name (`CALL p(a => @p0)`), so order does not matter and a procedure's

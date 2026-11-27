@@ -486,7 +486,8 @@ public sealed class TestData
         return next;
     }
 
-    // Up to the year 2999: inside every engine's date range, and still unique for a million values.
+    // From 2000-01-01 to 2998-05-02, inside every engine's date range: dates repeat after 364,635 values,
+    // minutes after that many days' worth.
     private const long MaxDays = 365L * 999;
     private const long MaxMinutes = MaxDays * 24 * 60;
     private const long SecondsPerDay = 24 * 60 * 60;

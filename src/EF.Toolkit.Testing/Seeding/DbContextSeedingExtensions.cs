@@ -26,7 +26,7 @@ public static class DbContextSeedingExtensions
     ///     <code>
     ///     var (alice, order) = (new Customer { Name = "Alice" }, new Order { Total = 10 });
     ///     await context.SeedAsync(alice, order);
-    ///     alice.Id;   // populated
+    ///     var aliceId = alice.Id;   // populated
     ///     </code>
     /// </example>
     public static async Task<IReadOnlyList<object>> SeedAsync(this DbContext context, params object[] entities)
