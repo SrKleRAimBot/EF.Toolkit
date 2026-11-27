@@ -236,6 +236,9 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("money")]
     [InlineData("boolean")]
     [InlineData("jsonb")]
+    [InlineData("pg_catalog._float4")]
+    [InlineData("_date")]
+    [InlineData("_varchar(8)")]
     public void PostgreSql_refuses_a_tenant_type_whose_cast_rounds(string storeType)
     {
         // '0.4 microseconds' rounds to the tenant keyed by 0 seconds; no check on the text can prevent it.
@@ -269,7 +272,20 @@ public sealed class TenantIsolationPolicyTests
     [Fact]
     public void PostgreSql_requires_a_date_tenant_s_setting_to_be_a_date()
         => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "date").GetCreateSql(SqlDialect.PostgreSql)[3]
-            .ShouldContain("AND CAST(NULLIF(current_setting('app.tenant_id', true), '') AS date) = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS pg_catalog.timestamp)");
+            .ShouldContain("THEN CAST(NULLIF(current_setting('app.tenant_id', true), '') AS date) = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS pg_catalog.timestamp) ELSE true END");
+
+    [Theory]
+    [InlineData("date", true)]
+    [InlineData("timestamp(3)", true)]
+    [InlineData("timestamp without time zone", true)]
+    [InlineData("time", true)]
+    [InlineData("timestamptz", false)]
+    [InlineData("timestamp with time zone", false)]
+    [InlineData("timetz", false)]
+    [InlineData("_tenant", false)]
+    public void PostgreSql_refuses_a_zone_on_a_setting_for_a_zone_less_tenant(string storeType, bool guarded)
+        => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3]
+            .Contains("([Zz]|[+-][0-9]|[A-Za-z])'", StringComparison.Ordinal).ShouldBe(guarded);
 
     [Fact]
     public void PostgreSql_reads_a_qualified_type_with_spaces_around_its_dot()

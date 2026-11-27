@@ -188,7 +188,9 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         // no built-in is a type of the developer's own, cast by its own rules (see the docs).
         var typeName = PostgreSqlTypeName(ColumnStoreType, out var isArray);
         // An interval may also carry its fields — interval day to second — which no set of names lists.
+        // pg_catalog also names each built-in array by its element with an underscore: _float4 is real[].
         if (isArray
+            || (typeName.StartsWith('_') && PostgreSqlBuiltInTypes.Contains(typeName[1..]))
             || IntervalWithFields().IsMatch(typeName)
             || (PostgreSqlBuiltInTypes.Contains(typeName) && !PostgreSqlKeyTypes.Contains(typeName)))
         {
@@ -230,9 +232,19 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         // A date drops the time of day: the timestamp UseSessionContext writes for a DateTime at 12:34
         // would match that day's tenant. Compared as values, the date must be the same instant as the
         // setting read as a timestamp — a date alone, or one at midnight, as .NET writes it.
+        // A date alone skips the comparison, in a CASE so PostgreSQL never makes the cast: a date as late
+        // as 300000-01-01 is one, but past the end of timestamp's range.
         if (typeName == "date")
         {
-            condition += $" AND {tenant} = CAST({setting} AS pg_catalog.timestamp)";
+            condition += $" AND CASE WHEN {setting} ~ ':' THEN {tenant} = CAST({setting} AS pg_catalog.timestamp) ELSE true END";
+        }
+
+        // A type without a time zone ignores the one a setting carries: 12:00:00+02:00 is cast to
+        // 12:00:00, and the offset UseSessionContext writes for a DateTimeOffset is dropped. So for these a
+        // time followed by an offset, a Z or a zone name is refused.
+        if (ZonelessTypes.Contains(typeName))
+        {
+            condition += $" AND {setting} !~ {ZoneSuffixPattern}";
         }
 
         // Restrictive: PostgreSQL ORs permissive policies together, so a permissive tenant check
@@ -407,6 +419,14 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
 
         return unbounded ?? (modified ? bare : null);
     }
+
+    private static readonly HashSet<string> ZonelessTypes = new(StringComparer.Ordinal)
+    {
+        "date", "timestamp", "timestamp without time zone", "time", "time without time zone",
+    };
+
+    // A time (hh:mm, seconds and fraction optional) followed by Z, a numeric offset or a zone name.
+    private const string ZoneSuffixPattern = "'[0-9]:[0-9]{2}(:[0-9]{2})?([.][0-9]*)?[[:space:]]*([Zz]|[+-][0-9]|[A-Za-z])'";
 
     // A fraction with a nonzero digit after its sixth: matched by PostgreSQL's ~, so no backslashes.
     private const string SubMicrosecondPattern = "'[.][0-9]{6}[0-9]*[1-9]'";

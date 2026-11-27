@@ -287,8 +287,12 @@ losslessly or checks so that it is: an integer, `numeric`/`decimal`, `text`, `va
 `name`, `bit`, `varbit`, `uuid`, `date`, `timestamp`/`timestamptz` or `time`/`timetz`, with or without
 a modifier. Every other built-in type is refused, because each loses something on the way from text
 in its own way: an `interval` rounds `0.4 microseconds` away, a `real` makes `16777217` `16777216`, a
-`daterange` drops a bound's time of day. So is any array, in `[]` or `ARRAY` form, which casts every
-element that way. A type that is not built in — a domain or a type of your own — is cast by its own
+`daterange` drops a bound's time of day. So is any array, in `[]` or `ARRAY` form or by its catalog
+name (`_float4`), which casts every element that way. A type without a time zone — `date`,
+`timestamp`, `time` — ignores one in the setting, so a setting whose time carries an offset, a `Z` or
+a zone name (the `+02:00` `UseSessionContext` writes for a `DateTimeOffset`) matches nothing there;
+use `timestamptz` for instants with offsets. A date-only setting skips the midnight comparison, so a
+date past the end of `timestamp`'s range is still matched. A type that is not built in — a domain or a type of your own — is cast by its own
 rules, which the policy cannot see into, so a domain over a type that loses data is yours to keep
 lossless. A column type containing a SQL comment is refused on every engine, since it could hide what
 the cast is to.
