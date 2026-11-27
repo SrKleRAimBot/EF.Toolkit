@@ -173,6 +173,17 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         SessionContextSql.ValidateKey(SqlDialect.PostgreSql, SessionKey);
         RequireDistinctPostgreSqlNames();
 
+        // An interval's input takes fractions of any unit — '0.4 microseconds' — and rounds them away to
+        // the microsecond, so no check on the text can make the cast lossless. A tenant key that is a
+        // duration is not worth that hole: it is refused.
+        if (PostgreSqlTypeName(ColumnStoreType).StartsWith("interval", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "An interval cannot be a PostgreSQL tenant key: its input rounds fractions of any unit away, "
+                + "so a session value could match a tenant it does not name. Use a timestamp, an integer or text.",
+                "columnStoreType");
+        }
+
         // NULLIF because a setting that was set and then cleared reads back as '' rather than NULL,
         // and casting '' to integer or uuid is an error on every query against the table.
         var setting = $"NULLIF(current_setting({SqlSyntax.Literal(SqlDialect.PostgreSql, SessionKey)}, true), '')";
@@ -346,7 +357,7 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         var bare = TypeModifier().Replace(storeType, "");
         var modified = bare.Length != storeType.Length;
 
-        bare = Whitespace().Replace(bare.Trim(), " ");
+        bare = TightenDots(Whitespace().Replace(bare.Trim(), " "));
         var schema = bare.StartsWith("pg_catalog.", StringComparison.OrdinalIgnoreCase) ? bare[..11]
             : bare.StartsWith("\"pg_catalog\".", StringComparison.Ordinal) ? bare[..13]
             : "";
@@ -379,14 +390,27 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
 
     /// <summary>Whether the type holds a time of day or an interval, which PostgreSQL keeps to the microsecond.</summary>
     internal static bool IsPostgreSqlTemporal(string storeType)
+        => TemporalName().IsMatch(PostgreSqlTypeName(storeType));
+
+    /// <summary>
+    ///     The type's own name without modifier or pg_catalog schema: lower-cased, or as written if quoted.
+    /// </summary>
+    private static string PostgreSqlTypeName(string storeType)
     {
-        var bare = Whitespace().Replace(TypeModifier().Replace(storeType, "").Trim(), " ");
+        var bare = TightenDots(Whitespace().Replace(TypeModifier().Replace(storeType, "").Trim(), " "));
         bare = bare.StartsWith("pg_catalog.", StringComparison.OrdinalIgnoreCase) ? bare[11..]
             : bare.StartsWith("\"pg_catalog\".", StringComparison.Ordinal) ? bare[13..]
             : bare;
-        var name = bare.Length > 2 && bare[0] == '"' && bare[^1] == '"' ? bare[1..^1] : bare.ToLowerInvariant();
-        return TemporalName().IsMatch(name);
+        return bare.Length > 2 && bare[0] == '"' && bare[^1] == '"' ? bare[1..^1] : bare.ToLowerInvariant();
     }
+
+    // PostgreSQL takes "pg_catalog . timestamp" for pg_catalog.timestamp: spaces around a qualifying dot
+    // are not part of either name. Inside a quoted name they are, so quoted parts are kept as written.
+    private static string TightenDots(string type)
+        => DotOrQuoted().Replace(type, m => m.Groups[1].Success ? m.Value : ".");
+
+    [GeneratedRegex(@"(""(?:[^""]|"""")*"")|\s*\.\s*", RegexOptions.CultureInvariant)]
+    private static partial Regex DotOrQuoted();
 
     [GeneratedRegex(@"^(timestamp|timestamptz|time|timetz|interval)\b", RegexOptions.CultureInvariant)]
     private static partial Regex TemporalName();

@@ -357,6 +357,7 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     [Theory]
     [InlineData("timestamp(6)")]
     [InlineData("timestamp")]
+    [InlineData("pg_catalog . timestamp")]
     public async Task A_timestamp_session_value_finer_than_a_microsecond_reaches_nothing(string columnType)
     {
         // PostgreSQL keeps microseconds, and the bare type rounds just as the constrained one does: both

@@ -192,8 +192,9 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("timestamptz", true)]
     [InlineData("time(0)", true)]
     [InlineData("TimeTZ", true)]
-    [InlineData("interval", true)]
     [InlineData("\"pg_catalog\".\"timestamp\"", true)]
+    [InlineData("pg_catalog . timestamp", true)]
+    [InlineData("\"pg_catalog\" . timestamptz(3)", true)]
     [InlineData("date", false)]
     [InlineData("timeline", false)]
     [InlineData("\"Timestamp\"", false)]
@@ -204,6 +205,23 @@ public sealed class TenantIsolationPolicyTests
 
         sql.Contains("!~ '[.][0-9]{6}[0-9]*[1-9]'", StringComparison.Ordinal).ShouldBe(guarded);
     }
+
+    [Theory]
+    [InlineData("interval")]
+    [InlineData("interval day to second(3)")]
+    [InlineData("pg_catalog . INTERVAL")]
+    public void PostgreSql_refuses_an_interval_tenant(string storeType)
+    {
+        // '0.4 microseconds' rounds to the tenant keyed by 0 seconds; no check on the text can prevent it.
+        var policy = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType);
+
+        Should.Throw<ArgumentException>(() => policy.GetCreateSql(SqlDialect.PostgreSql)).ParamName.ShouldBe("columnStoreType");
+    }
+
+    [Fact]
+    public void PostgreSql_reads_a_qualified_type_with_spaces_around_its_dot()
+        => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", "pg_catalog . varchar(8)").GetCreateSql(SqlDialect.PostgreSql)[3]
+            .ShouldContain("= CAST(NULLIF(current_setting('app.tenant_id', true), '') AS pg_catalog.varchar)");
 
     [Theory]
     [InlineData("varchar(10)")]
