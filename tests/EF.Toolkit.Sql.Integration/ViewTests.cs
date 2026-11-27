@@ -191,6 +191,37 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_backslash_in_a_view_name_drops_that_view_whatever_standard_conforming_strings_says()
+    {
+        // With standard_conforming_strings off, '…' reads a backslash as an escape: the DO block's
+        // 'sales\daily' became salesdaily, and that other view was dropped, index and all.
+        await using var context = fixture.CreateAdminContext();
+        await context.Database.OpenConnectionAsync(Token);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "CREATE MATERIALIZED VIEW salesdaily AS SELECT 7 AS total; CREATE INDEX salesdaily_total ON salesdaily (total);",
+                Token);
+            await context.Database.ExecuteSqlRawAsync("SET standard_conforming_strings = off", Token);
+
+            var view = new MaterializedViewDefinition("sales\\daily", "SELECT 1 AS total");
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            await context.Database.CreateDatabaseObjectsAsync(view);
+
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM salesdaily").SingleAsync(Token)).ShouldBe(7);
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM \"sales\\daily\"").SingleAsync(Token)).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "SET standard_conforming_strings = on; DROP MATERIALIZED VIEW IF EXISTS salesdaily; "
+                    + "DROP MATERIALIZED VIEW IF EXISTS \"sales\\daily\"",
+                Token);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task Replacing_an_unqualified_materialized_view_replaces_it()
     {
         // The drop by current_schema() must still find the view the CREATE made last time.

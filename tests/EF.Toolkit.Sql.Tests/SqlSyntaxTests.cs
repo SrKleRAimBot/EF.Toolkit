@@ -39,7 +39,8 @@ public sealed class SqlSyntaxTests
     [InlineData(SqlDialect.Sqlite, "it's", "'it''s'")]
     [InlineData(SqlDialect.SqlServer, "it's", "N'it''s'")]
     [InlineData(SqlDialect.MySql, "it's \\ here", "'it''s \\\\ here'")]
-    [InlineData(SqlDialect.PostgreSql, "back\\slash", "'back\\slash'")]
+    [InlineData(SqlDialect.PostgreSql, "back\\slash", "E'back\\\\slash'")]
+    [InlineData(SqlDialect.PostgreSql, "it's\\", "E'it''s\\\\'")]
     public void String_literals_are_escaped_per_engine(SqlDialect dialect, string value, string expected)
         => SqlSyntax.Literal(dialect, value).ShouldBe(expected);
 

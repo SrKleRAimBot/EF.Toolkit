@@ -57,7 +57,9 @@ internal static partial class SqlSyntax
     ///     MySQL treats a backslash as an escape inside string literals unless
     ///     <c>NO_BACKSLASH_ESCAPES</c> is set, so backslashes are doubled there; under that SQL mode a
     ///     literal containing one would come out doubled, which is why values that matter at runtime
-    ///     are bound as parameters rather than rendered here.
+    ///     are bound as parameters rather than rendered here. PostgreSQL reads a backslash in '…' as an
+    ///     escape too when <c>standard_conforming_strings</c> is off, so a value containing one is written
+    ///     as an escape string, E'…' with the backslash doubled, which reads the same under either setting.
     /// </remarks>
     public static string Literal(SqlDialect dialect, string value)
     {
@@ -66,6 +68,8 @@ internal static partial class SqlSyntax
 
         return dialect switch
         {
+            SqlDialect.PostgreSql when value.Contains('\\', StringComparison.Ordinal)
+                => "E'" + doubled.Replace("\\", "\\\\", StringComparison.Ordinal) + "'",
             SqlDialect.PostgreSql or SqlDialect.Sqlite => "'" + doubled + "'",
             SqlDialect.SqlServer => "N'" + doubled + "'",
             SqlDialect.MySql => "'" + doubled.Replace("\\", "\\\\", StringComparison.Ordinal) + "'",

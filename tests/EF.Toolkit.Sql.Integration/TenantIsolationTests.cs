@@ -192,6 +192,43 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task Dropping_isolation_on_a_backslashed_table_keeps_RLS_on_while_it_has_another_policy()
+    {
+        // With standard_conforming_strings off, the guard's 'orders\archive'::regclass resolved
+        // ordersarchive, which had no policy, so RLS was switched off on orders\archive while a policy
+        // of its own still depended on it.
+        var archive = new TenantIsolationPolicy("orders\\archive", "TenantId", "app.tenant_id", "integer", policyName: "archive_iso");
+
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.OpenConnectionAsync(Token);
+        try
+        {
+            await admin.Database.ExecuteSqlRawAsync(
+                "CREATE TABLE \"orders\\archive\" (\"Id\" int PRIMARY KEY, \"TenantId\" int NOT NULL); "
+                    + "CREATE TABLE ordersarchive (\"Id\" int PRIMARY KEY);",
+                Token);
+            await admin.Database.CreateDatabaseObjectsAsync(archive);
+            await admin.Database.ExecuteSqlRawAsync("CREATE POLICY keep ON \"orders\\archive\" USING (true)", Token);
+            await admin.Database.ExecuteSqlRawAsync("SET standard_conforming_strings = off", Token);
+
+            await admin.Database.DropDatabaseObjectsAsync(archive);
+
+            await admin.Database.ExecuteSqlRawAsync("SET standard_conforming_strings = on", Token);
+            (await admin.Database
+                    .SqlQueryRaw<bool>("SELECT relrowsecurity AS \"Value\" FROM pg_class WHERE relname = 'orders\\archive'")
+                    .SingleAsync(Token))
+                .ShouldBeTrue();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync(
+                "SET standard_conforming_strings = on; DROP TABLE IF EXISTS \"orders\\archive\"; DROP TABLE IF EXISTS ordersarchive",
+                Token);
+            await admin.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task A_replacement_that_fails_leaves_the_original_policy_enforcing()
     {
         // Replacing drops the restrictive policy before recreating it. Committed piecemeal, a failure
