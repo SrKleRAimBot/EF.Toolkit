@@ -18,7 +18,7 @@ public sealed class ViewDefinition : IDatabaseObject
 {
     /// <summary>Initializes a new instance of the <see cref="ViewDefinition" /> class.</summary>
     /// <param name="name">The view name.</param>
-    /// <param name="sql">The view's query, in the target engine's dialect. Trailing semicolons are dropped, even before a trailing comment.</param>
+    /// <param name="sql">The view's query, in the target engine's dialect. Semicolons at its very end are dropped; one followed by a comment is not.</param>
     /// <param name="schema">The schema, or <see langword="null" /> for the default schema.</param>
     public ViewDefinition(string name, string sql, string? schema = null)
     {
@@ -43,7 +43,7 @@ public sealed class ViewDefinition : IDatabaseObject
     public IReadOnlyList<string> GetCreateSql(SqlDialect dialect)
     {
         var target = SqlSyntax.Qualify(dialect, Name, Schema);
-        var query = SqlSyntax.TrimQuery(Sql, dialect);
+        var query = SqlSyntax.TrimQuery(Sql);
 
         return dialect switch
         {

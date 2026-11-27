@@ -24,7 +24,7 @@ public sealed class MaterializedViewDefinition : IDatabaseObject
 
     /// <summary>Initializes a new instance of the <see cref="MaterializedViewDefinition" /> class.</summary>
     /// <param name="name">The materialized view name.</param>
-    /// <param name="sql">The view's query. Trailing semicolons are dropped, even before a trailing comment.</param>
+    /// <param name="sql">The view's query. Semicolons at its very end are dropped; one followed by a comment is not.</param>
     /// <param name="schema">The schema, or <see langword="null" /> for the default schema.</param>
     /// <param name="withNoData">
     ///     Create the view unpopulated (<c>WITH NO DATA</c>), deferring the cost of the query to the
@@ -59,7 +59,7 @@ public sealed class MaterializedViewDefinition : IDatabaseObject
         RequirePostgreSql(dialect);
 
         var target = SqlSyntax.Qualify(dialect, Name, Schema);
-        var create = $"CREATE MATERIALIZED VIEW {target} AS\n{SqlSyntax.TrimQuery(Sql, dialect)}";
+        var create = $"CREATE MATERIALIZED VIEW {target} AS\n{SqlSyntax.TrimQuery(Sql)}";
         if (WithNoData)
         {
             create += "\nWITH NO DATA";

@@ -45,17 +45,16 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_materialized_view_query_ending_in_a_comment_keeps_with_no_data_in_its_statement()
+    public async Task A_semicolon_before_a_trailing_comment_is_refused_by_the_engine_not_guessed_at()
     {
-        // The semicolon before the comment was left in: WITH NO DATA started a statement of its own.
+        // Only a semicolon at the very end is removed. One before a comment stays and ends the CREATE
+        // early, so PostgreSQL refuses it — loudly, where reading past the comment risked taking a
+        // semicolon out of a string literal and changing the view without a word.
         await using var context = fixture.CreateAdminContext();
         var noted = new MaterializedViewDefinition("noted_totals", "SELECT 1 AS id; -- initial query", withNoData: true);
         try
         {
-            await context.Database.CreateDatabaseObjectsAsync(noted);
-
-            var populated = "SELECT relispopulated AS \"Value\" FROM pg_class WHERE relname = 'noted_totals'";
-            (await context.Database.SqlQueryRaw<bool>(populated).SingleAsync(Token)).ShouldBeFalse();
+            await Should.ThrowAsync<PostgresException>(() => context.Database.CreateDatabaseObjectsAsync(noted));
         }
         finally
         {
