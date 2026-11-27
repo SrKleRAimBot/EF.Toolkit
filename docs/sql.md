@@ -304,7 +304,9 @@ fractional digits:
 
 PostgreSQL's input takes far more — compact times (`T123456`), single-digit fields, zone names, clock
 fields past their range that it carries over (`12:34:60` is `12:35:00`, `24:00` the next midnight) —
-and a zone-less cast silently drops the time of day or the zone, so anything else matches nothing. For
+and a zone-less cast silently drops the time of day or the zone, so anything else matches nothing. A
+setting in the right form whose value does not exist — `2026-02-31`, an offset of `+16` — fails closed
+too, but loudly: PostgreSQL raises a cast error, which aborts the query. For
 a zone-less key that includes a local `DateTime`, which `"O"` writes with its offset, and a UTC one
 with its `Z`: use `DateTimeKind.Unspecified`, or `timestamptz` for instants.
 
