@@ -337,7 +337,8 @@ tenant check would be bypassed by any other permissive policy on the table — a
 ones allow, so nothing else on the table can widen a session past its tenant. Restrictive policies
 only ever remove rows, though, and with no permissive policy PostgreSQL grants nothing; the
 `_access` policy is that grant. It makes any other permissive policy on the table redundant within a
-tenant, but other restrictive policies still apply on top.
+tenant, but other restrictive policies still apply on top. Its name, the tenant policy's name with
+`_access` appended, is the toolkit's: don't give a policy of your own that name.
 
 When the table's own permissive policies already decide which rows a role may see — published rows
 only, say — pass `grantAccess: false`. Only the restrictive tenant policy is created, and those
@@ -348,7 +349,9 @@ new TenantIsolationPolicy("Documents", "TenantId", "app.tenant_id", "integer", g
 ```
 
 Applied over an earlier install that had the grant, it also drops that `_access` policy, which would
-otherwise go on granting every row of the tenant.
+otherwise go on granting every row of the tenant — but only once the catalog shows it is that grant
+(permissive, for all commands, to `PUBLIC`, `true` both ways), so a policy of someone else's that
+happens to carry the name is left alone.
 
 PostgreSQL silently truncates identifiers past 63 bytes, which could merge the tenant policy with its
 `_access` counterpart. A name that would be truncated is refused; pass a shorter `policyName`.
