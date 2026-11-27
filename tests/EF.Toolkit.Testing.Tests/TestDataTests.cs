@@ -819,6 +819,39 @@ public sealed class TestDataTests
         (await fresh.Set<Payer>().CountAsync(Ct)).ShouldBe(1);
     }
 
+    public sealed class Bag
+    {
+        private readonly Dictionary<string, object?> _values = [];
+
+        public int Id { get; set; }
+
+        public object? this[string name]
+        {
+            get => _values.GetValueOrDefault(name);
+            set => _values[name] = value;
+        }
+    }
+
+    public sealed class BagContext(DbContextOptions<BagContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Bag>().IndexerProperty<string>("Code").IsRequired();
+    }
+
+    [Fact]
+    public async Task A_required_indexer_property_is_filled_through_the_indexer()
+    {
+        // The indexer was invoked without its index: TargetParameterCountException.
+        await using var db = await SqliteTestDatabase<BagContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+
+        var bag = await context.CreateAsync<Bag>(cancellationToken: Ct);
+
+        bag["Code"].ShouldBeOfType<string>().ShouldNotBeEmpty();
+        await using var fresh = db.CreateContext();
+        (await fresh.Set<Bag>().CountAsync(Ct)).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {

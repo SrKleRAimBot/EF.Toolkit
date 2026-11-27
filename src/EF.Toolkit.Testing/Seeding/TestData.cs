@@ -658,7 +658,7 @@ public sealed class TestData
         switch (Member(property, forSet: true))
         {
             case PropertyInfo propertyInfo:
-                propertyInfo.SetValue(instance, value);
+                propertyInfo.SetValue(instance, value, IndexOf(property));
                 break;
             case FieldInfo fieldInfo:
                 fieldInfo.SetValue(instance, value);
@@ -669,10 +669,14 @@ public sealed class TestData
     private static object? GetValue(object instance, IPropertyBase property)
         => Member(property, forSet: false) switch
         {
-            PropertyInfo propertyInfo => propertyInfo.GetValue(instance),
+            PropertyInfo propertyInfo => propertyInfo.GetValue(instance, IndexOf(property)),
             FieldInfo fieldInfo => fieldInfo.GetValue(instance),
             _ => null,
         };
+
+    // An indexer property is reached through the CLR indexer, with its own name as the index.
+    private static object?[]? IndexOf(IPropertyBase property)
+        => property.IsIndexerProperty() ? [property.Name] : null;
 
     private static MemberInfo? Member(IPropertyBase property, bool forSet)
     {
