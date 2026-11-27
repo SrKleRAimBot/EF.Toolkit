@@ -206,7 +206,10 @@ What each engine is sent:
 
 The deletes run as **one unit**: a transaction, or a savepoint inside yours when one is open. A
 reset that fails part way — a trigger, a lock timeout, a cancellation — rolls back every table it had
-already emptied, so it never leaves some tables empty and others not. MySQL's counter restart is the
+already emptied, so it never leaves some tables empty and others not. Inside your transaction that
+holds for a failure that leaves the transaction open; one the engine answers by rolling back the whole
+transaction — a SQLite trigger's `RAISE(ROLLBACK, …)`, a SQL Server deadlock victim or `XACT_ABORT ON`
+error — ends yours too, with everything you wrote before the reset, and the reset fails. MySQL's counter restart is the
 one step outside the unit, after the commit, since `ALTER TABLE` commits on its own: if it fails, the
 rows are already gone and the error says so. Before the unit closes, every table is checked empty wherever a
 trigger could have kept a row or put one back — an `INSTEAD OF DELETE` soft delete on SQL Server, a

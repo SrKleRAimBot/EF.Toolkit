@@ -392,7 +392,7 @@ internal static class ResetSqlGenerator
     /// <remarks>
     ///     <c>PRAGMA foreign_keys</c> is a no-op inside a transaction, so there the checks are deferred
     ///     instead, letting the deletes run in any order. The reset does not leave them to the commit: before
-    ///     releasing its savepoint it checks the whole database against the snapshot taken at the start, so
+    ///     releasing its savepoint it checks every schema the connection has (main, temp, attached) against the snapshot taken at the start, so
     ///     a new violation — an orphan a <c>DELETE</c> trigger wrote — fails the reset itself and rolls it
     ///     back to the savepoint. Deferral is then restored to what the caller had, so the rest of the
     ///     transaction is checked as before. Counters live in <c>sqlite_sequence</c>, and only for
@@ -402,8 +402,7 @@ internal static class ResetSqlGenerator
     private static ResetScript Sqlite(ResetPlan plan, ResetConnectionState state, string savepoint)
     {
         // Qualified with main, where EF creates every table: unqualified, a temporary table of the same
-        // name would shadow it and be emptied instead — one the foreign-key check, which reads main,
-        // never looked at.
+        // name would shadow it and be emptied instead of the table the plan names.
         // The snapshot of existing violations comes first, inside the unit: the verify step then fails
         // only on violations the reset itself caused, wherever in the database they are.
         // The snapshot's name is new for every reset, so it can never be a table the caller already has —
@@ -452,7 +451,7 @@ internal static class ResetSqlGenerator
     // Turning foreign_keys back on checks nothing already written, and switching defer_foreign_keys off
     // discards what was deferred — so a row a trigger wrote mid-reset pointing at a missing one would
     // otherwise be committed, in a reset table or any other (an audit trigger writing to its own table,
-    // say). The whole database is checked, in one statement however many tables there are, against a
+    // say). Every schema the connection has (main, temp, attached) is checked, in one statement however many tables there are, against a
     // snapshot taken at the start of the unit: violations that were already there are not the reset's
     // to refuse over. The snapshot is a temporary table, created inside the unit, so a rollback removes
     // it; the commit drops it.
