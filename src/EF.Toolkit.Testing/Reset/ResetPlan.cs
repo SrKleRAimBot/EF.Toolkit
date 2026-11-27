@@ -231,17 +231,18 @@ internal sealed class ResetPlan
     /// <param name="ignoreCase">Whether the server compares table names ignoring case.</param>
     internal void RefuseMySqlKeptAndReset(string? database, bool ignoreCase)
     {
-        // Every check before a MySQL reset — foreign keys that would cascade, engines that ignore a
-        // rollback, views — reads the connection's own database. A table mapped into another one would
-        // be deleted from unchecked, so it is refused instead.
+        // A MySQL reset empties the connection's own database: the checks that decide what may be deleted
+        // — the storage engine that would ignore a rollback, views — read that database only, so a table
+        // mapped into another one would be deleted from unchecked. It is refused instead. (Foreign keys are
+        // read across every database the login can see.)
         var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (Tables.FirstOrDefault(t => t.Schema is not null && !string.Equals(t.Schema, database, comparison)) is { } elsewhere)
         {
             throw new InvalidOperationException(
                 $"Cannot reset '{elsewhere.Schema}.{elsewhere.Name}': it is in another database than the "
-                + $"connection's ('{database}'), and the checks a MySQL reset makes before deleting — foreign "
-                + "keys that would cascade, tables that ignore a rollback — read the connection's database "
-                + "only. Exclude it, or reset it through a context connected to that database.");
+                + $"connection's ('{database}'), and the checks a MySQL reset makes before deleting — whether a "
+                + "table ignores a rollback, whether it is a view — read the connection's database only. "
+                + "Exclude it, or reset it through a context connected to that database.");
         }
 
         string Identity(ResetTable table)
@@ -303,11 +304,15 @@ internal sealed class ResetPlan
     {
         if (references.FirstOrDefault() is { } reference)
         {
+            // A dependent in another database cannot be reset with this one, so mapping it is no way out.
+            var remedy = reference.OutsideDatabase
+                ? "It is in another database, which a reset through this connection cannot empty: exclude "
+                    + $"'{reference.ReferencedTable}' from the reset, or remove the foreign key."
+                : "Map the table in the model so the reset empties it too, or remove the foreign key.";
             throw new InvalidOperationException(
                 $"Cannot reset '{reference.ReferencedTable}': '{reference.Table}', which the reset does not "
                 + "empty, references it, and the reset suspends foreign-key checks while it deletes — its "
-                + "rows would be deleted with it or left pointing at rows that no longer exist. Map the "
-                + "table in the model so the reset empties it too, or remove the foreign key.");
+                + "rows would be deleted with it or left pointing at rows that no longer exist. " + remedy);
         }
     }
 
