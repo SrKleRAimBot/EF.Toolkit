@@ -151,7 +151,8 @@ public static class DatabaseResetExtensions
                         async (sql, token) => Convert.ToInt64(
                             await ScalarAsync(connection, transaction, sql, token).ConfigureAwait(false),
                             System.Globalization.CultureInfo.InvariantCulture),
-                        cancellationToken)
+                        cancellationToken,
+                        context.ChangeTracker.Clear)
                     .ConfigureAwait(false);
             }
             finally
@@ -267,7 +268,8 @@ public static class DatabaseResetExtensions
                 ResetRunner.Run(
                     script,
                     sql => Execute(connection, transaction, database, sql),
-                    sql => Convert.ToInt64(Scalar(connection, transaction, sql), System.Globalization.CultureInfo.InvariantCulture));
+                    sql => Convert.ToInt64(Scalar(connection, transaction, sql), System.Globalization.CultureInfo.InvariantCulture),
+                    context.ChangeTracker.Clear);
             }
             finally
             {

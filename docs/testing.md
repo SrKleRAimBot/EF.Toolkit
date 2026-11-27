@@ -211,7 +211,7 @@ holds for a failure that leaves the transaction open; one the engine answers by 
 transaction — a SQLite trigger's `RAISE(ROLLBACK, …)`, a SQL Server deadlock victim or `XACT_ABORT ON`
 error — ends yours too, with everything you wrote before the reset, and the reset fails. MySQL's counter restart is the
 one step outside the unit, after the commit, since `ALTER TABLE` commits on its own: if it fails, the
-rows are already gone and the error says so. Before the unit closes, every table is checked empty wherever a
+rows are already gone, the change tracker is cleared all the same, and the error says so. Before the unit closes, every table is checked empty wherever a
 trigger could have kept a row or put one back — an `INSTEAD OF DELETE` soft delete on SQL Server, a
 `RAISE(IGNORE)` on SQLite, an audit trigger writing into a table MySQL already emptied, an `AFTER
 TRUNCATE` trigger on PostgreSQL — and a table left with rows fails the reset, names the table and rolls

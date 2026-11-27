@@ -36,11 +36,12 @@ internal static class ResetRunner
         ResetScript script,
         Func<string, CancellationToken, Task> execute,
         Func<string, CancellationToken, Task<long>> count,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? committed = null)
     {
         var applied = 0;
         var begun = false;
-        var committed = false;
+        var done = false;
         ExceptionDispatchInfo? failure = null;
 
         try
@@ -83,7 +84,11 @@ internal static class ResetRunner
                 await execute(sql, cancellationToken).ConfigureAwait(false);
             }
 
-            committed = true;
+            done = true;
+
+            // The rows are gone from here on, whatever follows: the caller learns it now, before a
+            // post-commit step that may fail, so a tracker holding the deleted entities is cleared regardless.
+            committed?.Invoke();
 
             try
             {
@@ -105,7 +110,7 @@ internal static class ResetRunner
         }
 
         var cleanupFailures = new List<Exception>();
-        foreach (var sql in Cleanup(script, applied, begun && !committed && failure is not null))
+        foreach (var sql in Cleanup(script, applied, begun && !done && failure is not null))
         {
             try
             {
@@ -122,11 +127,11 @@ internal static class ResetRunner
         Report(failure, cleanupFailures);
     }
 
-    internal static void Run(ResetScript script, Action<string> execute, Func<string, long> count)
+    internal static void Run(ResetScript script, Action<string> execute, Func<string, long> count, Action? committed = null)
     {
         var applied = 0;
         var begun = false;
-        var committed = false;
+        var done = false;
         ExceptionDispatchInfo? failure = null;
 
         try
@@ -169,7 +174,11 @@ internal static class ResetRunner
                 execute(sql);
             }
 
-            committed = true;
+            done = true;
+
+            // The rows are gone from here on, whatever follows: the caller learns it now, before a
+            // post-commit step that may fail, so a tracker holding the deleted entities is cleared regardless.
+            committed?.Invoke();
 
             try
             {
@@ -191,7 +200,7 @@ internal static class ResetRunner
         }
 
         var cleanupFailures = new List<Exception>();
-        foreach (var sql in Cleanup(script, applied, begun && !committed && failure is not null))
+        foreach (var sql in Cleanup(script, applied, begun && !done && failure is not null))
         {
             try
             {

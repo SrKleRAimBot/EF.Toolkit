@@ -1452,6 +1452,39 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_counter_restart_that_fails_after_the_commit_still_clears_the_tracker(bool useAsync)
+    {
+        // The tracker was cleared only once the runner returned: an ALTER denied after the commit threw
+        // first, and Find handed back an entity whose row was already deleted.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'no_alter'@'%'", Ct);
+        await context.Database.ExecuteSqlRawAsync("CREATE USER 'no_alter'@'%' IDENTIFIED BY 'no_alter'", Ct);
+        var grant = "GRANT SELECT, INSERT, UPDATE, DELETE ON `" + DatabaseName + "`.* TO 'no_alter'@'%'";
+        await context.Database.ExecuteSqlRawAsync(grant, Ct);
+        try
+        {
+            await using var limited = LimitedContext("no_alter");
+            var customer = await limited.Customers.FirstAsync(Ct);
+
+            var error = useAsync
+                ? await Should.ThrowAsync<InvalidOperationException>(() => limited.Database.ResetDataAsync(cancellationToken: Ct))
+                : Should.Throw<InvalidOperationException>(() => limited.Database.ResetData());
+            error.Message.ShouldContain("restarting the identity counters afterwards failed");
+
+            limited.ChangeTracker.Entries().ShouldBeEmpty();
+            (await limited.Customers.FindAsync([customer.Id], Ct)).ShouldBeNull();
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP USER IF EXISTS 'no_alter'@'%'", Ct);
+        }
+    }
+
     private ShopContext LimitedContext(string user)
     {
         var builder = new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(Fixture.ConnectionString) { UserID = user, Password = user };

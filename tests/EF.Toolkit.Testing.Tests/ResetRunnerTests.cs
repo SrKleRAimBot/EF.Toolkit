@@ -17,6 +17,33 @@ public sealed class ResetRunnerTests
         };
 
     [Fact]
+    public async Task The_commit_is_reported_before_a_post_commit_step_that_fails()
+    {
+        var after = Unit with { AfterCommit = ["alter"] };
+        var ran = new List<string>();
+        Should.Throw<InvalidOperationException>(() => ResetRunner.Run(after, Recording(ran, "alter"), _ => 0, () => ran.Add("committed")))
+            .Message.ShouldBe(ResetRunner.AfterCommitFailed);
+        ran.ShouldBe(["off a", "off b", "begin", "delete", "commit", "committed", "alter", "on b", "on a"]);
+
+        var reported = 0;
+        await Should.ThrowAsync<InvalidOperationException>(() => ResetRunner.RunAsync(
+            after,
+            (sql, _) => sql == "alter" ? throw new InvalidOperationException(sql) : Task.CompletedTask,
+            (_, _) => Task.FromResult(0L),
+            TestContext.Current.CancellationToken,
+            () => reported++));
+        reported.ShouldBe(1);
+    }
+
+    [Fact]
+    public void A_reset_that_rolls_back_never_reports_a_commit()
+    {
+        var reported = false;
+        Should.Throw<InvalidOperationException>(() => ResetRunner.Run(Unit, Recording([], "delete"), _ => 0, () => reported = true));
+        reported.ShouldBeFalse();
+    }
+
+    [Fact]
     public void A_verify_query_counting_anything_fails_the_reset_and_rolls_it_back()
     {
         var ran = new List<string>();
