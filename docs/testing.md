@@ -284,7 +284,7 @@ values repeats past them: a `decimal(2,2)` holds 100, a `bool` two.
 | --- | --- |
 | `string` | `PropertyName-n`, cut to fit `MaxLength` with the counter kept, in base 36 when space is tight |
 | integers, `float`, `double` | the counter |
-| `decimal` | the counter, kept inside the column's precision — `decimal(5,2)` never overflows |
+| `decimal` | the counter, kept inside the column's precision — `decimal(5,2)` never overflows; a PostgreSQL negative scale such as `numeric(2,-3)` steps by its rounding unit |
 | `Guid` | from the seeded generator |
 | `DateTime`, `DateTimeOffset` | from 2000-01-01, UTC (unspecified kind for an Npgsql `timestamp without time zone` column) |
 | `DateOnly`, `TimeOnly`, `TimeSpan` | from the counter, inside every engine's range |

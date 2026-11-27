@@ -465,9 +465,26 @@ public sealed class TestData
         }
 
         var digits = Math.Clamp(precision, 1, 18);
+
+        // PostgreSQL's numeric(2,-3) rounds to thousands, so 1 and 2 are both stored as 0: step by the
+        // rounding unit instead, as far as a CLR decimal reaches (28 digits in all).
+        if (NegativeScale(property!.GetColumnType()) is { } rounding)
+        {
+            return n % (long)Pow10(digits) * Pow10(Math.Min(rounding, 28 - digits));
+        }
+
         var scale = Math.Clamp(property!.GetScale() ?? mapping?.Scale ?? 0, 0, 28);
         return n % (long)Pow10(digits) / Pow10(scale);
     }
+
+    /// <summary>How many places a column like <c>numeric(2,-3)</c> rounds to the left of the point.</summary>
+    private static int? NegativeScale(string? columnType)
+        => columnType is not null
+            && System.Text.RegularExpressions.Regex.Match(columnType, @"\(\s*\d+\s*,\s*-\s*(\d+)\s*\)") is { Success: true } match
+            && int.TryParse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var places)
+            && places > 0
+                ? places
+                : null;
 
     private static decimal Pow10(int exponent)
     {

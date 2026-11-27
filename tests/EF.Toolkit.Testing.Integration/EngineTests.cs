@@ -346,6 +346,48 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
         }
     }
 
+    private sealed class Rounding
+    {
+        public int Id { get; set; }
+        public decimal Thousands { get; set; }
+    }
+
+    private sealed class RoundingContext(DbContextOptions<RoundingContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Rounding>(b =>
+            {
+                b.ToTable("Roundings");
+                b.Property(r => r.Thousands).HasColumnType("numeric(2,-3)");
+                b.HasIndex(r => r.Thousands).IsUnique();
+            });
+    }
+
+    [Fact]
+    public async Task Generated_decimals_stay_distinct_in_a_column_with_a_negative_scale()
+    {
+        // numeric(2,-3) rounds to thousands: 1 and 2 were both stored as 0, and the unique index refused
+        // the second row.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new RoundingContext(
+            new DbContextOptionsBuilder<RoundingContext>().UseNpgsql(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Roundings\" (\"Id\" serial PRIMARY KEY, \"Thousands\" numeric(2,-3) NOT NULL UNIQUE)", Ct);
+        try
+        {
+            await context.CreateManyAsync<Rounding>(3, cancellationToken: Ct);
+
+            await using var fresh = new RoundingContext(
+                new DbContextOptionsBuilder<RoundingContext>().UseNpgsql(Fixture.ConnectionString).Options);
+            var stored = await fresh.Set<Rounding>().Select(r => r.Thousands).ToListAsync(Ct);
+            stored.Distinct().Count().ShouldBe(3);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Roundings\"", Ct);
+        }
+    }
+
     [Fact]
     public async Task A_truncate_trigger_writing_into_another_reset_table_fails_the_reset()
     {
