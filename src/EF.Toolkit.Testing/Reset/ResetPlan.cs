@@ -311,17 +311,19 @@ internal sealed class ResetPlan
                 : "Map the table in the model so the reset empties it too, or remove the foreign key.";
             throw new InvalidOperationException(
                 $"Cannot reset '{reference.ReferencedTable}': '{reference.Table}', which the reset does not "
-                + "empty, references it. Emptying the referenced table would either fail on that foreign key "
-                + "or reach rows outside the reset — cascading into them, or, where the reset suspends the "
-                + "checks, leaving them pointing at rows that no longer exist. " + remedy);
+                + "empty, references it. Emptying the referenced table would, depending on the foreign key, "
+                + "fail on it, delete or update rows outside the reset (ON DELETE CASCADE, SET NULL, SET "
+                + "DEFAULT), or — where the reset suspends or defers the checks — leave them pointing at rows "
+                + "that no longer exist. " + remedy);
         }
     }
 
-    // A table left out of the reset that references one being emptied cannot keep its rows intact: an
-    // enforced foreign key either refuses the delete or cascades into them, and where the reset suspends
-    // or defers enforcement (SQLite always, the other engines on a foreign-key cycle) they would be left
-    // pointing at rows that no longer exist. None of that is what "exclude this table" asks for, so the
-    // plan refuses it.
+    // A table left out of the reset that references one being emptied cannot keep its rows intact. Its
+    // ON DELETE action still runs whatever the enforcement mode — CASCADE deletes them, SET NULL and SET
+    // DEFAULT rewrite them — and otherwise the foreign key either refuses the delete or, where the reset
+    // suspends or defers the checks (SQLite always, the other engines on a foreign-key cycle), leaves
+    // them pointing at rows that no longer exist. None of that is what "exclude this table" asks for,
+    // so the plan refuses it.
     private static void RefuseRetainedDependents(
         IRelationalModel relational,
         Dictionary<ResetTable, ITable> included)
@@ -341,9 +343,9 @@ internal sealed class ResetPlan
                 {
                     throw new InvalidOperationException(
                         $"Cannot reset '{principal}' while keeping '{name}': the kept table references it "
-                        + $"through '{foreignKey.Name}', so its rows would be deleted with it or left "
-                        + $"pointing at rows that no longer exist. Exclude '{principal}' as well, or stop "
-                        + $"excluding '{name}'.");
+                        + $"through '{foreignKey.Name}', so its rows would be deleted or updated with it, the "
+                        + "reset refused, or the rows left pointing at rows that no longer exist. Exclude "
+                        + $"'{principal}' as well, or stop excluding '{name}'.");
                 }
             }
         }

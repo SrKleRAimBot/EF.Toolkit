@@ -390,10 +390,12 @@ internal static class ResetSqlGenerator
     }
 
     /// <remarks>
-    ///     <c>PRAGMA foreign_keys</c> is a no-op inside a transaction, so there the checks are
-    ///     deferred to commit instead — by which time every row is gone and there is nothing to
-    ///     violate — and switched back to immediate afterwards, so the rest of the transaction is
-    ///     checked as usual; a transaction that had already deferred them keeps them deferred. Counters live in <c>sqlite_sequence</c>, and only for
+    ///     <c>PRAGMA foreign_keys</c> is a no-op inside a transaction, so there the checks are deferred
+    ///     instead, letting the deletes run in any order. The reset does not leave them to the commit: before
+    ///     releasing its savepoint it checks the whole database against the snapshot taken at the start, so
+    ///     a new violation — an orphan a <c>DELETE</c> trigger wrote — fails the reset itself and rolls it
+    ///     back to the savepoint. Deferral is then restored to what the caller had, so the rest of the
+    ///     transaction is checked as before. Counters live in <c>sqlite_sequence</c>, and only for
     ///     <c>AUTOINCREMENT</c> tables; a plain <c>INTEGER PRIMARY KEY</c> restarts on its own once
     ///     the table is empty.
     /// </remarks>

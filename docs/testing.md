@@ -455,7 +455,8 @@ backing field EF maps.
   (and on MySQL with `lower_case_table_names` set), or on SQLite any schema at all, which EF's SQLite
   provider ignores.
 - **Excluding a table that references a reset one is refused** before anything runs, on every engine:
-  the reset would either delete the kept rows with their principals or orphan them. Exclude the
+  depending on the foreign key, the reset would be refused, delete or rewrite the kept rows with their
+  principals (`CASCADE`, `SET NULL`, `SET DEFAULT`), or orphan them. Exclude the
   principal too, or stop excluding the dependent.
 - **A SQL Server table under an enabled row-level-security filter is refused.** The filter applies to
   `DELETE` as to `SELECT`, so the reset would remove only the rows the session can see and report
