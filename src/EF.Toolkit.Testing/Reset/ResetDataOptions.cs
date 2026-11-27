@@ -7,9 +7,15 @@ public sealed class ResetDataOptions
     private readonly List<Type> _excludedEntityTypes = [];
 
     /// <summary>
-    ///     Whether identity columns, sequences and auto-increment counters restart, so that the next
-    ///     row inserted gets the first value again. Default <see langword="true" />.
+    ///     Whether the counters each reset table owns restart — identity columns, a PostgreSQL
+    ///     <c>serial</c>'s sequence, auto-increment counters — so that the next row inserted gets the
+    ///     first value again. Default <see langword="true" />.
     /// </summary>
+    /// <remarks>
+    ///     A standalone sequence a column draws from by default (<c>HasSequence</c> with
+    ///     <c>NEXT VALUE FOR</c> on SQL Server, a PostgreSQL sequence not <c>OWNED BY</c> the column) is
+    ///     not the table's and keeps counting; restart it with <c>ALTER SEQUENCE ... RESTART</c>.
+    /// </remarks>
     public bool RestartIdentity { get; set; } = true;
 
     /// <summary>Leaves a table's rows in place.</summary>

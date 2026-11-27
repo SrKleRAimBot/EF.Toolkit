@@ -198,7 +198,12 @@ deleted rows into its history table (see the limitations below). The order comes
 dependents first. Identity counters restart at the table's own start: the next row gets the first id
 the column would have given an empty table — 1 by default, the declared seed for a SQL Server
 `IDENTITY(100, 5)`, and on MySQL the first value `auto_increment_offset` and `auto_increment_increment`
-allow. The context's change tracker is cleared afterwards.
+allow. That is the counters a table owns — a PostgreSQL identity or `serial` column's sequence, a SQL
+Server `IDENTITY`, a MySQL `AUTO_INCREMENT`, a SQLite `AUTOINCREMENT` row in `sqlite_sequence`. A
+standalone sequence a column draws from by default — `HasSequence` with `NEXT VALUE FOR` on SQL
+Server, a PostgreSQL sequence not `OWNED BY` the column — is shared, not the table's, and keeps
+counting: restart it yourself (`ALTER SEQUENCE ... RESTART`) when a test needs its first value. The
+context's change tracker is cleared afterwards.
 
 What each engine is sent:
 
@@ -241,8 +246,10 @@ increment" on one that has — so the next row gets the seed value either way.
 
 Inside a transaction the reset joins it, so it is rolled back with an isolated scope. Two engines
 need different statements there: MySQL does not restart identity, because `ALTER TABLE` commits the
-open transaction; SQLite defers its foreign keys to commit rather
-than switching them off, which it cannot do inside a transaction.
+open transaction; SQLite defers its foreign keys rather than switching them off, which it cannot do
+inside a transaction, and still checks for new violations before it releases its savepoint — an
+orphan a `DELETE` trigger wrote fails `ResetDataAsync()` itself and rolls the reset back, rather
+than surfacing at your commit.
 
 The engine is read off `Database.ProviderName`: `Npgsql.EntityFrameworkCore.PostgreSQL`,
 `Microsoft.EntityFrameworkCore.SqlServer`, `MySql.EntityFrameworkCore`,
