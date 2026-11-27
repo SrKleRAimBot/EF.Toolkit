@@ -125,19 +125,30 @@ public sealed class IsolatedScope<TContext> : IAsyncDisposable, IDisposable
 
         _disposed = true;
 
+        // Every step is attempted whatever an earlier one threw: a context that fails to dispose must not
+        // skip the rollback, or its writes stay and the transaction left open on the shared connection
+        // keeps the next scope from starting one.
+        List<Exception>? errors = null;
         foreach (var context in _contexts)
         {
-            await context.DisposeAsync().ConfigureAwait(false);
+            await Attempt(async () => await context.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
         }
 
-        try
+        await Attempt(() => _transaction.RollbackAsync()).ConfigureAwait(false);
+        await Attempt(async () => await _transaction.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+        await Attempt(async () => await _root.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+        ThrowAll(errors);
+
+        async Task Attempt(Func<Task> step)
         {
-            await _transaction.RollbackAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            await _transaction.DisposeAsync().ConfigureAwait(false);
-            await _root.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await step().ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                (errors ??= []).Add(error);
+            }
         }
     }
 
@@ -151,19 +162,43 @@ public sealed class IsolatedScope<TContext> : IAsyncDisposable, IDisposable
 
         _disposed = true;
 
+        // As DisposeAsync: every step, whatever an earlier one threw.
+        List<Exception>? errors = null;
         foreach (var context in _contexts)
         {
-            context.Dispose();
+            Attempt(context.Dispose);
         }
 
-        try
+        Attempt(_transaction.Rollback);
+        Attempt(_transaction.Dispose);
+        Attempt(_root.Dispose);
+        ThrowAll(errors);
+
+        void Attempt(Action step)
         {
-            _transaction.Rollback();
+            try
+            {
+                step();
+            }
+            catch (Exception error)
+            {
+                (errors ??= []).Add(error);
+            }
         }
-        finally
+    }
+
+    // One failure is rethrown as it was; several together.
+    private static void ThrowAll(List<Exception>? errors)
+    {
+        switch (errors)
         {
-            _transaction.Dispose();
-            _root.Dispose();
+            case null or []:
+                return;
+            case [var only]:
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(only).Throw();
+                return;
+            default:
+                throw new AggregateException("Disposing the isolated scope failed more than once.", errors);
         }
     }
 }

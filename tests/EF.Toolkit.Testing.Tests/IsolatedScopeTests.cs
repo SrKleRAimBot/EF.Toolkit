@@ -25,6 +25,68 @@ public sealed class IsolatedScopeTests
         (await after.Customers.CountAsync(Ct)).ShouldBe(0);
     }
 
+    private sealed class Fuse
+    {
+        public bool Armed { get; set; } = true;
+    }
+
+    /// <summary>Disposes properly, then throws — once, while the fuse is armed.</summary>
+    private sealed class FragileShop(DbContextOptions<ShopContext> options, Fuse fuse) : ShopContext(options)
+    {
+        public override async ValueTask DisposeAsync()
+        {
+            await base.DisposeAsync();
+            Blow();
+        }
+
+        public override void Dispose()
+        {
+            base.Dispose();
+            Blow();
+        }
+
+        private void Blow()
+        {
+            if (fuse.Armed)
+            {
+                fuse.Armed = false;
+                throw new InvalidOperationException("disposal failed");
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_context_that_throws_on_disposal_still_lets_the_scope_roll_back(bool async)
+    {
+        // The scope disposed its contexts first and its transaction after: one that threw skipped the
+        // rollback, the row stayed, and the transaction left open on the shared connection kept the next
+        // scope from starting one. Marked disposed already, a second Dispose did nothing.
+        var fuse = new Fuse { Armed = false };
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(
+            o => o.UseContextFactory(options => new FragileShop(options, fuse)), Ct);
+
+        var scope = await db.BeginIsolatedScopeAsync(cancellationToken: Ct);
+        var context = scope.CreateContext();
+        await context.SeedAsync(ShopData.Customer());
+        fuse.Armed = true;
+
+        var error = async
+            ? await Should.ThrowAsync<InvalidOperationException>(async () => await scope.DisposeAsync())
+            : Should.Throw<InvalidOperationException>(scope.Dispose);
+        error.Message.ShouldBe("disposal failed");
+
+        await using (var next = await db.BeginIsolatedScopeAsync(cancellationToken: Ct))
+        {
+            await using var inside = next.CreateContext();
+            (await inside.Customers.CountAsync(Ct)).ShouldBe(0);
+        }
+
+        await using var after = db.CreateContext();
+        (await after.Customers.CountAsync(Ct)).ShouldBe(0);
+    }
+
     [Fact]
     public async Task Contexts_in_one_scope_see_each_others_writes()
     {
