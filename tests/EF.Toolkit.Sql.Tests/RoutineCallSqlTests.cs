@@ -135,6 +135,9 @@ public sealed class RoutineArgumentsTests
     [InlineData("P0")]
     [InlineData("p0")]
     [InlineData("@p1")]
+    [InlineData("@'p0'")]
+    [InlineData("@`p0`")]
+    [InlineData(" @\"P1\" ")]
     public void A_DbParameter_named_like_a_generated_parameter_is_refused(string name)
     {
         // EF names the plain value p0 too: the call rendered @tenant_id = @p0, @total = @p0 OUTPUT, and the

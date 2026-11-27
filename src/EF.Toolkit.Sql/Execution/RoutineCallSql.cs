@@ -105,7 +105,7 @@ internal static class RoutineCallSql
                     + "bound as one parameter. Pass a separate DbParameter for each.");
             }
 
-            var given = (value as DbParameter)?.ParameterName.TrimStart('@', ':', '?', '$');
+            var given = BareName((value as DbParameter)?.ParameterName);
             if (string.IsNullOrEmpty(given))
             {
                 continue;
@@ -128,6 +128,16 @@ internal static class RoutineCallSql
         }
 
         return [.. arguments.Select(a => a.Value)];
+    }
+
+    // The name as a provider binds it: trimmed, without its prefix, and — as MySqlConnector reads @'p0',
+    // @"p0" and @`p0` — without matching quotes around it.
+    private static string? BareName(string? name)
+    {
+        var bare = name?.Trim().TrimStart('@', ':', '?', '$');
+        return bare is { Length: >= 2 } && bare[0] is '\'' or '"' or '`' && bare[^1] == bare[0]
+            ? bare[1..^1]
+            : bare;
     }
 
     private static bool IsGeneratedName(string name, int count)
