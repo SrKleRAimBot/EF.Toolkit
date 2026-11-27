@@ -254,8 +254,11 @@ internal static partial class SqlSyntax
         return semicolons;
     }
 
-    // $$ or $tag$ opening a dollar-quoted body; $1 is a parameter, not a quote.
-    [GeneratedRegex(@"\G\$([A-Za-z_][A-Za-z0-9_]*)?\$", RegexOptions.CultureInvariant)]
+    // $$ or $tag$ opening a dollar-quoted body. Wider than PostgreSQL's own tag syntax — any run with
+    // no $, whitespace or quote, $é$ included — on purpose: taking too much for a quote can only keep
+    // a semicolon (or end the scan unfinished, for the plain trim), while missing one could take a
+    // semicolon out of the quoted text. $1 alone is a parameter: it has no closing $.
+    [GeneratedRegex(@"\G\$[^$\s'""`;]*\$", RegexOptions.CultureInvariant)]
     private static partial Regex DollarTag();
 
     /// <summary>

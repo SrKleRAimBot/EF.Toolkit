@@ -100,6 +100,23 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_dollar_quote_with_a_non_ascii_tag_keeps_its_value()
+    {
+        // $é$ went unrecognised as a quote: the semicolon inside it was taken for a trailing one.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("dollar_value", "SELECT $\u00E9$x;-- tail$\u00E9$ AS \"Value\"");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            (await context.Database.SqlQueryRaw<string>("SELECT \"Value\" FROM dollar_value").SingleAsync(Token)).ShouldBe("x;-- tail");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
     public async Task A_no_break_space_ending_a_column_alias_stays_part_of_it()
     {
         // PostgreSQL takes U+00A0 into an unquoted identifier; Trim() took it off and renamed the column.
