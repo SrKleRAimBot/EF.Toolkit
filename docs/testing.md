@@ -143,7 +143,11 @@ tables and puts the seed data back — the reset for a fixture shared by many te
 ## Isolated scopes
 
 The classic pattern: every test runs inside a transaction that is rolled back at the end, so nothing
-it writes survives and the next test starts from the seeded state.
+it writes survives and the next test starts from the seeded state. That is the rows: generated key
+counters are not transactional on every engine — a PostgreSQL sequence, a SQL Server `IDENTITY` or
+sequence, a MySQL `AUTO_INCREMENT` keeps the values it handed out after the rollback (SQLite's are
+rolled back with the rows) — so a later test gets higher ids. Assert on the ids a test reads back, not
+on fixed numbers, or reset the counters with `db.ResetAsync()`.
 
 ```csharp
 await using var scope = await db.BeginIsolatedScopeAsync();
