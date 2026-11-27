@@ -393,10 +393,50 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
             (await IdsAs("2026-04-03T123000")).ShouldBeEmpty();
             (await IdsAs("2026-04-03T123000+02:00")).ShouldBeEmpty();
             (await IdsAs("2026-04-03 12:30+02:00")).ShouldBeEmpty();
+
+            // Clock fields past their range carry over onto the key: 12:29:60 is 12:30:00.
+            (await IdsAs("2026-04-03T12:29:60")).ShouldBeEmpty();
         }
         finally
         {
             await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Cohorts\"", Token);
+        }
+    }
+
+    [Fact]
+    public async Task A_timestamptz_tenant_matches_the_instant_in_any_offset_but_no_spelling_that_carries_over()
+    {
+        // An offset names the same instant in a timestamptz, so it matches; a clock field past its range
+        // or a compact time is carried over onto the key by PostgreSQL, and must not.
+        var moments = new TenantIsolationPolicy("Moments", "Tenant", "app.tenant_tz", "timestamptz", policyName: "moments_iso");
+        await using var admin = fixture.CreateAdminContext();
+        await admin.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Moments\" (\"Id\" int PRIMARY KEY, \"Tenant\" timestamptz NOT NULL); "
+                + "INSERT INTO \"Moments\" VALUES (1, '2026-04-03 12:30:00+00'); "
+                + $"ALTER TABLE \"Moments\" OWNER TO {PostgreSqlFixture.AppUser};",
+            Token);
+        try
+        {
+            await admin.Database.CreateDatabaseObjectsAsync(moments);
+
+            async Task<List<int>> IdsAs(object at)
+            {
+                await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+                    .UseSessionContext(s => s.Set("app.tenant_tz", () => at))
+                    .Options);
+                return await context.Database.SqlQueryRaw<int>("SELECT \"Id\" AS \"Value\" FROM \"Moments\"").ToListAsync(Token);
+            }
+
+            (await IdsAs(new DateTimeOffset(2026, 4, 3, 14, 30, 0, TimeSpan.FromHours(2)))).ShouldBe([1]);
+            (await IdsAs(new DateTime(2026, 4, 3, 12, 30, 0, DateTimeKind.Utc))).ShouldBe([1]);
+            (await IdsAs("2026-04-03T12:29:60Z")).ShouldBeEmpty();
+            (await IdsAs("2026-04-03T123000Z")).ShouldBeEmpty();
+            (await IdsAs("2026-04-03T12:30:00.0000004Z")).ShouldBeEmpty();
+            (await IdsAs("2026-04-03 12:30:00 UTC")).ShouldBeEmpty();
+        }
+        finally
+        {
+            await admin.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"Moments\"", Token);
         }
     }
 
@@ -435,6 +475,9 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
             (await IdsAs("2026-11-27T123456")).ShouldBeEmpty();
             (await IdsAs("2026-11-27T000000+02:00")).ShouldBeEmpty();
             (await IdsAs("2026-11-27 0:0+02:00")).ShouldBeEmpty();
+
+            // 24:00 the day before is this day's midnight.
+            (await IdsAs("2026-11-26T24:00")).ShouldBeEmpty();
 
             // Midnight somewhere else is not this date's midnight.
             (await IdsAs(new DateTimeOffset(2026, 11, 27, 0, 0, 0, TimeSpan.FromHours(2)))).ShouldBeEmpty();

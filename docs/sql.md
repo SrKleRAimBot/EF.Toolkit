@@ -290,15 +290,23 @@ in its own way: an `interval` rounds `0.4 microseconds` away, a `real` makes `16
 `daterange` drops a bound's time of day. So is any array, in `[]` or `ARRAY` form or by its catalog
 name (`_float4`), which casts every element that way. 
 
-A type without a time zone — `date`, `timestamp`, `time` — takes its setting in one plain ISO 8601
-form only, the one `UseSessionContext` writes for a `DateOnly`, a local or unspecified `DateTime` and a
-`TimeOnly`: `2026-11-27` (or that day at an all-zero midnight) for a `date`,
-`2026-11-27T12:30:00.1234560` (a space for the `T`, seconds and fraction optional) for a `timestamp`,
-`12:30:00.1234560` for a `time`, with at most six significant fractional digits. PostgreSQL's input
-takes far more — compact times (`T123456`), single-digit fields, offsets, zone names — and the cast to
-a zone-less type silently drops the time of day or the zone, so anything else matches nothing. That
-includes the `Z` of a UTC `DateTime` and the `+02:00` of a `DateTimeOffset`: use `timestamptz` for
-instants with an offset.
+A temporal key takes its setting in one plain ISO 8601 form only — the one `UseSessionContext` writes —
+with every field inside its range, seconds and fraction optional and at most six significant
+fractional digits:
+
+| Key | Setting | Written for |
+| --- | --- | --- |
+| `date` | `2026-11-27`, or that day at an all-zero midnight | `DateOnly`, an unspecified `DateTime` at 00:00 |
+| `timestamp` | `2026-11-27T12:30:00.1234560`, a space for the `T` allowed | a `DateTime` of `DateTimeKind.Unspecified` |
+| `time` | `12:30:00.1234560` | `TimeOnly` |
+| `timestamptz` | a `timestamp` ending in `Z` or an offset such as `+02:00` | a UTC `DateTime`, a `DateTimeOffset` |
+| `timetz` | a `time` ending in `Z` or an offset | — |
+
+PostgreSQL's input takes far more — compact times (`T123456`), single-digit fields, zone names, clock
+fields past their range that it carries over (`12:34:60` is `12:35:00`, `24:00` the next midnight) —
+and a zone-less cast silently drops the time of day or the zone, so anything else matches nothing. For
+a zone-less key that includes a local `DateTime`, which `"O"` writes with its offset, and a UTC one
+with its `Z`: use `DateTimeKind.Unspecified`, or `timestamptz` for instants.
 
 A type that is not built in — a domain or a type of your own — is cast by its own
 rules, which the policy cannot see into, so a domain over a type that loses data is yours to keep

@@ -186,21 +186,12 @@ public sealed class TenantIsolationPolicyTests
             .ShouldContain($"USING (\"TenantId\" = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS {storeType}))\n");
 
     [Theory]
-    [InlineData("timestamp(3) with time zone", true)]
-    [InlineData("timestamptz", true)]
-    [InlineData("TimeTZ", true)]
-    [InlineData("\"pg_catalog\" . timestamptz(3)", true)]
-    [InlineData("timestamp", false)]
-    [InlineData("date", false)]
-    [InlineData("timeline", false)]
-    [InlineData("\"Timestamp\"", false)]
-    public void PostgreSql_refuses_a_temporal_setting_finer_than_a_microsecond(string storeType, bool guarded)
-    {
-        // PostgreSQL rounds finer digits away on any cast, bare type or not.
-        var sql = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3];
-
-        sql.Contains("!~ '[.][0-9]{6}[0-9]*[1-9]'", StringComparison.Ordinal).ShouldBe(guarded);
-    }
+    [InlineData("timeline")]
+    [InlineData("\"Timestamp\"")]
+    [InlineData("integer")]
+    public void PostgreSql_leaves_a_setting_s_text_alone_for_a_type_that_is_not_temporal(string storeType)
+        => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3]
+            .ShouldNotContain(" ~ '^");
 
     [Theory]
     [InlineData("interval")]
@@ -262,18 +253,23 @@ public sealed class TenantIsolationPolicyTests
             .ParamName.ShouldBe("columnStoreType");
 
     [Theory]
-    [InlineData("date", "'^[0-9]{4,}-[0-9]{2}-[0-9]{2}([T ]00:00(:00([.]0*)?)?)?$'")]
-    [InlineData("pg_catalog.date", "'^[0-9]{4,}-[0-9]{2}-[0-9]{2}([T ]00:00(:00([.]0*)?)?)?$'")]
-    [InlineData("timestamp(3)", "'^[0-9]{4,}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{0,6}0*)?)?$'")]
-    [InlineData("pg_catalog . timestamp", "'^[0-9]{4,}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{0,6}0*)?)?$'")]
-    [InlineData("\"pg_catalog\".\"timestamp\"", "'^[0-9]{4,}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{0,6}0*)?)?$'")]
-    [InlineData("timestamp without time zone", "'^[0-9]{4,}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{0,6}0*)?)?$'")]
-    [InlineData("time(0)", "'^[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{0,6}0*)?)?$'")]
-    [InlineData("time without time zone", "'^[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{0,6}0*)?)?$'")]
-    public void PostgreSql_takes_a_zone_less_temporal_setting_only_in_plain_iso_8601(string storeType, string format)
+    [InlineData("date", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])([T ]00:00(:00([.]0*)?)?)?$'")]
+    [InlineData("pg_catalog.date", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])([T ]00:00(:00([.]0*)?)?)?$'")]
+    [InlineData("timestamp(3)", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?$'")]
+    [InlineData("pg_catalog . timestamp", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?$'")]
+    [InlineData("\"pg_catalog\".\"timestamp\"", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?$'")]
+    [InlineData("timestamp without time zone", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?$'")]
+    [InlineData("time(0)", "'^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?$'")]
+    [InlineData("time without time zone", "'^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?$'")]
+    [InlineData("timestamptz", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?([Zz]|[+-][0-9]{2}(:?[0-5][0-9])?)$'")]
+    [InlineData("timestamp(3) with time zone", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?([Zz]|[+-][0-9]{2}(:?[0-5][0-9])?)$'")]
+    [InlineData("\"pg_catalog\" . timestamptz(3)", "'^[0-9]{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?([Zz]|[+-][0-9]{2}(:?[0-5][0-9])?)$'")]
+    [InlineData("TimeTZ", "'^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?([Zz]|[+-][0-9]{2}(:?[0-5][0-9])?)$'")]
+    [InlineData("time with time zone", "'^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]{0,6}0*)?)?([Zz]|[+-][0-9]{2}(:?[0-5][0-9])?)$'")]
+    public void PostgreSql_takes_a_temporal_setting_only_in_plain_iso_8601(string storeType, string format)
     {
-        // PostgreSQL's input takes compact times, offsets, zone names and sub-microsecond digits, and a
-        // zone-less cast drops what it does not keep; only the one plain form is let through.
+        // PostgreSQL's input takes compact times, zone names, sub-microsecond digits and clock fields past
+        // their range, and casts them onto other keys; only the one plain form is let through.
         var sql = new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql)[3];
 
         sql.ShouldContain($"AND NULLIF(current_setting('app.tenant_id', true), '') ~ {format}");
