@@ -311,15 +311,17 @@ internal sealed class ResetPlan
                 : "Map the table in the model so the reset empties it too, or remove the foreign key.";
             throw new InvalidOperationException(
                 $"Cannot reset '{reference.ReferencedTable}': '{reference.Table}', which the reset does not "
-                + "empty, references it, and the reset suspends foreign-key checks while it deletes — its "
-                + "rows would be deleted with it or left pointing at rows that no longer exist. " + remedy);
+                + "empty, references it. Emptying the referenced table would either fail on that foreign key "
+                + "or reach rows outside the reset — cascading into them, or, where the reset suspends the "
+                + "checks, leaving them pointing at rows that no longer exist. " + remedy);
         }
     }
 
-    // Every engine's reset suspends or defers foreign-key enforcement while it deletes, so a table
-    // left out of the reset that references one being emptied would not stop the delete: on SQLite its
-    // rows could be cascade-deleted at commit, and everywhere else they would be left pointing at rows
-    // that no longer exist. Neither is what "exclude this table" asks for, so the plan refuses it.
+    // A table left out of the reset that references one being emptied cannot keep its rows intact: an
+    // enforced foreign key either refuses the delete or cascades into them, and where the reset suspends
+    // or defers enforcement (SQLite always, the other engines on a foreign-key cycle) they would be left
+    // pointing at rows that no longer exist. None of that is what "exclude this table" asks for, so the
+    // plan refuses it.
     private static void RefuseRetainedDependents(
         IRelationalModel relational,
         Dictionary<ResetTable, ITable> included)
