@@ -105,9 +105,9 @@ The filter is a [named query filter](https://learn.microsoft.com/ef/core/queryin
 stays in force:
 
 ```csharp
-db.Posts.IncludeDeleted()             // live and deleted, every other named filter still applied
-db.Posts.OnlyDeleted()                // a recycle bin
-db.IsSoftDeleted(post)                // by the values the instance carries
+db.Posts.IncludeDeleted();            // live and deleted, every other named filter still applied
+db.Posts.OnlyDeleted();               // a recycle bin
+db.IsSoftDeleted(post);               // by the values the instance carries
 ```
 
 EF Core does not allow an unnamed query filter beside a named one, so give any other filter on a

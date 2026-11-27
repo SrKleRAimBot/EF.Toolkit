@@ -131,7 +131,7 @@ Disposing a `TestDatabase` leaves the database in place; dropping it is the cont
 ```csharp
 o.Seed(ctx => ctx.Countries.AddRange(countries))       // Action<TContext>
  .Seed(async (ctx, ct) => await LoadFixtureAsync(ctx, ct))
- .Seed(new ReferenceDataSeeder())                      // ISeeder<TContext>
+ .Seed(new ReferenceDataSeeder());                     // ISeeder<TContext>
 ```
 
 Seeders run in registration order, each on a fresh context, and whatever a seeder leaves unsaved is
