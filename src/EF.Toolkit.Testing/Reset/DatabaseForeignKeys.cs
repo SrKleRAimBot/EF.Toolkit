@@ -280,16 +280,16 @@ internal static class DatabaseForeignKeys
         var classes = string.Join(", ", plan.Tables.Select(t =>
         {
             var quoted = (t.Schema is null ? "" : PgQuote(t.Schema) + ".") + PgQuote(t.Name);
-            return "to_regclass('" + quoted.Replace("'", "''", StringComparison.Ordinal) + "')";
+            return "pg_catalog.to_regclass(" + PgLiteral(quoted) + ")";
         }));
         return $"""
             WITH RECURSIVE
-                reset(r, n) AS (SELECT t.r, t.n FROM unnest(ARRAY[{classes}]::regclass[]) WITH ORDINALITY AS t(r, n) WHERE t.r IS NOT NULL),
+                reset(r, n) AS (SELECT t.r, t.n FROM pg_catalog.unnest(ARRAY[{classes}]::pg_catalog.regclass[]) WITH ORDINALITY AS t(r, n) WHERE t.r IS NOT NULL),
                 tree(n, rel) AS (
                     SELECT n, r FROM reset
                     UNION ALL
-                    SELECT tree.n, i.inhrelid::regclass FROM tree JOIN pg_catalog.pg_inherits AS i ON i.inhparent = tree.rel)
-            SELECT (reset.n - 1)::int,
+                    SELECT tree.n, i.inhrelid::pg_catalog.regclass FROM tree JOIN pg_catalog.pg_inherits AS i ON i.inhparent = tree.rel)
+            SELECT (reset.n - 1)::pg_catalog.int4,
                    CASE WHEN pg_catalog.row_security_active(reset.r) THEN 1 ELSE 0 END,
                    CASE WHEN EXISTS (SELECT 1 FROM tree JOIN pg_catalog.pg_trigger AS g ON g.tgrelid = tree.rel
                                      WHERE tree.n = reset.n AND NOT g.tgisinternal AND (g.tgtype & 32) <> 0) THEN 1 ELSE 0 END
@@ -299,36 +299,48 @@ internal static class DatabaseForeignKeys
 
     private static string PgQuote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
+    // A string literal that reads the same whatever standard_conforming_strings says: with a backslash in
+    // it, an escape string with the backslash doubled. The catalog functions and types around these
+    // literals are named with pg_catalog, so a function of the same name earlier on the search_path
+    // cannot answer in their place.
+    private static string PgLiteral(string value)
+    {
+        var doubled = value.Replace("'", "''", StringComparison.Ordinal);
+        return value.Contains('\\', StringComparison.Ordinal)
+            ? "E'" + doubled.Replace("\\", "\\\\", StringComparison.Ordinal) + "'"
+            : "'" + doubled + "'";
+    }
+
     internal static string PostgreSqlDescendants(ResetPlan plan)
     {
         static string RegClasses(IEnumerable<ResetTable> tables)
             => string.Join(", ", tables.Select(t =>
             {
                 var quoted = (t.Schema is null ? "" : Quote(t.Schema) + ".") + Quote(t.Name);
-                return "to_regclass('" + quoted.Replace("'", "''", StringComparison.Ordinal) + "')";
+                return "pg_catalog.to_regclass(" + PgLiteral(quoted) + ")";
             }));
 
         static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
         static string Literal(string? value)
-            => value is null ? "NULL::text" : "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'::text";
+            => value is null ? "NULL::pg_catalog.text" : PgLiteral(value) + "::pg_catalog.text";
 
         // ExcludeTable names, matched the way the reset matches them: name exactly, schema exactly
         // unless none was given.
         var excludedNames = plan.ExcludedNames.Count == 0
-            ? "SELECT NULL::text, NULL::text WHERE false"
+            ? "SELECT NULL::pg_catalog.text, NULL::pg_catalog.text WHERE false"
             : "VALUES " + string.Join(", ", plan.ExcludedNames.Select(e => $"({Literal(e.Name)}, {Literal(e.Schema)})"));
 
         return $"""
             WITH RECURSIVE
-                reset(oid) AS (SELECT r FROM unnest(ARRAY[{RegClasses(plan.Tables)}]::regclass[]) AS r WHERE r IS NOT NULL),
-                kept(oid) AS (SELECT k FROM unnest(ARRAY[{RegClasses(plan.Retained)}]::regclass[]) AS k WHERE k IS NOT NULL),
+                reset(oid) AS (SELECT r FROM pg_catalog.unnest(ARRAY[{RegClasses(plan.Tables)}]::pg_catalog.regclass[]) AS r WHERE r IS NOT NULL),
+                kept(oid) AS (SELECT k FROM pg_catalog.unnest(ARRAY[{RegClasses(plan.Retained)}]::pg_catalog.regclass[]) AS k WHERE k IS NOT NULL),
                 excluded(name, schema) AS ({excludedNames}),
                 tree(root, rel) AS (
                     SELECT oid, oid FROM reset
                     UNION ALL
-                    SELECT tree.root, i.inhrelid::regclass FROM tree JOIN pg_catalog.pg_inherits AS i ON i.inhparent = tree.rel)
-            SELECT tree.rel::text, tree.root::text, 0
+                    SELECT tree.root, i.inhrelid::pg_catalog.regclass FROM tree JOIN pg_catalog.pg_inherits AS i ON i.inhparent = tree.rel)
+            SELECT tree.rel::pg_catalog.text, tree.root::pg_catalog.text, 0
             FROM tree
             JOIN pg_catalog.pg_class AS root ON root.oid = tree.root
             JOIN pg_catalog.pg_class AS rel ON rel.oid = tree.rel

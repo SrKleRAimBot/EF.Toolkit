@@ -701,6 +701,40 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
     }
 
     [Fact]
+    public async Task A_function_shadowing_to_regclass_cannot_hide_an_inheriting_table()
+    {
+        // With search_path app, pg_catalog, public and an app.to_regclass returning NULL, the unqualified
+        // lookups found no reset table at all: the archive went unseen, and TRUNCATE emptied it.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = Fixture.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE SCHEMA IF NOT EXISTS app; "
+                + "CREATE FUNCTION app.to_regclass(text) RETURNS pg_catalog.regclass LANGUAGE sql AS 'SELECT NULL::pg_catalog.regclass'; "
+                + "CREATE TABLE \"CustomersArchive\" () INHERITS (\"Customers\");",
+            Ct);
+        await context.Database.OpenConnectionAsync(Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "INSERT INTO \"CustomersArchive\" SELECT * FROM ONLY \"Customers\" LIMIT 1", Ct);
+            await context.Database.ExecuteSqlRawAsync("SET search_path = app, pg_catalog, public", Ct);
+
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("CustomersArchive");
+
+            await context.Database.ExecuteSqlRawAsync("SET search_path = public", Ct);
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM \"CustomersArchive\"")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "SET search_path = public; DROP TABLE IF EXISTS \"CustomersArchive\"; DROP SCHEMA IF EXISTS app CASCADE", Ct);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset()
     {
         // Without CASCADE the TRUNCATE refuses, rather than emptying a table nobody asked it to touch.
