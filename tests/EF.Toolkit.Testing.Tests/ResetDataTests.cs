@@ -290,6 +290,59 @@ public sealed class ResetDataTests
         ((long)(await count.ExecuteScalarAsync(Ct))!).ShouldBe(1);
     }
 
+    /// <summary>Settings, and app.settings: EF's SQLite provider ignores the schema, so both are main's.</summary>
+    private sealed class SchemaSettingsContext(DbContextOptions<SchemaSettingsContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<CasedSetting>().ToTable("Settings");
+            modelBuilder.Entity<LowerSetting>().ToTable("settings", "app");
+        }
+    }
+
+    [Fact]
+    public async Task A_schema_written_on_one_SQLite_mapping_does_not_hide_that_both_are_one_table()
+    {
+        // main.settings was compared with app.settings and let through, but the DELETE ignores the schema
+        // and emptied main.Settings, the table that was kept.
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(Ct);
+        await using var context = new SchemaSettingsContext(
+            new DbContextOptionsBuilder<SchemaSettingsContext>().UseSqlite(connection).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Settings\" (\"Id\" INTEGER PRIMARY KEY, \"Name\" TEXT NOT NULL); INSERT INTO \"Settings\" VALUES (1, 'keep me')",
+            Ct);
+
+        (await Should.ThrowAsync<InvalidOperationException>(
+                () => context.Database.ResetDataAsync(o => o.ExcludeEntity<CasedSetting>(), Ct)))
+            .Message.ShouldContain("Settings");
+
+        await using var count = connection.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM \"Settings\"";
+        ((long)(await count.ExecuteScalarAsync(Ct))!).ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void On_MySQL_two_names_differing_in_case_are_one_table_only_when_the_server_ignores_case(bool ignoreCase, bool refused)
+    {
+        // lower_case_table_names 1 or 2 compares table names ignoring case; 0, the Linux default, does not.
+        using var context = new CasedSettingsContext(new DbContextOptionsBuilder<CasedSettingsContext>().UseSqlite("Data Source=:memory:").Options);
+        var plan = ResetPlan.Build(context.Model, ResetDataOptions.Build(o => o.ExcludeEntity<CasedSetting>()));
+
+        Action check = () => plan.RefuseMySqlKeptAndReset("shop", ignoreCase);
+
+        if (refused)
+        {
+            check.ShouldThrow<InvalidOperationException>();
+        }
+        else
+        {
+            check.ShouldNotThrow();
+        }
+    }
+
     [Fact]
     public async Task A_trigger_writing_an_orphan_into_a_table_outside_the_reset_rolls_it_back()
     {

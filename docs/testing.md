@@ -449,9 +449,11 @@ backing field EF maps.
   it names. Partitions of a mapped partitioned table are that table's rows and are emptied with it,
   but an unmapped `INHERITS` child — an archive, say — or a partition the reset was told to keep,
   whether the model maps it or it was only named in `ExcludeTable`, makes the reset refuse instead.
-- **A table kept under one mapping and reset under another is refused**, before anything runs, on
-  PostgreSQL, SQL Server and SQLite: `Settings` excluded while another entity maps `public.Settings`,
-  `dbo.Settings` or, on SQLite, `settings` — names the database resolves to the same table.
+- **A table kept under one mapping and reset under another is refused**, before anything runs, on every
+  engine: `Settings` excluded while another entity maps a name the database resolves to the same table —
+  `public.Settings`, `dbo.Settings`, the current database's `shop.Settings` on MySQL, `settings` on SQLite
+  (and on MySQL with `lower_case_table_names` set), or on SQLite any schema at all, which EF's SQLite
+  provider ignores.
 - **Excluding a table that references a reset one is refused** before anything runs, on every engine:
   the reset would either delete the kept rows with their principals or orphan them. Exclude the
   principal too, or stop excluding the dependent.

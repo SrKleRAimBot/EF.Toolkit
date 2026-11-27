@@ -64,6 +64,16 @@ public static class DatabaseResetExtensions
                     plan.RefuseSqliteKeptAndReset();
                 }
 
+                if (engine == DatabaseEngine.MySql && plan.Retained.Count > 0)
+                {
+                    var current = await ScalarAsync(connection, transaction, "SELECT DATABASE();", cancellationToken).ConfigureAwait(false);
+                    var lowerCase = await ScalarAsync(connection, transaction, "SELECT @@lower_case_table_names;", cancellationToken)
+                        .ConfigureAwait(false);
+                    plan.RefuseMySqlKeptAndReset(
+                        current as string,
+                        Convert.ToInt64(lowerCase, System.Globalization.CultureInfo.InvariantCulture) != 0);
+                }
+
                 var state = await ReadStateAsync(database, engine, connection, transaction, options, cancellationToken)
                     .ConfigureAwait(false);
                 if (DatabaseForeignKeys.Query(engine, plan, state.MySqlNoBackslashEscapes) is { } query)
@@ -184,6 +194,15 @@ public static class DatabaseResetExtensions
                 if (engine == DatabaseEngine.Sqlite)
                 {
                     plan.RefuseSqliteKeptAndReset();
+                }
+
+                if (engine == DatabaseEngine.MySql && plan.Retained.Count > 0)
+                {
+                    var current = Scalar(connection, transaction, "SELECT DATABASE();");
+                    var lowerCase = Scalar(connection, transaction, "SELECT @@lower_case_table_names;");
+                    plan.RefuseMySqlKeptAndReset(
+                        current as string,
+                        Convert.ToInt64(lowerCase, System.Globalization.CultureInfo.InvariantCulture) != 0);
                 }
 
                 var state = ReadState(database, engine, connection, transaction, options);

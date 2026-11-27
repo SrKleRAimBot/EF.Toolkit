@@ -206,13 +206,36 @@ internal sealed class ResetPlan
     }
 
     /// <summary>
-    ///     SQLite: refuses when a kept table is also a reset one. SQLite resolves a name without a schema
-    ///     in <c>main</c> and compares identifiers ignoring the case of ASCII letters, so <c>Settings</c>
-    ///     and <c>main.settings</c> are one table — compared here the same way, with no query needed.
+    ///     SQLite: refuses when a kept table is also a reset one. The reset deletes from <c>main</c> whatever
+    ///     schema a mapping names (EF's SQLite provider has none), and SQLite compares identifiers ignoring
+    ///     the case of ASCII letters — so <c>Settings</c>, <c>settings</c> and <c>app.settings</c> are all
+    ///     <c>main.settings</c> to it, and are compared here the same way, by name alone.
     /// </summary>
     internal void RefuseSqliteKeptAndReset()
     {
-        static string Identity(ResetTable table) => SqliteFold(table.Schema ?? "main") + "." + SqliteFold(table.Name);
+        static string Identity(ResetTable table) => SqliteFold(table.Name);
+
+        var reset = Tables.Select(Identity).ToHashSet(StringComparer.Ordinal);
+        if (Retained.FirstOrDefault(t => reset.Contains(Identity(t))) is { } kept)
+        {
+            throw KeptAndReset(kept.Schema is null ? kept.Name : kept.Schema + "." + kept.Name);
+        }
+    }
+
+    /// <summary>
+    ///     MySQL: refuses when a kept table is also a reset one. A name without a schema is the connection's
+    ///     database, and with <c>lower_case_table_names</c> 1 or 2 names compare ignoring case — so
+    ///     <c>Settings</c> and <c>shop.settings</c> can be one table.
+    /// </summary>
+    /// <param name="database">The connection's current database, for names without one.</param>
+    /// <param name="ignoreCase">Whether the server compares table names ignoring case.</param>
+    internal void RefuseMySqlKeptAndReset(string? database, bool ignoreCase)
+    {
+        string Identity(ResetTable table)
+        {
+            var identity = (table.Schema ?? database ?? "") + "." + table.Name;
+            return ignoreCase ? identity.ToLowerInvariant() : identity;
+        }
 
         var reset = Tables.Select(Identity).ToHashSet(StringComparer.Ordinal);
         if (Retained.FirstOrDefault(t => reset.Contains(Identity(t))) is { } kept)

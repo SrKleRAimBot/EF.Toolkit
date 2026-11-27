@@ -1203,6 +1203,53 @@ public sealed class SqlServerEngineTests(SqlServerFixture fixture) : EngineTests
 [Collection("testing-mysql")]
 public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture)
 {
+    private sealed class KeptSetting
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class NamedSetting
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    /// <summary>One table mapped twice: once by its bare name, once with the database written out.</summary>
+    private sealed class QualifiedSettingsContext(DbContextOptions<QualifiedSettingsContext> options, string database) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<KeptSetting>().ToTable("Settings");
+            modelBuilder.Entity<NamedSetting>().ToTable("Settings", database);
+        }
+    }
+
+    [Fact]
+    public async Task A_table_kept_under_one_mapping_is_not_emptied_under_another()
+    {
+        // ExcludeEntity kept Settings, but the mapping naming the database was still deleted from: two
+        // tables to the model, one to MySQL, whose unqualified names are the current database's.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        var database = new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(Fixture.ConnectionString).Database;
+        await using var context = new QualifiedSettingsContext(
+            new DbContextOptionsBuilder<QualifiedSettingsContext>().UseMySQL(Fixture.ConnectionString).Options, database);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE Settings (Id int PRIMARY KEY, Name varchar(50) NOT NULL); INSERT INTO Settings VALUES (1, 'keep me')", Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => context.Database.ResetDataAsync(o => o.ExcludeEntity<KeptSetting>(), Ct)))
+                .Message.ShouldContain("Settings");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM Settings")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS Settings", Ct);
+        }
+    }
+
     [Fact]
     public async Task A_table_differing_only_in_case_is_not_taken_for_a_reset_one()
     {
