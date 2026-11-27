@@ -173,7 +173,19 @@ internal sealed class ResetPlan
     /// </summary>
     internal static void RefuseTruncatedDescendants(IEnumerable<DatabaseReference> descendants)
     {
-        if (descendants.FirstOrDefault() is { } descendant)
+        var rows = descendants.ToList();
+
+        // A row naming one table twice is a kept table the reset would empty all the same: excluded
+        // under one mapping's name, reset under another's that the database resolves to the same table.
+        if (rows.FirstOrDefault(r => r.Table == r.ReferencedTable) is { } both)
+        {
+            throw new InvalidOperationException(
+                $"Cannot reset '{both.Table}': it was excluded, but another mapping names the same table "
+                + "differently — with its schema written out, say, where the excluded one leaves it to the "
+                + "search_path — and would empty it. Exclude that mapping as well, or map both the same way.");
+        }
+
+        if (rows.FirstOrDefault() is { } descendant)
         {
             throw new InvalidOperationException(
                 $"Cannot reset '{descendant.ReferencedTable}': PostgreSQL truncates every table that inherits "

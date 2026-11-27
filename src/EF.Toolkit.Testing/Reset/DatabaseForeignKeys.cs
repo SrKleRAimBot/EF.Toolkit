@@ -350,7 +350,11 @@ internal static class DatabaseForeignKeys
               AND (root.relkind <> 'p'
                    OR tree.rel IN (SELECT oid FROM kept)
                    OR EXISTS (SELECT 1 FROM excluded AS e
-                              WHERE e.name = rel.relname AND (e.schema IS NULL OR e.schema = ns.nspname)));
+                              WHERE e.name = rel.relname AND (e.schema IS NULL OR e.schema = ns.nspname)))
+            -- A kept table that is also a reset one: two mappings naming the same table differently
+            -- (Settings, and public.Settings) are one table to the database. Named twice, to tell it apart.
+            UNION ALL
+            SELECT k.oid::pg_catalog.text, k.oid::pg_catalog.text, 0 FROM kept AS k WHERE k.oid IN (SELECT oid FROM reset);
             """;
     }
 

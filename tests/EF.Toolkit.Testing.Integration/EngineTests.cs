@@ -738,6 +738,54 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
         }
     }
 
+    private sealed class LocalSetting
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class PublicSetting
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    /// <summary>Two mappings of one table: one leaves the schema to the search_path, one writes it out.</summary>
+    private sealed class SettingsContext(DbContextOptions<SettingsContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<LocalSetting>().ToTable("Settings");
+            modelBuilder.Entity<PublicSetting>().ToTable("Settings", "public");
+        }
+    }
+
+    [Fact]
+    public async Task A_table_kept_under_one_mapping_is_not_emptied_under_another()
+    {
+        // ExcludeEntity kept (null, Settings), but the mapping naming public.Settings was still reset:
+        // compared by the model's names they were two tables, and TRUNCATE emptied the one kept.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new SettingsContext(
+            new DbContextOptionsBuilder<SettingsContext>().UseNpgsql(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE public.\"Settings\" (\"Id\" int PRIMARY KEY, \"Name\" text NOT NULL); "
+                + "INSERT INTO public.\"Settings\" VALUES (1, 'keep me')",
+            Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(
+                    () => context.Database.ResetDataAsync(o => o.ExcludeEntity<LocalSetting>(), Ct)))
+                .Message.ShouldContain("Settings");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM public.\"Settings\"")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS public.\"Settings\"", Ct);
+        }
+    }
+
     [Fact]
     public async Task A_table_outside_the_model_that_references_a_reset_one_stops_the_reset()
     {
