@@ -1,6 +1,7 @@
 using EFToolkit.Sql.Definitions;
 using EFToolkit.Sql.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace EFToolkit.Sql.Integration;
 
@@ -44,34 +45,26 @@ public sealed class MySqlDdlTests(MySqlFixture fixture)
     }
 
     [Fact]
-    public async Task A_migration_s_terminated_procedure_statements_run_one_by_one_as_Migrate_runs_them()
+    public async Task A_migration_creating_a_procedure_applies_through_Migrate()
     {
-        // Each operation ends in a terminator on its own line, for scripts; applied one by one, as
-        // Migrate() applies them, MySQL must still take a procedure whose body ends in END followed by it.
+        // Each operation ends in a terminator on its own line, for scripts. Applied by Migrate(), through
+        // the provider's own migration pipeline, MySQL must still take a procedure whose body ends in END.
         Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
-        var builder = new Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder("Pomelo.EntityFrameworkCore.MySql");
-        Microsoft.EntityFrameworkCore.Migrations.SqlMigrationBuilderExtensions.CreateStoredProcedure(
-            builder,
-            new StoredProcedureDefinition("migrated_p", [new SqlParameterDefinition("a", "INT")], "BEGIN SELECT a + 1 AS Value; END"));
+        var options = new DbContextOptionsBuilder<MigratedRoutinesDb>()
+            .UseMySQL(fixture.ConnectionString, m => m.MigrationsHistoryTable("__routine_history"))
+            .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.ManyServiceProvidersCreatedWarning))
+            .Options;
 
-        await using var context = fixture.CreateContext();
-        var connection = context.Database.GetDbConnection();
-        await context.Database.OpenConnectionAsync(Token);
+        await using var context = new MigratedRoutinesDb(options);
         try
         {
-            foreach (var operation in builder.Operations.Cast<Microsoft.EntityFrameworkCore.Migrations.Operations.SqlOperation>())
-            {
-                await using var command = connection.CreateCommand();
-                command.CommandText = operation.Sql;
-                await command.ExecuteNonQueryAsync(Token);
-            }
+            await context.Database.MigrateAsync(Token);
 
             (await context.Database.SqlQueryRaw<long>("CALL migrated_p(41)").ToListAsync(Token)).ShouldBe([42]);
         }
         finally
         {
-            await context.Database.ExecuteSqlRawAsync("DROP PROCEDURE IF EXISTS migrated_p", Token);
-            await context.Database.CloseConnectionAsync();
+            await context.Database.ExecuteSqlRawAsync("DROP PROCEDURE IF EXISTS migrated_p; DROP TABLE IF EXISTS __routine_history", Token);
         }
     }
 
@@ -147,4 +140,19 @@ public sealed class MySqlDdlTests(MySqlFixture fixture)
 
         await Should.ThrowAsync<Exception>(() => context.BigOrders.CountAsync(Token));
     }
+}
+
+/// <summary>A context with one migration of its own, applied by Migrate().</summary>
+public sealed class MigratedRoutinesDb(DbContextOptions<MigratedRoutinesDb> options) : DbContext(options);
+
+[Microsoft.EntityFrameworkCore.Infrastructure.DbContext(typeof(MigratedRoutinesDb))]
+[Microsoft.EntityFrameworkCore.Migrations.Migration("20260101000000_CreateRoutine")]
+public sealed class CreateRoutineMigration : Microsoft.EntityFrameworkCore.Migrations.Migration
+{
+    protected override void Up(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder migrationBuilder)
+        => migrationBuilder.CreateStoredProcedure(
+            new StoredProcedureDefinition("migrated_p", [new SqlParameterDefinition("a", "INT")], "BEGIN SELECT a + 1 AS Value; END"));
+
+    protected override void Down(Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder migrationBuilder)
+        => migrationBuilder.DropStoredProcedure("migrated_p");
 }
