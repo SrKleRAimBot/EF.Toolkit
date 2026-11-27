@@ -725,6 +725,48 @@ public sealed class TestDataTests
         (await fresh.Set<Room>().SingleAsync(Ct)).FloorId.ShouldBe((await fresh.Set<Floor>().SingleAsync(Ct)).Id);
     }
 
+    public sealed class Ledger
+    {
+        public byte[] Code { get; set; } = [];
+        public string Name { get; set; } = "";
+    }
+
+    public sealed class Posting
+    {
+        public int Id { get; set; }
+        public byte[] LedgerCode { get; set; } = [0];
+        public Ledger Ledger { get; set; } = null!;
+    }
+
+    public sealed class LedgerContext(DbContextOptions<LedgerContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<Ledger>().HasKey(l => l.Code);
+            modelBuilder.Entity<Posting>().HasOne(p => p.Ledger).WithMany().HasForeignKey(p => p.LedgerCode).IsRequired();
+        }
+    }
+
+    [Fact]
+    public async Task A_binary_foreign_key_changed_in_place_counts_as_set()
+    {
+        // The recorded value was the same array the callback then changed, so it read as unchanged: the
+        // generated ledger stayed and EF saved its code over the one the test chose.
+        await using var db = await SqliteTestDatabase<LedgerContext>.CreateAsync(cancellationToken: Ct);
+        await using (var arrange = db.CreateContext())
+        {
+            arrange.Add(new Ledger { Code = [42], Name = "main" });
+            await arrange.SaveChangesAsync(Ct);
+        }
+
+        await using var context = db.CreateContext();
+        await context.CreateAsync<Posting>(p => p.LedgerCode[0] = 42, cancellationToken: Ct);
+
+        await using var fresh = db.CreateContext();
+        (await fresh.Set<Posting>().SingleAsync(Ct)).LedgerCode.ShouldBe(new byte[] { 42 });
+        (await fresh.Set<Ledger>().CountAsync(Ct)).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {

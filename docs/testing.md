@@ -305,11 +305,12 @@ What is left alone:
 - **Foreign-key properties.** A required reference is satisfied by building the principal instead,
   recursively, up to a depth of 3. Nothing is reused: each entity gets principals of its own. To share
   one, set the navigation — or the foreign key, in which case the generated principal is dropped
-  again so the key you chose is the one that is saved — on an owned reference too, and on a generated principal
-  (`o => o.Customer.RegionId = east.Id`). A key counts as yours when the callback changed it, so an
-  initializer such as `public int RegionId { get; set; } = -1;` is not taken for a choice. A key equal to its type's default (`0`, an
-  empty `Guid`) cannot be told from one left unset, so to point at a principal keyed by it, null the
-  navigation as well: `o => { o.Customer = null!; o.CustomerId = 0; }` saves no generated customer.
+  again so the key you chose is the one that is saved — on an owned reference too, and on a generated
+  principal (`o => o.Customer.RegionId = east.Id`). A key counts as yours when the callback changed it
+  (in place too, for a `byte[]`), so an initializer such as `public int RegionId { get; set; } = -1;`
+  is not taken for a choice. Assigning the value the key already had changes nothing — most often `0`
+  over `0`, or an empty `Guid` — so to point at a principal keyed by that, null the navigation as
+  well: `o => { o.Customer = null!; o.CustomerId = 0; }` saves no generated customer.
 - **Types it does not know** — including a value-converted property whose CLR type is not in the table
   above, such as a strongly typed id. These keep whatever the constructor gave them.
 

@@ -295,14 +295,18 @@ public sealed class TestData
             var values = foreignKey.Properties.Select(p => p.IsShadowProperty() ? null : GetValue(entity, p)).ToArray();
             if (record)
             {
-                recorded![foreignKey] = values;
+                // A copy, through the key's comparer: a byte[] the callback changes in place would
+                // otherwise change the record too.
+                recorded![foreignKey] = values
+                    .Select((value, i) => value is null ? null : foreignKey.Properties[i].GetKeyValueComparer().Snapshot(value))
+                    .ToArray();
             }
 
             // An entity the callback put in the graph has nothing recorded: there, only a key that is
             // not the CLR default can have been set.
             var keySet = !record
                 && (recorded?.GetValueOrDefault(foreignKey) is { } old
-                    ? values.Where((value, i) => !Equals(value, old[i])).Any()
+                    ? values.Where((value, i) => !foreignKey.Properties[i].GetKeyValueComparer().Equals(value, old[i])).Any()
                     : values.Where((value, i) => value is not null && !value.Equals(DefaultOf(foreignKey.Properties[i].ClrType))).Any());
 
             if (keySet)
