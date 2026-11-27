@@ -291,7 +291,7 @@ first, then the negative ones, then 0), a `bool` two.
 | `decimal` | the counter, kept inside the column's precision — `decimal(5,2)` never overflows; a PostgreSQL negative scale such as `numeric(2,-3)` steps by its rounding unit |
 | `Guid` | from the seeded generator |
 | `DateTime`, `DateTimeOffset` | from 2000-01-01, UTC (unspecified kind for an Npgsql `timestamp without time zone` column) |
-| `DateOnly`, `TimeOnly`, `TimeSpan` | from the counter, inside every engine's range |
+| `DateOnly`, `TimeOnly`, `TimeSpan` | from the counter, inside every engine's range: a `DateOnly` a day apart, up to the year 2999; a `TimeOnly` or `TimeSpan` a second apart, so within one day — they repeat after 86,400 values of the shared counter, and a unique time column can be tripped past that |
 | `bool`, enums | drawn from the seeded generator; enums only ever get a defined member |
 | `byte[]` | up to eight bytes of the counter, cut to `MaxLength` |
 | primitive collections | one element |
