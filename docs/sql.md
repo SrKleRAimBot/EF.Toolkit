@@ -193,11 +193,13 @@ call cannot be composed over — `EXEC` and `CALL` cannot appear in a `FROM` cla
 to one would fail at execution. On PostgreSQL the rows are the single row of `OUT` / `INOUT` values that
 `CALL` returns; on SQL Server and MySQL, the procedure's first result set. For a scalar `T` the single
 column is read whatever it is named — EF falls back to the first column when the query is not composed,
-and this one never is. (`QueryFunction<T>` returns a query you may compose over: with a scalar `T` —
-a table-valued function returning one column — read directly, the column may have any name too, but to
-add LINQ to it — `Where`, `OrderBy` — name the column `Value`, which is what EF's outer query refers
-to. `QueryFunction` selects `FROM` the function, which SQL Server allows only for a table-valued one;
-call a SQL Server scalar function through `SqlQuery`: `SELECT dbo.AddTax(@amount) AS [Value]`.)
+and this one never is. (`QueryFunction<T>` returns a query you may compose over: with a scalar `T` — a
+function whose result is one column — read directly, the column may have any name too, but to add LINQ
+to it — `Where`, `OrderBy` — name the column `Value`, which is what EF's outer query refers to.
+`QueryFunction` selects `FROM` the function. PostgreSQL takes a scalar function there too, as a
+one-column result, so `QueryFunction<decimal>("add_tax", …)` works; SQL Server takes only a
+table-valued one, so call a SQL Server scalar function through `SqlQuery`:
+`SELECT dbo.AddTax(@amount) AS [Value]`.)
 
 ## Functions
 
@@ -221,9 +223,9 @@ migrationBuilder.CreateFunction(FunctionDefinition.Table(
 | SQLite | throws | throws |
 
 `characteristics` is inserted verbatim where each engine takes routine options: after `LANGUAGE` on
-PostgreSQL (`STABLE`, `IMMUTABLE PARALLEL SAFE`), after `RETURNS` on MySQL (`DETERMINISTIC`,
-`READS SQL DATA` — one of which MySQL requires when binary logging is on), and as `WITH …` before `AS`
-on SQL Server. Function parameters are input-only; an `Out` parameter is refused in favour of a
+PostgreSQL (`STABLE`, `IMMUTABLE PARALLEL SAFE`), after `RETURNS` on MySQL (`DETERMINISTIC`, `NO SQL`,
+`READS SQL DATA` — with binary logging on, MySQL refuses a function that declares none of the three,
+unless `log_bin_trust_function_creators` is set), and as `WITH …` before `AS` on SQL Server. Function parameters are input-only; an `Out` parameter is refused in favour of a
 procedure. SQL Server table functions are always inline, which is the kind its optimiser expands into
 the calling query; the column list is used only by PostgreSQL.
 

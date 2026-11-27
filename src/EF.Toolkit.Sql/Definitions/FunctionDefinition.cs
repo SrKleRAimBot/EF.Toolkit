@@ -87,8 +87,9 @@ public sealed class FunctionDefinition : IDatabaseObject
     /// <summary>
     ///     Engine-specific routine options, inserted verbatim where the engine takes them:
     ///     <c>STABLE</c> or <c>IMMUTABLE PARALLEL SAFE</c> after <c>LANGUAGE</c> on PostgreSQL,
-    ///     <c>DETERMINISTIC</c> or <c>READS SQL DATA</c> after <c>RETURNS</c> on MySQL (which requires
-    ///     one of them when binary logging is on), and <c>WITH SCHEMABINDING</c>-style options as
+    ///     <c>DETERMINISTIC</c>, <c>NO SQL</c> or <c>READS SQL DATA</c> after <c>RETURNS</c> on MySQL
+    ///     (with binary logging on, one of the three is required unless
+    ///     <c>log_bin_trust_function_creators</c> is set), and <c>WITH SCHEMABINDING</c>-style options as
     ///     <c>WITH ...</c> before <c>AS</c> on SQL Server.
     /// </summary>
     public string? Characteristics { get; }

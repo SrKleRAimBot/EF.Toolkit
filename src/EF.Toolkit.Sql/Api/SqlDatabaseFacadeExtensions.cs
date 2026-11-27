@@ -187,13 +187,14 @@ public static class SqlDatabaseFacadeExtensions
         return database.SqlQueryRaw<T>(sql, Parameters(arguments)).ToListAsync(cancellationToken);
     }
 
-    /// <summary>Queries a table-valued function as a composable query.</summary>
+    /// <summary>Queries a function's result, selected <c>FROM</c> it, as a composable query.</summary>
     /// <typeparam name="T">
     ///     The row type: an unmapped class whose properties match the function's columns, or a scalar
     ///     for a function returning one column. Read directly, that column may have any name; to compose
     ///     LINQ over the query, name it <c>Value</c>, which EF's outer query refers to. The function is
-    ///     selected <c>FROM</c>, so on SQL Server it must be table-valued: call a scalar one through
-    ///     <c>SqlQuery</c> (<c>SELECT dbo.AddTax(@amount) AS [Value]</c>).
+    ///     selected <c>FROM</c>: PostgreSQL takes a scalar function there as a one-column result, but SQL
+    ///     Server only a table-valued one, so call a SQL Server scalar function through <c>SqlQuery</c>
+    ///     (<c>SELECT dbo.AddTax(@amount) AS [Value]</c>).
     /// </typeparam>
     /// <param name="database">The context's database facade.</param>
     /// <param name="name">The function name.</param>
