@@ -602,10 +602,18 @@ public sealed class TestDataTests
         (await fresh.Set<Branch>().CountAsync(Ct)).ShouldBe(1);
     }
 
+    public sealed class Region
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
     public sealed class Warehouse
     {
         public int Id { get; set; }
         public string Name { get; set; } = "";
+        public int RegionId { get; set; }
+        public Region Region { get; set; } = null!;
     }
 
     public sealed class Shipping
@@ -638,7 +646,7 @@ public sealed class TestDataTests
         await using var db = await SqliteTestDatabase<ParcelContext>.CreateAsync(cancellationToken: Ct);
         await using (var arrange = db.CreateContext())
         {
-            arrange.Add(new Warehouse { Id = 42, Name = "north" });
+            arrange.Add(new Warehouse { Id = 42, Name = "north", Region = new Region { Name = "west" } });
             await arrange.SaveChangesAsync(Ct);
         }
 
@@ -648,6 +656,26 @@ public sealed class TestDataTests
         await using var fresh = db.CreateContext();
         (await fresh.Set<Parcel>().SingleAsync(Ct)).Shipping.WarehouseId.ShouldBe(42);
         (await fresh.Set<Warehouse>().CountAsync(Ct)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_foreign_key_set_on_a_generated_principal_drops_the_principal_generated_for_that()
+    {
+        // The cleanup kept the generated warehouse but never looked inside it: the region built for it
+        // stayed, and EF saved its key over the 42 the test chose.
+        await using var db = await SqliteTestDatabase<ParcelContext>.CreateAsync(cancellationToken: Ct);
+        await using (var arrange = db.CreateContext())
+        {
+            arrange.Add(new Region { Id = 42, Name = "east" });
+            await arrange.SaveChangesAsync(Ct);
+        }
+
+        await using var context = db.CreateContext();
+        await context.CreateAsync<Parcel>(p => p.Shipping.Warehouse.RegionId = 42, cancellationToken: Ct);
+
+        await using var fresh = db.CreateContext();
+        (await fresh.Set<Warehouse>().SingleAsync(Ct)).RegionId.ShouldBe(42);
+        (await fresh.Set<Region>().CountAsync(Ct)).ShouldBe(1);
     }
 
     [Fact]

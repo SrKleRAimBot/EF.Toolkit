@@ -105,7 +105,7 @@ public sealed class TestData
             if (customize is not null)
             {
                 customize(entity);
-                DropReplacedPrincipals(entity, entityType, built);
+                DropReplacedPrincipals(entity, entityType, built, new HashSet<object>(ReferenceEqualityComparer.Instance));
             }
 
             return entity;
@@ -252,10 +252,19 @@ public sealed class TestData
     ///     A generated principal is dropped again when the test set the foreign key itself. Left
     ///     attached, it would be inserted and EF would overwrite the key the test chose with the new
     ///     principal's, so <c>o => o.CustomerId = alice.Id</c> would silently not mean Alice. A
-    ///     principal the test attached itself is never dropped. Owned references are checked the same way.
+    ///     principal the test attached itself is never dropped. Owned references and the generated
+    ///     principals that stay are checked the same way, so <c>o => o.Customer.RegionId = east.Id</c>
+    ///     holds too.
     /// </summary>
-    private static void DropReplacedPrincipals(object entity, IEntityType entityType, HashSet<object> built)
+    private static void DropReplacedPrincipals(
+        object entity, IEntityType entityType, HashSet<object> built, HashSet<object> visited)
     {
+        // The test can wire generated entities into a cycle; each is looked at once.
+        if (!visited.Add(entity))
+        {
+            return;
+        }
+
         foreach (var foreignKey in entityType.GetForeignKeys())
         {
             if (foreignKey.IsOwnership
@@ -277,6 +286,11 @@ public sealed class TestData
             {
                 SetValue(entity, navigation, null);
             }
+            else
+            {
+                var principalType = entityType.Model.FindEntityType(principal.GetType()) ?? foreignKey.PrincipalEntityType;
+                DropReplacedPrincipals(principal, principalType, built, visited);
+            }
         }
 
         // An owned reference was built with principals of its own, and the test can set its keys too.
@@ -287,7 +301,7 @@ public sealed class TestData
                 && !navigation.IsCollection
                 && GetValue(entity, navigation) is { } owned)
             {
-                DropReplacedPrincipals(owned, navigation.TargetEntityType, built);
+                DropReplacedPrincipals(owned, navigation.TargetEntityType, built, visited);
             }
         }
     }
