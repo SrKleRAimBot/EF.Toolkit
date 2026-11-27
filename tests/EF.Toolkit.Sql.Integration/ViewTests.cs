@@ -99,12 +99,16 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
         }
     }
 
-    [Fact]
-    public async Task A_dollar_quote_with_a_non_ascii_tag_keeps_its_value()
+    [Theory]
+    [InlineData("SELECT $\u00E9$x;-- tail$\u00E9$ AS \"Value\"")]
+    [InlineData("SELECT $\u00A0$x;-- tail$\u00A0$ AS \"Value\"")]
+    [InlineData("SELECT 1 AS a$t$, $t$x;-- tail$t$ AS \"Value\"")]
+    public async Task A_dollar_quote_with_a_non_ascii_tag_keeps_its_value(string query)
     {
-        // $é$ went unrecognised as a quote: the semicolon inside it was taken for a trailing one.
+        // $é$ and $\u00A0$ went unrecognised as quotes, and the $t$ ending the identifier a$t$ was taken
+        // for one: either way the semicolon inside the quoted text was taken for a trailing one.
         await using var context = fixture.CreateAdminContext();
-        var view = new ViewDefinition("dollar_value", "SELECT $\u00E9$x;-- tail$\u00E9$ AS \"Value\"");
+        var view = new ViewDefinition("dollar_value", query);
         try
         {
             await context.Database.CreateDatabaseObjectsAsync(view);

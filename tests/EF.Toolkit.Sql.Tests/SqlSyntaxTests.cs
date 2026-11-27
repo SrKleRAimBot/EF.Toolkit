@@ -95,6 +95,9 @@ public sealed class SqlSyntaxTests
     [InlineData("SELECT 1 AS value\u00A0;", "SELECT 1 AS value\u00A0")]
     [InlineData("SELECT $\u00E9$x;-- tail$\u00E9$ AS value", "SELECT $\u00E9$x;-- tail$\u00E9$ AS value")]
     [InlineData("SELECT $1, $2;", "SELECT $1, $2")]
+    [InlineData("SELECT $\u00A0$x;-- tail$\u00A0$ AS value", "SELECT $\u00A0$x;-- tail$\u00A0$ AS value")]
+    [InlineData("SELECT 1 AS a$t$, $t$x;-- tail$t$ AS value", "SELECT 1 AS a$t$, $t$x;-- tail$t$ AS value")]
+    [InlineData("SELECT 1 AS a$t$;", "SELECT 1 AS a$t$")]
     public void Queries_lose_surrounding_whitespace_and_trailing_semicolons(string sql, string expected)
         => SqlSyntax.TrimQuery(sql).ShouldBe(expected);
 

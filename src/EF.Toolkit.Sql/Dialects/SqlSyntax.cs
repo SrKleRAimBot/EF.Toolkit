@@ -233,6 +233,16 @@ internal static partial class SqlSyntax
                 semicolons.Clear();
                 i = close + 1;
             }
+            else if (char.IsLetter(c) || c == '_' || c > '\x7F')
+            {
+                // A word — an unquoted identifier or keyword — is one token, $ and all: a$t$ is an
+                // identifier on PostgreSQL, and its $t$ must not be taken to open a dollar quote.
+                semicolons.Clear();
+                while (i < sql.Length && (char.IsLetterOrDigit(sql[i]) || sql[i] is '_' or '$' || sql[i] > '\x7F'))
+                {
+                    i++;
+                }
+            }
             else if (c == '$' && DollarTag().Match(sql, i) is { Success: true } tag)
             {
                 var close = sql.IndexOf(tag.Value, i + tag.Length, StringComparison.Ordinal);
@@ -255,10 +265,10 @@ internal static partial class SqlSyntax
     }
 
     // $$ or $tag$ opening a dollar-quoted body. Wider than PostgreSQL's own tag syntax — any run with
-    // no $, whitespace or quote, $é$ included — on purpose: taking too much for a quote can only keep
+    // no $, SQL whitespace or quote, $é$ and a no-break space included — on purpose: taking too much for a quote can only keep
     // a semicolon (or end the scan unfinished, for the plain trim), while missing one could take a
     // semicolon out of the quoted text. $1 alone is a parameter: it has no closing $.
-    [GeneratedRegex(@"\G\$[^$\s'""`;]*\$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\G\$[^$ \t\n\r\f\v'""`;]*\$", RegexOptions.CultureInvariant)]
     private static partial Regex DollarTag();
 
     /// <summary>
