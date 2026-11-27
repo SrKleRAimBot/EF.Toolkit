@@ -529,6 +529,37 @@ public sealed class TestDataTests
         (await context.Set<Promo>().Select(p => p.Rate).Distinct().CountAsync(Ct)).ShouldBe(2);
     }
 
+    public sealed class Tier
+    {
+        public int Id { get; set; }
+        public byte Level { get; set; }
+        public sbyte Step { get; set; }
+    }
+
+    public sealed class TierContext(DbContextOptions<TierContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Tier>(b =>
+            {
+                b.HasIndex(t => t.Level).IsUnique();
+                b.HasIndex(t => t.Step).IsUnique();
+            });
+    }
+
+    [Fact]
+    public async Task A_narrow_integer_column_gets_every_value_of_its_type()
+    {
+        // The counter was taken modulo 255 and 127, the types' maxima: 255 and 127 themselves never came
+        // up, nor did any negative sbyte, so row 256 repeated a Level and row 128 a Step.
+        await using var db = await SqliteTestDatabase<TierContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+
+        var tiers = await context.CreateManyAsync<Tier>(256, cancellationToken: Ct);
+
+        tiers.Select(t => t.Level).Distinct().Count().ShouldBe(256);
+        tiers.Select(t => t.Step).Distinct().Count().ShouldBe(256);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {

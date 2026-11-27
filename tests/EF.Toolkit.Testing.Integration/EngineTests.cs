@@ -392,6 +392,55 @@ public sealed class PostgreSqlEngineTests(PostgreSqlFixture fixture) : EngineTes
         }
     }
 
+    private sealed class DottedFirst
+    {
+        public int Id { get; set; }
+        public decimal Rate { get; set; }
+    }
+
+    private sealed class DottedSecond
+    {
+        public int Id { get; set; }
+        public decimal Rate { get; set; }
+    }
+
+    /// <summary>"a.b"."c" and "a"."b.c": two tables whose schema-qualified names read the same.</summary>
+    private sealed class DottedContext(DbContextOptions<DottedContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<DottedFirst>(b => { b.ToTable("c", "a.b"); b.Property(d => d.Rate).HasPrecision(2, 2); });
+            modelBuilder.Entity<DottedSecond>(b => { b.ToTable("b.c", "a"); b.Property(d => d.Rate).HasPrecision(2, 2); });
+        }
+    }
+
+    [Fact]
+    public async Task Tables_whose_qualified_names_read_alike_count_their_bounded_columns_apart()
+    {
+        // Both were counted under "a.b.c": one row in the first, 99 in the second, and the next in the
+        // first repeated the first row's rate.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new DottedContext(
+            new DbContextOptionsBuilder<DottedContext>().UseNpgsql(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE SCHEMA \"a.b\"; CREATE SCHEMA \"a\"; "
+                + "CREATE TABLE \"a.b\".\"c\" (\"Id\" serial PRIMARY KEY, \"Rate\" numeric(2,2) NOT NULL UNIQUE); "
+                + "CREATE TABLE \"a\".\"b.c\" (\"Id\" serial PRIMARY KEY, \"Rate\" numeric(2,2) NOT NULL UNIQUE)",
+            Ct);
+        try
+        {
+            await context.CreateAsync<DottedFirst>(cancellationToken: Ct);
+            await context.CreateManyAsync<DottedSecond>(99, cancellationToken: Ct);
+            await context.CreateAsync<DottedFirst>(cancellationToken: Ct);
+
+            (await context.Set<DottedFirst>().CountAsync(Ct)).ShouldBe(2);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS \"a.b\" CASCADE; DROP SCHEMA IF EXISTS \"a\" CASCADE", Ct);
+        }
+    }
+
     [Fact]
     public async Task A_truncate_trigger_writing_into_another_reset_table_fails_the_reset()
     {

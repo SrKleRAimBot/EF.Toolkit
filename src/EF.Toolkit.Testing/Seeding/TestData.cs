@@ -390,10 +390,11 @@ public sealed class TestData
         return type switch
         {
             _ when type == typeof(bool) => _random.Next(2) == 0,
-            _ when type == typeof(byte) => (byte)(Bounded(n, property) % byte.MaxValue),
-            _ when type == typeof(sbyte) => (sbyte)(Bounded(n, property) % sbyte.MaxValue),
-            _ when type == typeof(short) => (short)(Bounded(n, property) % short.MaxValue),
-            _ when type == typeof(ushort) => (ushort)(Bounded(n, property) % ushort.MaxValue),
+            // Every value of the type, the positive ones first: 1, 2, … 127, then -128 … -1, then 0.
+            _ when type == typeof(byte) => unchecked((byte)Bounded(n, property)),
+            _ when type == typeof(sbyte) => unchecked((sbyte)Bounded(n, property)),
+            _ when type == typeof(short) => unchecked((short)Bounded(n, property)),
+            _ when type == typeof(ushort) => unchecked((ushort)Bounded(n, property)),
             _ when type == typeof(int) => (int)(n % int.MaxValue),
             _ when type == typeof(uint) => (uint)(n % uint.MaxValue),
             _ when type == typeof(long) => n,
@@ -425,7 +426,7 @@ public sealed class TestData
             ? null
             : _filling?.GetTableMappings().SelectMany(m => m.ColumnMappings).FirstOrDefault(c => c.Property == property)?.Column;
         var key = column is not null
-            ? ((object)column.Table.SchemaQualifiedName, column.Name)
+            ? ((object)(column.Table.Schema, column.Table.Name), column.Name)
             : (property.DeclaringType.ContainingEntityType.GetRootType(), property.GetColumnName());
         var next = _boundedCounters.GetValueOrDefault(key) + 1;
         _boundedCounters[key] = next;

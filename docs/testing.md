@@ -281,7 +281,8 @@ across strings, `int`s, `long`s, dates and the rest, so two entities never share
 with only so many values — a `decimal` with a precision, `byte`, `sbyte`, `short`, `ushort` — counts on
 its own instead, per table and column: it gets every one of its values before the first comes round
 again, however many other values the entity has, and the same value can turn up in another column. Past
-them it repeats: a `decimal(2,2)` holds 100, a `bool` two.
+them it repeats: a `decimal(2,2)` holds 100, a `byte` 256 and an `sbyte` 256 (the positive values
+first, then the negative ones, then 0), a `bool` two.
 
 | Type | Value |
 | --- | --- |
