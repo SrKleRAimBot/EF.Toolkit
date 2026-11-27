@@ -495,7 +495,9 @@ Objects are created in the order given and dropped in reverse, so list dependenc
 statement is rendered before the first one runs, so an object the engine cannot have refuses the whole
 call without leaving half of it applied. The statements then run as **one transaction** — or, inside
 yours, under a savepoint — so a statement the database rejects rolls back the ones before it, and your
-transaction is left as it was and still usable. A transaction that cannot take a savepoint — an ambient
+transaction is left as it was and still usable, unless the error itself ends it: SQL Server under
+`XACT_ABORT`, say, dooms the whole transaction, and then the call throws an `AggregateException` with
+the statement's error first, and your transaction can only be rolled back. A transaction that cannot take a savepoint — an ambient
 `TransactionScope`, or SQL Server with `MultipleActiveResultSets`, where EF turns savepoints off — gets
 the statements as they are: if one fails, the ones before it are part of your transaction, which may
 still be committable, so roll the whole transaction back rather than commit it. That

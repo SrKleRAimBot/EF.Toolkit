@@ -83,6 +83,44 @@ public sealed class SqliteRuntimeTests : IAsyncLifetime
         (await _context.ActiveCustomers.CountAsync(TestContext.Current.CancellationToken)).ShouldBe(2);
     }
 
+    private sealed class CancelAfterCreate(CancellationTokenSource source) : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        public override ValueTask<int> NonQueryExecutedAsync(
+            System.Data.Common.DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData eventData,
+            int result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("CREATE VIEW", StringComparison.Ordinal))
+            {
+                source.Cancel();
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    [Fact]
+    public async Task Cancelling_after_the_last_statement_ran_does_not_report_a_failure_that_did_not_happen()
+    {
+        // The last statement had run; releasing the savepoint with the cancelled token threw, so the
+        // caller was told the call failed while the view stood in their transaction to be committed.
+        using var source = new CancellationTokenSource();
+        await using var context = new ShopContext(new DbContextOptionsBuilder<ShopContext>()
+            .UseSqlite(_connection)
+            .AddInterceptors(new CancelAfterCreate(source))
+            .Options);
+
+        await using (var transaction = await context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken))
+        {
+            await context.Database.CreateDatabaseObjectsAsync([ActiveCustomers], source.Token);
+            await transaction.CommitAsync(TestContext.Current.CancellationToken);
+        }
+
+        source.IsCancellationRequested.ShouldBeTrue();
+        (await _context.ActiveCustomers.CountAsync(TestContext.Current.CancellationToken)).ShouldBe(2);
+    }
+
     [Fact]
     public async Task A_callers_transaction_is_joined_rather_than_nested()
     {

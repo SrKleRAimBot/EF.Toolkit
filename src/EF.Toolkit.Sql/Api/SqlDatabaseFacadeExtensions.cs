@@ -326,13 +326,30 @@ public static class SqlDatabaseFacadeExtensions
             {
                 await ExecuteEachAsync(database, statements, cancellationToken).ConfigureAwait(false);
             }
-            catch
+            catch (Exception error)
             {
-                await current.RollbackToSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    await current.RollbackToSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception rollbackError)
+                {
+                    // An error that dooms the transaction — SQL Server under XACT_ABORT — leaves no
+                    // savepoint to go back to. The statement's error is the one that explains it; the
+                    // transaction cannot be committed either way.
+                    throw new AggregateException(
+                        "A statement failed and the transaction could not be rolled back to the savepoint "
+                        + "taken before it; the transaction can no longer be committed.",
+                        error,
+                        rollbackError);
+                }
+
                 throw;
             }
 
-            await current.ReleaseSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
+            // Every statement has run: a cancellation now would report a failure for changes that are
+            // already in the caller's transaction, to be committed. The release is not cancellable.
+            await current.ReleaseSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
             return;
         }
 

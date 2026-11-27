@@ -41,4 +41,38 @@ public sealed class SqlServerObjectTests(SqlServerFixture fixture)
             await context.Database.ExecuteSqlRawAsync("DROP VIEW IF EXISTS NoteIds; DROP TABLE IF EXISTS Notes", Token);
         }
     }
+
+    private sealed class FailingObject : IDatabaseObject
+    {
+        public IReadOnlyList<string> GetCreateSql(SqlDialect dialect)
+            => ["CREATE VIEW Doomed AS SELECT 1 AS One", "THROW 50001, 'the object refuses', 1;"];
+
+        public IReadOnlyList<string> GetDropSql(SqlDialect dialect) => ["DROP VIEW IF EXISTS Doomed"];
+    }
+
+    [Fact]
+    public async Task A_statement_error_that_dooms_the_transaction_is_the_error_reported()
+    {
+        // Under XACT_ABORT the THROW dooms the caller's transaction, and rolling back to the savepoint
+        // fails too: that second error replaced the statement's, which was the one that explained it.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        await using var context = fixture.CreateContext();
+        await context.Database.OpenConnectionAsync(Token);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("SET XACT_ABORT ON", Token);
+            await using var transaction = await context.Database.BeginTransactionAsync(Token);
+
+            var error = await Should.ThrowAsync<AggregateException>(
+                () => context.Database.CreateDatabaseObjectsAsync([new FailingObject()], Token));
+
+            error.InnerExceptions[0].ShouldBeOfType<Microsoft.Data.SqlClient.SqlException>().Number.ShouldBe(50001);
+            await transaction.RollbackAsync(Token);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("SET XACT_ABORT OFF; DROP VIEW IF EXISTS Doomed", Token);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
 }
