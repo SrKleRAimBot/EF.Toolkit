@@ -92,7 +92,7 @@ public sealed class SqlServerSecurityPolicy : IDatabaseObject
         Name = name;
         Table = table;
         FunctionName = functionName;
-        Parameters = parameterList;
+        Parameters = Array.AsReadOnly(parameterList);
         Predicate = predicate.Trim();
         Schema = SqlSyntax.OptionalName(schema, nameof(schema)) ?? DefaultSchema;
         SecuritySchema = SqlSyntax.OptionalName(securitySchema, nameof(securitySchema)) ?? Schema;

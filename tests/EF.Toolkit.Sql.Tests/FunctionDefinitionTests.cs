@@ -1,4 +1,5 @@
 using EFToolkit.Sql.Definitions;
+using EFToolkit.Sql.Security;
 
 namespace EFToolkit.Sql.Tests;
 
@@ -14,6 +15,20 @@ public sealed class FunctionDefinitionTests
         [new SqlParameterDefinition("tenant", "integer")],
         [new SqlColumnDefinition("Id", "integer"), new SqlColumnDefinition("Total", "numeric")],
         "SELECT \"Id\", \"Total\" FROM \"Orders\" WHERE \"TenantId\" = tenant;");
+
+    [Fact]
+    public void Validated_lists_cannot_be_changed_by_casting_them_back()
+    {
+        // The lists were the validated arrays themselves: a cast back to an array could swap in a null or an
+        // output parameter after validation.
+        var procedure = new StoredProcedureDefinition("p", [new SqlParameterDefinition("a", "int")], "SELECT 1;");
+        var policy = new SqlServerSecurityPolicy("p", "t", "fn", [new SqlServerPredicateParameter("a", "int", "A")], "@a = 1");
+
+        Scalar.Parameters.ShouldNotBeAssignableTo<SqlParameterDefinition[]>();
+        Table.Columns.ShouldNotBeAssignableTo<SqlColumnDefinition[]>();
+        procedure.Parameters.ShouldNotBeAssignableTo<SqlParameterDefinition[]>();
+        policy.Parameters.ShouldNotBeAssignableTo<SqlServerPredicateParameter[]>();
+    }
 
     [Fact]
     public void PostgreSql_scalar()

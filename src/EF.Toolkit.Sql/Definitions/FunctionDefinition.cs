@@ -48,9 +48,9 @@ public sealed class FunctionDefinition : IDatabaseObject
 
         Kind = kind;
         Name = name;
-        Parameters = RoutineSyntax.CopyParameters(parameters, allowOutput: false, nameof(parameters));
+        Parameters = Array.AsReadOnly(RoutineSyntax.CopyParameters(parameters, allowOutput: false, nameof(parameters)));
         ReturnType = returnType?.Trim();
-        Columns = columns?.ToArray() ?? [];
+        Columns = Array.AsReadOnly(columns?.ToArray() ?? []);
         Body = body.Trim();
         Schema = SqlSyntax.OptionalName(schema, nameof(schema));
         Language = SqlSyntax.RequireSimpleIdentifier(language, nameof(language));

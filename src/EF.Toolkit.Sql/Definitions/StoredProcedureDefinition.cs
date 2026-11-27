@@ -45,7 +45,7 @@ public sealed class StoredProcedureDefinition : IDatabaseObject
         ArgumentException.ThrowIfNullOrWhiteSpace(body);
 
         Name = name;
-        Parameters = RoutineSyntax.CopyParameters(parameters, allowOutput: true, nameof(parameters));
+        Parameters = Array.AsReadOnly(RoutineSyntax.CopyParameters(parameters, allowOutput: true, nameof(parameters)));
         Body = body.Trim();
         Schema = SqlSyntax.OptionalName(schema, nameof(schema));
         Language = SqlSyntax.RequireSimpleIdentifier(language, nameof(language));
