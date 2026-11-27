@@ -252,7 +252,7 @@ public sealed class TestData
     ///     A generated principal is dropped again when the test set the foreign key itself. Left
     ///     attached, it would be inserted and EF would overwrite the key the test chose with the new
     ///     principal's, so <c>o => o.CustomerId = alice.Id</c> would silently not mean Alice. A
-    ///     principal the test attached itself is never dropped.
+    ///     principal the test attached itself is never dropped. Owned references are checked the same way.
     /// </summary>
     private static void DropReplacedPrincipals(object entity, IEntityType entityType, HashSet<object> built)
     {
@@ -276,6 +276,18 @@ public sealed class TestData
             if (keySet)
             {
                 SetValue(entity, navigation, null);
+            }
+        }
+
+        // An owned reference was built with principals of its own, and the test can set its keys too.
+        foreach (var navigation in entityType.GetNavigations())
+        {
+            if (navigation.ForeignKey.IsOwnership
+                && !navigation.IsOnDependent
+                && !navigation.IsCollection
+                && GetValue(entity, navigation) is { } owned)
+            {
+                DropReplacedPrincipals(owned, navigation.TargetEntityType, built);
             }
         }
     }

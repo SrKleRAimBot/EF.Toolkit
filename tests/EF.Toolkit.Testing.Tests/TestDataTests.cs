@@ -602,6 +602,54 @@ public sealed class TestDataTests
         (await fresh.Set<Branch>().CountAsync(Ct)).ShouldBe(1);
     }
 
+    public sealed class Warehouse
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    public sealed class Shipping
+    {
+        public int WarehouseId { get; set; }
+        public Warehouse Warehouse { get; set; } = null!;
+    }
+
+    public sealed class Parcel
+    {
+        public int Id { get; set; }
+        public Shipping Shipping { get; set; } = null!;
+    }
+
+    public sealed class ParcelContext(DbContextOptions<ParcelContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<Parcel>().OwnsOne(p => p.Shipping, s =>
+            {
+                s.HasOne(x => x.Warehouse).WithMany().HasForeignKey(x => x.WarehouseId).IsRequired();
+                s.WithOwner();
+            }).Navigation(p => p.Shipping).IsRequired();
+    }
+
+    [Fact]
+    public async Task A_foreign_key_set_on_an_owned_reference_drops_the_principal_generated_for_it()
+    {
+        // Only the root's own foreign keys were checked: the warehouse built for the owned Shipping stayed,
+        // and EF saved its key over the 42 the test chose.
+        await using var db = await SqliteTestDatabase<ParcelContext>.CreateAsync(cancellationToken: Ct);
+        await using (var arrange = db.CreateContext())
+        {
+            arrange.Add(new Warehouse { Id = 42, Name = "north" });
+            await arrange.SaveChangesAsync(Ct);
+        }
+
+        await using var context = db.CreateContext();
+        await context.CreateAsync<Parcel>(p => p.Shipping.WarehouseId = 42, cancellationToken: Ct);
+
+        await using var fresh = db.CreateContext();
+        (await fresh.Set<Parcel>().SingleAsync(Ct)).Shipping.WarehouseId.ShouldBe(42);
+        (await fresh.Set<Warehouse>().CountAsync(Ct)).ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_context_from_an_isolated_scope_uses_the_database_builder_too()
     {
