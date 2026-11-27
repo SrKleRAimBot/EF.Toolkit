@@ -72,7 +72,7 @@ await db.SaveChangesAsync();
 // UPDATE posts SET deleted_at = @now, updated_at = @now WHERE id = @id
 
 await db.Posts.AnyAsync(p => p.Id == post.Id);   // false
-db.Entry(post).State;                            // Detached, as after a real delete
+var state = db.Entry(post).State;                // Detached, as after a real delete
 ```
 
 Only the soft-delete column — and the updated-at timestamp, if the type has one — is written. Edits

@@ -118,8 +118,8 @@ objects. Every method has a synchronous overload, and `BulkInsertAsync` also acc
 ```csharp
 BulkResult result = await context.BulkInsertAsync(orders);
 
-orders[0].Id;                    // populated — keys are always written back
-context.Entry(orders[0]).State;  // Detached — tracking is separate, and opt-in
+var id = orders[0].Id;           // populated — keys are always written back
+var state = context.Entry(orders[0]).State;  // Detached — tracking is separate, and opt-in
 var inserted = result.Inserted;  // 50000
 ```
 
@@ -341,11 +341,11 @@ and for the explicit API it is opt-in:
 
 ```csharp
 await context.BulkInsertAsync(orders);   // detached input
-orders[0].Id;                            // populated
-context.Entry(orders[0]).State;          // Detached
+var id = orders[0].Id;                   // populated
+var before = context.Entry(orders[0]).State;   // Detached
 
 await context.BulkInsertAsync(orders, o => o.Track());
-context.Entry(orders[0]).State;          // Unchanged
+var after = context.Entry(orders[0]).State;    // Unchanged
 ```
 
 The reason for the split is cost: writing a key onto an object takes microseconds, while a tracker

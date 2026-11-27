@@ -72,7 +72,7 @@ var items = page.Items;        // IReadOnlyList<Order>
 var count = page.TotalCount;   // long?  — null unless the strategy counted
 var pages = page.TotalPages;   // int?
 var next = page.HasNext;      // bool?  — null under PageCountStrategy.None
-page.HasPrevious;
+var previous = page.HasPrevious;
 ```
 
 `PageRequest.Of(pageNumber, pageSize)` takes a nullable page size: leaving it out uses the configured
