@@ -318,18 +318,21 @@ public static class SqlDatabaseFacadeExtensions
             // Inside the caller's transaction, a savepoint gives the set the same all-or-nothing: some
             // engines leave the transaction committable after a failed statement, so without it a caller
             // that caught the error and committed would commit the drop without the create.
-            await current.CreateSavepointAsync(Savepoint, cancellationToken).ConfigureAwait(false);
+            // A name of its own each time: SQL Server cannot release a savepoint, so one named like the
+            // caller's would stay behind and take the caller's rollback to that name for itself.
+            var savepoint = "ef_toolkit_" + Guid.NewGuid().ToString("N")[..20];
+            await current.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
             try
             {
                 await ExecuteEachAsync(database, statements, cancellationToken).ConfigureAwait(false);
             }
             catch
             {
-                await current.RollbackToSavepointAsync(Savepoint, CancellationToken.None).ConfigureAwait(false);
+                await current.RollbackToSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
                 throw;
             }
 
-            await current.ReleaseSavepointAsync(Savepoint, cancellationToken).ConfigureAwait(false);
+            await current.ReleaseSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -366,8 +369,6 @@ public static class SqlDatabaseFacadeExtensions
             || System.Transactions.Transaction.Current is not null
             || database.GetService<Microsoft.EntityFrameworkCore.Storage.IRelationalConnection>()
                 is Microsoft.EntityFrameworkCore.Storage.RelationalConnection { EnlistedTransaction: not null };
-
-    private const string Savepoint = "ef_toolkit_objects";
 
     private static async Task ExecuteEachAsync(
         DatabaseFacade database,
