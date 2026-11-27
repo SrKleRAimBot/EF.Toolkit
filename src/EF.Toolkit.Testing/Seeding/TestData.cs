@@ -41,6 +41,11 @@ public sealed class TestData
     private readonly Random _random;
     private long _counter;
 
+    // A column with only so many values gets them in turn from a count of its own: the shared counter
+    // moves once per generated value, so with three on a row a decimal(2,2) came round to a repeat after
+    // 34 rows of its 100. Keyed by hierarchy and column, so siblings sharing a TPH column share a count.
+    private readonly Dictionary<(IReadOnlyTypeBase Root, string Column), long> _boundedCounters = [];
+
     /// <summary>Creates a builder.</summary>
     /// <param name="seed">Seeds the values. The same seed and the same calls build the same values.</param>
     /// <param name="maxDepth">How many levels of required principals to build. Default 3.</param>
@@ -371,17 +376,17 @@ public sealed class TestData
         return type switch
         {
             _ when type == typeof(bool) => _random.Next(2) == 0,
-            _ when type == typeof(byte) => (byte)(n % byte.MaxValue),
-            _ when type == typeof(sbyte) => (sbyte)(n % sbyte.MaxValue),
-            _ when type == typeof(short) => (short)(n % short.MaxValue),
-            _ when type == typeof(ushort) => (ushort)(n % ushort.MaxValue),
+            _ when type == typeof(byte) => (byte)(Bounded(n, property) % byte.MaxValue),
+            _ when type == typeof(sbyte) => (sbyte)(Bounded(n, property) % sbyte.MaxValue),
+            _ when type == typeof(short) => (short)(Bounded(n, property) % short.MaxValue),
+            _ when type == typeof(ushort) => (ushort)(Bounded(n, property) % ushort.MaxValue),
             _ when type == typeof(int) => (int)(n % int.MaxValue),
             _ when type == typeof(uint) => (uint)(n % uint.MaxValue),
             _ when type == typeof(long) => n,
             _ when type == typeof(ulong) => (ulong)n,
             _ when type == typeof(float) => (float)n,
             _ when type == typeof(double) => (double)n,
-            _ when type == typeof(decimal) => GenerateDecimal(n, property),
+            _ when type == typeof(decimal) => GenerateDecimal(Bounded(n, property), property),
             _ when type == typeof(char) => (char)('a' + (n % 26)),
             _ when type == typeof(Guid) => GenerateGuid(),
             _ when type == typeof(DateTime) => GenerateDateTime(n, storeType ?? property?.GetColumnType()),
@@ -392,6 +397,21 @@ public sealed class TestData
             _ when type == typeof(byte[]) => GenerateBytes(n, MaxLength(property)),
             _ => null,
         };
+    }
+
+    /// <summary>The column's own count, for a value that wraps; the shared counter where there is no column.</summary>
+    private long Bounded(long n, IProperty? property)
+    {
+        if (property is null)
+        {
+            return n;
+        }
+
+        IReadOnlyTypeBase root = property.DeclaringType.ContainingEntityType.GetRootType();
+        var key = (root, property.GetColumnName());
+        var next = _boundedCounters.GetValueOrDefault(key) + 1;
+        _boundedCounters[key] = next;
+        return next;
     }
 
     // Up to the year 2999: inside every engine's date range, and still unique for a million values.

@@ -360,6 +360,8 @@ public sealed class TestDataTests
     {
         public int Id { get; set; }
         public decimal Rate { get; set; }
+        public string Code { get; set; } = "";
+        public byte Level { get; set; }
     }
 
     private sealed class DiscountContext(DbContextOptions<DiscountContext> options) : DbContext(options)
@@ -369,6 +371,7 @@ public sealed class TestDataTests
             {
                 b.Property(d => d.Rate).HasPrecision(2, 2);
                 b.HasIndex(d => d.Rate).IsUnique();
+                b.HasIndex(d => d.Level).IsUnique();
             });
     }
 
@@ -431,6 +434,20 @@ public sealed class TestDataTests
 
         discounts.Select(d => d.Rate).Distinct().Count().ShouldBe(5);
         discounts.ShouldAllBe(d => d.Rate > -1m && d.Rate < 1m && decimal.Round(d.Rate, 2) == d.Rate);
+    }
+
+    [Fact]
+    public async Task A_bounded_column_gets_every_value_it_holds_before_one_repeats()
+    {
+        // One counter ran across Code, Rate and Level, so each row moved it three: Rate repeated at row 35
+        // of the 100 decimal(2,2) holds, and Level, a byte, at row 86 of 255.
+        await using var db = await SqliteTestDatabase<DiscountContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+
+        var discounts = await context.CreateManyAsync<Discount>(100, cancellationToken: Ct);
+
+        discounts.Select(d => d.Rate).Distinct().Count().ShouldBe(100);
+        discounts.Select(d => d.Level).Distinct().Count().ShouldBe(100);
     }
 
     [Fact]
