@@ -165,12 +165,14 @@ List<MonthTotal> rows = await context.Database.QueryProcedureAsync<MonthTotal>(
 
 Arguments are an object whose properties name them, or an `IReadOnlyDictionary<string, object?>`.
 Every value is bound as a parameter through `ExecuteSqlRawAsync` / `SqlQueryRaw`, so the context's
-transaction, interceptors, logging and execution strategy apply. That includes retries: under a retrying
-strategy (`EnableRetryOnFailure`), a call that fails with a transient error is run again, exactly as EF
-runs any raw SQL again — even if the procedure had already committed its writes before the connection
-dropped. For a procedure that is not safe to repeat, run the call inside
-`CreateExecutionStrategy().ExecuteAsync(...)` with a transaction and a check that it has not already
-happened, or use a non-retrying strategy for that context. A value that is already a `DbParameter` is passed through
+transaction, interceptors and logging apply, and each call is retried exactly as EF retries those:
+- `QueryProcedureAsync` runs as a query, which a retrying strategy (`EnableRetryOnFailure`) runs again
+  after a transient error — even if the procedure had already committed writes before the connection
+  dropped. For one that is not safe to repeat, use a non-retrying strategy for that context, or make
+  the call idempotent.
+- `ExecuteProcedureAsync` runs like `ExecuteSqlRawAsync`, which EF does not retry: a transient error
+  reaches you. To have it retried, run it inside `CreateExecutionStrategy().ExecuteAsync(...)` — with a
+  transaction and a check that it has not already happened, if the procedure writes. A value that is already a `DbParameter` is passed through
 as is — which is how an output parameter comes back:
 
 ```csharp
