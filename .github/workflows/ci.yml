@@ -28,11 +28,58 @@ jobs:
         run: dotnet test tests/EF.Toolkit.Audit.Tests -c Release --no-build --verbosity normal
       - name: Unit tests (query)
         run: dotnet test tests/EF.Toolkit.Query.Tests -c Release --no-build --verbosity normal
+      - name: Unit tests (conventions)
+        run: dotnet test tests/EF.Toolkit.Conventions.Tests -c Release --no-build --verbosity normal
+      - name: Unit tests (sql)
+        run: dotnet test tests/EF.Toolkit.Sql.Tests -c Release --no-build --verbosity normal
+      - name: Unit tests (testing)
+        run: dotnet test tests/EF.Toolkit.Testing.Tests -c Release --no-build --verbosity normal
       - name: Pack
         run: dotnet pack -c Release --no-build -o artifacts
       - uses: actions/upload-artifact@v4
         with:
           name: packages
+          path: artifacts/*.nupkg
+
+  ef11:
+    # The same source, built against EF Core 11 on net11.0. -p:EfCoreMajor=11 switches the framework,
+    # every EF range and the package version together (see Directory.Build.props), so this job is the
+    # whole compatibility gate: if it builds warning-free and the unit suites pass, the 11.x packages
+    # are what master would ship for EF Core 11.
+    name: Build and unit test (EF Core 11)
+    runs-on: ubuntu-latest
+    env:
+      EF: -p:EfCoreMajor=11
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 11.0.x
+      - run: dotnet restore $EF
+      - run: dotnet build -c Release --no-restore $EF
+      - name: Unit tests (bulk)
+        run: dotnet test tests/EF.Toolkit.Bulk.Tests -c Release --no-build $EF --verbosity normal
+      - name: Unit tests (audit)
+        run: dotnet test tests/EF.Toolkit.Audit.Tests -c Release --no-build $EF --verbosity normal
+      - name: Unit tests (query)
+        run: dotnet test tests/EF.Toolkit.Query.Tests -c Release --no-build $EF --verbosity normal
+      - name: Unit tests (conventions)
+        run: dotnet test tests/EF.Toolkit.Conventions.Tests -c Release --no-build $EF --verbosity normal
+      - name: Unit tests (sql)
+        run: dotnet test tests/EF.Toolkit.Sql.Tests -c Release --no-build $EF --verbosity normal
+      - name: Unit tests (testing)
+        run: dotnet test tests/EF.Toolkit.Testing.Tests -c Release --no-build $EF --verbosity normal
+      - name: Equivalence tests (SQLite)
+        run: |
+          for suite in Bulk Audit Query; do
+            dotnet test tests/EF.Toolkit.$suite.Equivalence -c Release --no-build $EF --verbosity normal \
+              --filter "Engine=sqlite"
+          done
+      - name: Pack
+        run: dotnet pack -c Release --no-build $EF -o artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-ef11
           path: artifacts/*.nupkg
 
   equivalence:
@@ -68,4 +115,14 @@ jobs:
       - name: Equivalence tests (query)
         run: >
           dotnet test tests/EF.Toolkit.Query.Equivalence -c Release --no-build --verbosity normal
+          --filter "Engine=${{ matrix.engine }}"
+      # Real-engine scenarios for the newer packages. Not every package has every engine, so a matrix
+      # entry with no matching scenario is expected to find nothing to run.
+      - name: Integration tests (sql)
+        run: >
+          dotnet test tests/EF.Toolkit.Sql.Integration -c Release --no-build --verbosity normal
+          --filter "Engine=${{ matrix.engine }}"
+      - name: Integration tests (testing)
+        run: >
+          dotnet test tests/EF.Toolkit.Testing.Integration -c Release --no-build --verbosity normal
           --filter "Engine=${{ matrix.engine }}"

@@ -8,6 +8,9 @@ name: Release
 #
 # The tag is a trigger, not the source of truth: the version comes from
 # Directory.Build.props, and a tag that disagrees with it fails the run.
+#
+# The tag's major picks the EF Core line: v10.* builds against EF Core 10 (the default), v11.* passes
+# -p:EfCoreMajor=11 and builds the EF Core 11 packages from the same commit.
 
 on:
   push:
@@ -18,6 +21,11 @@ on:
         description: 'Build and pack, but do not push'
         type: boolean
         default: true
+      ef_core_major:
+        description: 'EF Core major to build the packages for'
+        type: choice
+        options: ['10', '11']
+        default: '10'
 
 env:
   DOTNET_NOLOGO: true
@@ -37,32 +45,59 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
+          dotnet-version: 11.0.x
 
-      - run: dotnet restore
-      - run: dotnet build -c Release --no-restore
+      - name: Select EF Core major
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            major="${GITHUB_REF_NAME#v}"; major="${major%%.*}"
+          else
+            major="${{ inputs.ef_core_major }}"
+          fi
+          echo "EF=-p:EfCoreMajor=$major" >> "$GITHUB_ENV"
+          echo "Building for EF Core $major"
+
+      - run: dotnet restore $EF
+      - run: dotnet build -c Release --no-restore $EF
 
       - name: Unit tests (bulk)
-        run: dotnet test tests/EF.Toolkit.Bulk.Tests -c Release --no-build --verbosity normal
+        run: dotnet test tests/EF.Toolkit.Bulk.Tests -c Release --no-build $EF --verbosity normal
 
       - name: Unit tests (audit)
-        run: dotnet test tests/EF.Toolkit.Audit.Tests -c Release --no-build --verbosity normal
+        run: dotnet test tests/EF.Toolkit.Audit.Tests -c Release --no-build $EF --verbosity normal
 
       - name: Unit tests (query)
-        run: dotnet test tests/EF.Toolkit.Query.Tests -c Release --no-build --verbosity normal
+        run: dotnet test tests/EF.Toolkit.Query.Tests -c Release --no-build $EF --verbosity normal
+
+      - name: Unit tests (conventions)
+        run: dotnet test tests/EF.Toolkit.Conventions.Tests -c Release --no-build $EF --verbosity normal
+
+      - name: Unit tests (sql)
+        run: dotnet test tests/EF.Toolkit.Sql.Tests -c Release --no-build $EF --verbosity normal
+
+      - name: Unit tests (testing)
+        run: dotnet test tests/EF.Toolkit.Testing.Tests -c Release --no-build $EF --verbosity normal
+
+      - name: Integration tests (sql)
+        run: dotnet test tests/EF.Toolkit.Sql.Integration -c Release --no-build $EF --verbosity normal
+
+      - name: Integration tests (testing)
+        run: dotnet test tests/EF.Toolkit.Testing.Integration -c Release --no-build $EF --verbosity normal
 
       # The differential harnesses are the primary correctness gate, so a release runs them
       # rather than trusting that the tagged commit was already validated on a branch.
       - name: Equivalence tests (bulk)
-        run: dotnet test tests/EF.Toolkit.Bulk.Equivalence -c Release --no-build --verbosity normal
+        run: dotnet test tests/EF.Toolkit.Bulk.Equivalence -c Release --no-build $EF --verbosity normal
 
       - name: Equivalence tests (audit)
-        run: dotnet test tests/EF.Toolkit.Audit.Equivalence -c Release --no-build --verbosity normal
+        run: dotnet test tests/EF.Toolkit.Audit.Equivalence -c Release --no-build $EF --verbosity normal
 
       - name: Equivalence tests (query)
-        run: dotnet test tests/EF.Toolkit.Query.Equivalence -c Release --no-build --verbosity normal
+        run: dotnet test tests/EF.Toolkit.Query.Equivalence -c Release --no-build $EF --verbosity normal
 
       - name: Pack
-        run: dotnet pack -c Release --no-build -o artifacts
+        run: dotnet pack -c Release --no-build $EF -o artifacts
 
       # Guards against tagging v1.2.3 while the props still say something else, which would
       # otherwise publish a version nobody asked for.
@@ -98,8 +133,8 @@ jobs:
           user: ${{ secrets.NUGET_USER }}
 
       # Each core package goes before its dependents, so they resolve against something already
-      # accepted, and the bridge goes after both cores it depends on. EF.Toolkit.Query depends on
-      # nothing here, so its position is free. --skip-duplicate keeps a re-run after a partial
+      # accepted, and the bridge goes after both cores it depends on. EF.Toolkit.Query and the other
+      # standalone packages depend on nothing here, so their position is free. --skip-duplicate keeps a re-run after a partial
       # failure safe.
       - name: Push
         if: github.event_name == 'push' || inputs.dry_run == false
@@ -118,7 +153,10 @@ jobs:
             artifacts/EF.Toolkit.Audit.MySql.*.nupkg \
             artifacts/EF.Toolkit.Audit.Sqlite.*.nupkg \
             artifacts/EF.Toolkit.Audit.Bulk.*.nupkg \
-            artifacts/EF.Toolkit.Query.[0-9]*.nupkg
+            artifacts/EF.Toolkit.Query.[0-9]*.nupkg \
+            artifacts/EF.Toolkit.Conventions.[0-9]*.nupkg \
+            artifacts/EF.Toolkit.Sql.[0-9]*.nupkg \
+            artifacts/EF.Toolkit.Testing.[0-9]*.nupkg
           do
             echo "::group::push $pkg"
             dotnet nuget push "$pkg" \

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/EF.Toolkit.Testing/EF.Toolkit.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+
+    <!--
+      Everything runs against real SQLite, which the package brings with it. The other providers are
+      here only to build their models — against connection strings that never connect — so the reset
+      SQL each engine is sent can be checked without the engine. The Docker-backed suite runs it.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="MySql.EntityFrameworkCore" />
+
+    <!-- MySql.EntityFrameworkCore needs a newer relational layer than the package's own floor. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="$(RelationalTestRange)" />
+  </ItemGroup>
+
+</Project>

@@ -172,14 +172,14 @@ public class AuditPayloadWriterTests
 
         using var writer = new AuditPayloadWriter(options);
 
-        return JsonDocument.Parse(
+        return JsonElement.Parse(
             writer.Write(
                 AuditOperation.Insert,
                 AuditSourceProjection.Create(source, plan),
                 source,
                 0,
                 NoMetadata,
-                reason: null)!).RootElement;
+                reason: null)!);
     }
 
     private static JsonElement Write(
@@ -190,9 +190,9 @@ public class AuditPayloadWriterTests
         string? reason = null,
         Action<ModelBuilder>? configureModel = null,
         Action<AuditOptionsBuilder>? configureAuditing = null)
-        => JsonDocument.Parse(
+        => JsonElement.Parse(
             WriteOrNull(operation, rows, options, metadata, reason, configureModel, configureAuditing)
-                .ShouldNotBeNull()).RootElement;
+                .ShouldNotBeNull());
 
     private static string? WriteOrNull(
         AuditOperation operation,

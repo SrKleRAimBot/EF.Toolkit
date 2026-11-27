@@ -146,7 +146,7 @@ public class DecimalScaleTests
     {
         // Canonicalizing must not quietly turn the column into text, which would be a far bigger
         // change to the payload than the one being fixed.
-        var payload = JsonDocument.Parse(Payload(Parse("10.50"))).RootElement;
+        var payload = JsonElement.Parse(Payload(Parse("10.50")));
         var amount = payload.GetProperty("new").GetProperty(nameof(Priced.Amount));
 
         amount.ValueKind.ShouldBe(JsonValueKind.Number);
@@ -224,14 +224,14 @@ public class DecimalScaleTests
         var source = new FakeCaptureSource(entityType, AuditOperation.Insert, properties)
             .Row(1, Parse("10.50"));
 
-        var payload = JsonDocument.Parse(
+        var payload = JsonElement.Parse(
             writer.Write(
                 AuditOperation.Insert,
                 AuditSourceProjection.Create(source, AuditEntityPlan.For(entityType, options)),
                 source,
                 0,
                 NoMetadata,
-                reason: null)!).RootElement;
+                reason: null)!);
 
         payload.GetProperty("new").GetProperty(nameof(Priced.Amount)).GetString()
             .ShouldBe(options.MaskToken);

@@ -264,3 +264,28 @@ public sealed class MySqlInterleavedSaveChangesTests(MySqlInterleavedFixture fix
 [Collection("mysql-interleaved")]
 public sealed class MySqlInterleavedBulkInsertApiTests(MySqlInterleavedFixture fixture)
     : BulkInsertApiTests(fixture);
+
+[Trait("Engine", "postgres16")]
+[Collection("postgres16")]
+public sealed class PostgreSql16SetBasedWriteTests(PostgreSql16Fixture fixture)
+    : SetBasedWriteTests(fixture);
+
+[Trait("Engine", "postgres17")]
+[Collection("postgres17")]
+public sealed class PostgreSql17SetBasedWriteTests(PostgreSql17Fixture fixture)
+    : SetBasedWriteTests(fixture);
+
+[Trait("Engine", "sqlserver")]
+[Collection("sqlserver")]
+public sealed class SqlServerSetBasedWriteTests(SqlServerFixture fixture)
+    : SetBasedWriteTests(fixture);
+
+[Trait("Engine", "mysql")]
+[Collection("mysql")]
+public sealed class MySqlSetBasedWriteTests(MySqlFixture fixture)
+    : SetBasedWriteTests(fixture);
+
+[Trait("Engine", "sqlite")]
+[Collection("sqlite")]
+public sealed class SqliteSetBasedWriteTests(SqliteFixture fixture)
+    : SetBasedWriteTests(fixture);

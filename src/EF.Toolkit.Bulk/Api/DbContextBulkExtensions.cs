@@ -37,8 +37,8 @@ public static class DbContextBulkExtensions
     /// <example>
     ///     <code>
     ///     await context.BulkInsertAsync(orders);
-    ///     orders[0].Id;                  // populated
-    ///     context.Entry(orders[0]).State // Detached
+    ///     var id = orders[0].Id;         // populated
+    ///     var state = context.Entry(orders[0]).State; // Detached
     ///
     ///     await context.BulkInsertAsync(orders, o => o.Track().BatchSize(20_000));
     ///     </code>

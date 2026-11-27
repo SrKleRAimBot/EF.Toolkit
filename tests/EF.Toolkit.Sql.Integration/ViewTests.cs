@@ -1,0 +1,285 @@
+using EFToolkit.Sql.Definitions;
+using EFToolkit.Sql.Integration.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
+
+namespace EFToolkit.Sql.Integration;
+
+[Trait("Engine", "postgres17")]
+[Collection("sql-postgres17")]
+public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
+{
+    private static readonly MaterializedViewDefinition OrderTotals = new(
+        "order_totals",
+        """SELECT "TenantId", sum("Total") AS "Total" FROM "Orders" GROUP BY "TenantId";""",
+        withNoData: true);
+
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    public async ValueTask InitializeAsync()
+    {
+        await fixture.ResetAsync();
+        await using var context = fixture.CreateAdminContext();
+        context.Orders.AddRange(
+            new Order { TenantId = 1, Total = 10m },
+            new Order { TenantId = 1, Total = 200m },
+            new Order { TenantId = 2, Total = 300m });
+        await context.SaveChangesAsync(Token);
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    [Fact]
+    public async Task A_view_is_created_replaced_and_dropped()
+    {
+        await using var context = fixture.CreateAdminContext();
+
+        await context.Database.CreateDatabaseObjectsAsync(new ViewDefinition("big_orders", """SELECT "Id", "Total" FROM "Orders" WHERE "Total" > 100"""));
+        (await context.BigOrders.CountAsync(Token)).ShouldBe(2);
+
+        await context.Database.CreateDatabaseObjectsAsync(new ViewDefinition("big_orders", """SELECT "Id", "Total" FROM "Orders" WHERE "Total" > 250"""));
+        (await context.BigOrders.Select(b => b.Total).SingleAsync(Token)).ShouldBe(300m);
+
+        await context.Database.DropDatabaseObjectsAsync(new ViewDefinition("big_orders", "SELECT 1"));
+        await Should.ThrowAsync<PostgresException>(() => context.BigOrders.CountAsync(Token));
+    }
+
+    [Fact]
+    public async Task A_semicolon_before_a_trailing_comment_is_refused_by_the_engine_not_guessed_at()
+    {
+        // Only a semicolon at the very end is removed. One before a comment stays and ends the CREATE
+        // early, so PostgreSQL refuses it — loudly, where reading past the comment risked taking a
+        // semicolon out of a string literal and changing the view without a word.
+        await using var context = fixture.CreateAdminContext();
+        var noted = new MaterializedViewDefinition("noted_totals", "SELECT 1 AS id; -- initial query", withNoData: true);
+        try
+        {
+            await Should.ThrowAsync<PostgresException>(() => context.Database.CreateDatabaseObjectsAsync(noted));
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(noted);
+        }
+    }
+
+    [Fact]
+    public async Task A_filter_after_a_comment_ended_by_a_carriage_return_stays_in_the_view()
+    {
+        // PostgreSQL ends a -- comment at a carriage return too: the trim took the line for one comment
+        // and cut WHERE FALSE away, so the view returned a row.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("filtered_ids", "SELECT 1 AS \"Value\" -- note\rWHERE FALSE;");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            (await context.Database.SqlQueryRaw<int>("SELECT \"Value\" FROM filtered_ids").CountAsync(Token)).ShouldBe(0);
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
+    public async Task An_escaped_quote_in_an_escape_string_keeps_its_value()
+    {
+        // E'a\';-- tail' is one string: the scan ended it at the escaped quote, dropped the semicolon
+        // inside it, and the view returned a'-- tail.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("escaped_value", "SELECT E'a\\';-- tail' AS \"Value\"");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            (await context.Database.SqlQueryRaw<string>("SELECT \"Value\" FROM escaped_value").SingleAsync(Token)).ShouldBe("a';-- tail");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Theory]
+    [InlineData("SELECT $\u00E9$x;-- tail$\u00E9$ AS \"Value\"")]
+    [InlineData("SELECT $\u00A0$x;-- tail$\u00A0$ AS \"Value\"")]
+    [InlineData("SELECT 1 AS a$t$, $t$x;-- tail$t$ AS \"Value\"")]
+    [InlineData("SELECT /* outer /* inner */ ' */ 'x;-- tail' AS \"Value\"")]
+    [InlineData("SELECT (ARRAY['x;-- tail'])[1] AS \"Value\" -- [")]
+    public async Task A_dollar_quote_with_a_non_ascii_tag_keeps_its_value(string query)
+    {
+        // $é$ and $\u00A0$ went unrecognised as quotes, and the $t$ ending the identifier a$t$ was taken
+        // for one: either way the semicolon inside the quoted text was taken for a trailing one.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("dollar_value", query);
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            (await context.Database.SqlQueryRaw<string>("SELECT \"Value\" FROM dollar_value").SingleAsync(Token)).ShouldBe("x;-- tail");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
+    public async Task An_array_element_holding_a_bracket_keeps_its_semicolon()
+    {
+        // [ ] is no quote on PostgreSQL: the scan ended the "identifier" at the ] inside the string
+        // and removed the semicolon after it.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("bracket_value", "SELECT (ARRAY[']; -- text'])[1] AS \"Value\"");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            (await context.Database.SqlQueryRaw<string>("SELECT \"Value\" FROM bracket_value").SingleAsync(Token)).ShouldBe("]; -- text");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
+    public async Task A_no_break_space_ending_a_column_alias_stays_part_of_it()
+    {
+        // PostgreSQL takes U+00A0 into an unquoted identifier; Trim() took it off and renamed the column.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("spaced_alias", "SELECT 1 AS value\u00A0");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            var columns = "SELECT column_name AS \"Value\" FROM information_schema.columns WHERE table_name = 'spaced_alias'";
+            (await context.Database.SqlQueryRaw<string>(columns).SingleAsync(Token)).ShouldBe("value\u00A0");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
+    public async Task Replacing_an_unqualified_materialized_view_leaves_a_later_schema_s_view_alone()
+    {
+        // With search_path app, public and no app.order_totals_sp, the unqualified DROP found public's
+        // view and dropped it, index and all, before the CREATE made one in app.
+        await using var context = fixture.CreateAdminContext();
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE SCHEMA IF NOT EXISTS app; "
+                + "CREATE MATERIALIZED VIEW public.order_totals_sp AS SELECT 7 AS total; "
+                + "CREATE INDEX order_totals_sp_total ON public.order_totals_sp (total);",
+            Token);
+        await context.Database.OpenConnectionAsync(Token);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("SET search_path = app, public", Token);
+            await context.Database.CreateDatabaseObjectsAsync(new MaterializedViewDefinition("order_totals_sp", "SELECT 1 AS total"));
+
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM public.order_totals_sp").SingleAsync(Token)).ShouldBe(7);
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM app.order_totals_sp").SingleAsync(Token)).ShouldBe(1);
+            (await context.Database.SqlQueryRaw<int>(
+                    "SELECT COUNT(*)::int AS \"Value\" FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'order_totals_sp_total'")
+                .SingleAsync(Token)).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "SET search_path = public; DROP MATERIALIZED VIEW IF EXISTS app.order_totals_sp; "
+                    + "DROP MATERIALIZED VIEW IF EXISTS public.order_totals_sp; DROP SCHEMA IF EXISTS app CASCADE",
+                Token);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_backslash_in_a_view_name_drops_that_view_whatever_standard_conforming_strings_says()
+    {
+        // With standard_conforming_strings off, '…' reads a backslash as an escape: the DO block's
+        // 'sales\daily' became salesdaily, and that other view was dropped, index and all.
+        await using var context = fixture.CreateAdminContext();
+        await context.Database.OpenConnectionAsync(Token);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "CREATE MATERIALIZED VIEW salesdaily AS SELECT 7 AS total; CREATE INDEX salesdaily_total ON salesdaily (total);",
+                Token);
+            await context.Database.ExecuteSqlRawAsync("SET standard_conforming_strings = off", Token);
+
+            var view = new MaterializedViewDefinition("sales\\daily", "SELECT 1 AS total");
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            await context.Database.CreateDatabaseObjectsAsync(view);
+
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM salesdaily").SingleAsync(Token)).ShouldBe(7);
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM \"sales\\daily\"").SingleAsync(Token)).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "SET standard_conforming_strings = on; DROP MATERIALIZED VIEW IF EXISTS salesdaily; "
+                    + "DROP MATERIALIZED VIEW IF EXISTS \"sales\\daily\"",
+                Token);
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Replacing_an_unqualified_materialized_view_replaces_it()
+    {
+        // The drop by current_schema() must still find the view the CREATE made last time.
+        await using var context = fixture.CreateAdminContext();
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(new MaterializedViewDefinition("replaced_mv", "SELECT 1 AS total"));
+            await context.Database.CreateDatabaseObjectsAsync(new MaterializedViewDefinition("replaced_mv", "SELECT 2 AS total"));
+
+            (await context.Database.SqlQueryRaw<int>("SELECT total AS \"Value\" FROM replaced_mv").SingleAsync(Token)).ShouldBe(2);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP MATERIALIZED VIEW IF EXISTS replaced_mv", Token);
+        }
+    }
+
+    [Fact]
+    public async Task A_materialized_view_holds_its_snapshot_until_refreshed()
+    {
+        await using var context = fixture.CreateAdminContext();
+        await context.Database.CreateDatabaseObjectsAsync(OrderTotals);
+
+        // WITH NO DATA: unpopulated until the first refresh.
+        // Some Npgsql versions class this error as transient, so EF's execution strategy may wrap it.
+        var unpopulated = await Should.ThrowAsync<Exception>(() => TotalsAsync(context));
+        var postgres = unpopulated as PostgresException ?? unpopulated.InnerException as PostgresException;
+        postgres.ShouldNotBeNull(unpopulated.ToString()).SqlState.ShouldBe("55000");
+
+        await context.Database.RefreshMaterializedViewAsync("order_totals", cancellationToken: Token);
+        (await TotalsAsync(context)).ShouldBe([210m, 300m]);
+
+        context.Orders.Add(new Order { TenantId = 2, Total = 1m });
+        await context.SaveChangesAsync(Token);
+        (await TotalsAsync(context)).ShouldBe([210m, 300m]);
+
+        // CONCURRENTLY needs a unique index, which a recreate would drop along with the view.
+        await PostgreSqlFixture.ExecuteAsync(fixture.AdminConnectionString, "CREATE UNIQUE INDEX ON order_totals (\"TenantId\")");
+        await context.Database.RefreshMaterializedViewAsync("order_totals", concurrently: true, cancellationToken: Token);
+        (await TotalsAsync(context)).ShouldBe([210m, 301m]);
+    }
+
+    [Fact]
+    public async Task Creating_a_materialized_view_again_replaces_it()
+    {
+        await using var context = fixture.CreateAdminContext();
+
+        await context.Database.CreateDatabaseObjectsAsync(new MaterializedViewDefinition("order_totals", "SELECT 1 AS \"Total\""));
+        await context.Database.CreateDatabaseObjectsAsync(new MaterializedViewDefinition("order_totals", "SELECT 2 AS \"Total\""));
+
+        (await context.Database.SqlQueryRaw<int>("SELECT \"Total\" AS \"Value\" FROM order_totals").SingleAsync(Token)).ShouldBe(2);
+
+        await context.Database.DropDatabaseObjectsAsync(OrderTotals);
+        await Should.ThrowAsync<PostgresException>(() => TotalsAsync(context));
+    }
+
+    private static Task<List<decimal>> TotalsAsync(AppDb context)
+        => context.Database
+            .SqlQueryRaw<decimal>("SELECT \"Total\" AS \"Value\" FROM order_totals ORDER BY \"TenantId\"")
+            .ToListAsync(Token);
+}

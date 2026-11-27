@@ -14,19 +14,26 @@ it alongside whatever EF Core version your app already uses.
 
 | Package | What it does | Docs |
 | --- | --- | --- |
-| `EF.Toolkit.Bulk` | Makes `SaveChanges()` faster with no call-site changes, and adds an explicit `BulkInsert` / `Update` / `Delete` / `Merge` / `Synchronize` API — up to **10x faster and 44x less memory**. | [docs/bulk.md](docs/bulk.md) |
+| `EF.Toolkit.Bulk` | Makes `SaveChanges()` faster with no call-site changes, and adds an explicit `BulkInsert` / `Update` / `Delete` / `Merge` / `Synchronize` API — up to **10x faster and 44x less memory** — plus set-based `UpdateWhere` / `DeleteWhere`. | [docs/bulk.md](docs/bulk.md) |
 | `EF.Toolkit.Audit` | Records who changed what and when, with old and new values per column, into one audit table whose payload is queryable JSON — `jsonb` on PostgreSQL. | [docs/audit.md](docs/audit.md) |
 | `EF.Toolkit.Audit.Bulk` | Joins the two: audits the explicit bulk API, and writes audit entries in bulk. | [docs/audit-bulk.md](docs/audit-bulk.md) |
+| `EF.Toolkit.Conventions` | Soft delete — `Remove()` marks the row, a named query filter hides it, with restore, hard delete and set-based variants — and created/updated timestamps on every save. | [docs/conventions.md](docs/conventions.md) |
 | `EF.Toolkit.Query` | Offset and keyset pagination, sorting contracts with a guaranteed total order, composable filters, batched streaming and ambient tracking scopes — plus a development-time advisor for missing indexes. | [docs/query.md](docs/query.md) |
+| `EF.Toolkit.Sql` | Views, materialized views, stored procedures and functions rendered per engine for migrations and runtime, one-line tenant isolation through row-level security, and session context applied on every connection open. | [docs/sql.md](docs/sql.md) |
+| `EF.Toolkit.Testing` | Test databases on in-memory SQLite or a real engine, each test in a rolled-back transaction, model-driven data reset, seeding that clears the tracker, a test-data builder, SQL capture for N+1 checks, and model assertions. Framework agnostic. | [docs/testing.md](docs/testing.md) |
 
 The write-side capabilities have a provider package — `.PostgreSQL`, `.SqlServer`, `.MySql` or
-`.Sqlite` — which is the one you install. The bridge and `EF.Toolkit.Query` are provider-neutral.
+`.Sqlite` — which is the one you install. The bridge, `EF.Toolkit.Query`, `EF.Toolkit.Conventions`,
+`EF.Toolkit.Sql` and `EF.Toolkit.Testing` are provider-neutral.
 
 ```bash
 dotnet add package EF.Toolkit.Bulk.PostgreSQL
 dotnet add package EF.Toolkit.Audit.PostgreSQL
 dotnet add package EF.Toolkit.Audit.Bulk       # only if you use both
 dotnet add package EF.Toolkit.Query
+dotnet add package EF.Toolkit.Conventions
+dotnet add package EF.Toolkit.Sql
+dotnet add package EF.Toolkit.Testing          # in test projects
 ```
 
 Each provider package has its own notes on how the capability is executed on that engine, and what
@@ -44,11 +51,18 @@ tested under Oracle's `MySql.EntityFrameworkCore`, the one that ships for EF Cor
 
 | Version | EF Core | TFM |
 | --- | --- | --- |
+| `11.x` | 11.x | `net11.0` |
 | `10.x` | 10.x | `net10.0` |
 | `9.x` | 9.x | `net8.0` |
 
 The version tracks EF Core's, because these packages hook low-level services and must never resolve
-across an EF major.
+across an EF major. The 10.x and 11.x lines are built from the same source: a plain build targets
+EF Core 10, and `-p:EfCoreMajor=11` builds, tests and packs the EF Core 11 line (it needs the .NET 11
+SDK).
+
+```bash
+dotnet test tests/EF.Toolkit.Bulk.Tests -p:EfCoreMajor=11
+```
 
 ---
 

@@ -65,7 +65,12 @@ internal sealed class FakeColumn : IColumnModification
     public bool IsWrite { get; set; }
     public bool IsCondition { get; set; }
     public bool IsKey { get; set; }
+#if EFCORE10
     public string? JsonPath { get; init; }
+#else
+    // EF Core 11 replaced the string path with a structured one.
+    public Microsoft.EntityFrameworkCore.Infrastructure.StructuredJsonPath? JsonPath { get; init; }
+#endif
     public object? Value { get; set; }
     public object? OriginalValue { get; set; }
 
