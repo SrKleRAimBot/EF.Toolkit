@@ -261,7 +261,9 @@ internal static partial class SqlSyntax
                     i++;
                 }
             }
-            else if (c == '$' && DollarTag().Match(sql, i) is { Success: true } tag)
+            // Dollar quotes are PostgreSQL's alone: on MySQL 1$a$ is an identifier, and $a$ elsewhere
+            // just text — pairing them would hide quotes that are really there.
+            else if (c == '$' && dialect == SqlDialect.PostgreSql && DollarTag().Match(sql, i) is { Success: true } tag)
             {
                 var close = sql.IndexOf(tag.Value, i + tag.Length, StringComparison.Ordinal);
                 if (close < 0)
