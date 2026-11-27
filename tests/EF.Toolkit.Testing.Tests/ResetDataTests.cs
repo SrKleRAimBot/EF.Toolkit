@@ -268,6 +268,29 @@ public sealed class ResetDataTests
         (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Audit\"")).ShouldBe(0);
     }
 
+    [Fact]
+    public async Task A_table_named_like_the_foreign_key_pragma_cannot_hide_a_new_orphan()
+    {
+        // SQLite read the user's empty pragma_foreign_key_check table in the pragma's place: no
+        // violation was seen before or after, and the orphan the trigger wrote was committed.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.ExecuteSqlRawAsync("CREATE TABLE \"Actors\" (\"Id\" INTEGER PRIMARY KEY)", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE \"Audit\" (\"Id\" INTEGER PRIMARY KEY, \"ActorId\" INTEGER NOT NULL REFERENCES \"Actors\" (\"Id\"))", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER \"AuditTags\" AFTER DELETE ON \"Tags\" BEGIN INSERT INTO \"Audit\" (\"ActorId\") VALUES (42); END", Ct);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE TABLE pragma_foreign_key_check (\"table\" TEXT, rowid INTEGER, parent TEXT, fkid INTEGER)", Ct);
+
+        await Should.ThrowAsync<Exception>(() => context.Database.ResetDataAsync(cancellationToken: Ct));
+
+        (await ShopData.CountsAsync(context)).ShouldBe(before);
+        (await ScalarAsync(context, "SELECT COUNT(*) FROM \"Audit\"")).ShouldBe(0);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

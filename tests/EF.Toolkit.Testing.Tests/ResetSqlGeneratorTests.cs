@@ -384,7 +384,7 @@ public sealed class ResetSqlGeneratorTests
 
         script.Body[0].ShouldStartWith("CREATE TEMP TABLE \"ef_toolkit_fk_before_");
         script.Verify.ShouldHaveSingleItem().ShouldNotContain("UNION");
-        script.Verify[0].ShouldContain("FROM pragma_foreign_key_check AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS");
+        script.Verify[0].ShouldContain("FROM pragma_foreign_key_check() AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS");
         script.Verify[0].ShouldContain("WHERE a.n > (SELECT COUNT(*)");
         script.Commit[0].ShouldStartWith("DROP TABLE \"temp\".\"ef_toolkit_fk_before_");
         script.Body.ShouldNotContain(b => b.StartsWith("DROP", StringComparison.Ordinal));

@@ -453,8 +453,11 @@ internal static class ResetSqlGenerator
     // snapshot taken at the start of the unit: violations that were already there are not the reset's
     // to refuse over. The snapshot is a temporary table, created inside the unit, so a rollback removes
     // it; the commit drops it.
+    // Called as functions, with (): a table of the user's named pragma_foreign_key_check would otherwise
+    // be read in the pragma's place, empty, and every violation would go unseen. With the parentheses
+    // such a table cannot be called, and the statement fails instead.
     private static string SqliteViolationSnapshot(string name)
-        => $"CREATE TEMP TABLE \"{name}\" AS SELECT \"table\" AS t, \"rowid\" AS r, \"fkid\" AS f FROM pragma_foreign_key_check;";
+        => $"CREATE TEMP TABLE \"{name}\" AS SELECT \"table\" AS t, \"rowid\" AS r, \"fkid\" AS f FROM pragma_foreign_key_check();";
 
     // Rows with a rowid are compared one by one. A WITHOUT ROWID table reports no rowid, so its
     // violations cannot be told apart; for those the count per table and foreign key must not grow —
@@ -463,10 +466,10 @@ internal static class ResetSqlGenerator
     {
         var snapshot = $"\"temp\".\"{name}\"";
         return "SELECT "
-            + "(SELECT COUNT(*) FROM pragma_foreign_key_check AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS ("
+            + "(SELECT COUNT(*) FROM pragma_foreign_key_check() AS c WHERE c.\"rowid\" IS NOT NULL AND NOT EXISTS ("
             + $"SELECT 1 FROM {snapshot} AS b WHERE b.t = c.\"table\" AND b.r = c.\"rowid\" AND b.f = c.\"fkid\"))"
             + " + (SELECT COUNT(*) FROM ("
-            + "SELECT c.\"table\" AS t, c.\"fkid\" AS f, COUNT(*) AS n FROM pragma_foreign_key_check AS c "
+            + "SELECT c.\"table\" AS t, c.\"fkid\" AS f, COUNT(*) AS n FROM pragma_foreign_key_check() AS c "
             + "WHERE c.\"rowid\" IS NULL GROUP BY c.\"table\", c.\"fkid\") AS a "
             + $"WHERE a.n > (SELECT COUNT(*) FROM {snapshot} AS b WHERE b.t = a.t AND b.f = a.f AND b.r IS NULL));";
     }
