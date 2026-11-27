@@ -107,6 +107,8 @@ public sealed class SqlSyntaxTests
     [InlineData("SELECT 1 -- note\r'\n + LENGTH('x;-- tail') AS value;", "SELECT 1 -- note\r'\n + LENGTH('x;-- tail') AS value", SqlDialect.MySql)]
     [InlineData("SELECT ARRAY[']; -- text'] AS value;", "SELECT ARRAY[']; -- text'] AS value", SqlDialect.PostgreSql)]
     [InlineData("SELECT [a;b] FROM t;", "SELECT [a;b] FROM t", SqlDialect.SqlServer)]
+    [InlineData("SELECT 1 AS [a]]b;--tail];", "SELECT 1 AS [a]]b;--tail]", SqlDialect.SqlServer)]
+    [InlineData("SELECT 1 AS \"a\"\"b;--tail\";", "SELECT 1 AS \"a\"\"b;--tail\"", SqlDialect.PostgreSql)]
     [InlineData("SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value;", "SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value", SqlDialect.PostgreSql)]
     [InlineData("SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value;", "SELECT /* outer /* inner */ ' */ 'x;-- tail' AS value", SqlDialect.SqlServer)]
     [InlineData("SELECT /* a /* b */ 1;", "SELECT /* a /* b */ 1", SqlDialect.MySql)]

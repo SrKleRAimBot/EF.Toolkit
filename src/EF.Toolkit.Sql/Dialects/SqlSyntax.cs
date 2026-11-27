@@ -231,9 +231,15 @@ internal static partial class SqlSyntax
                 || (c == '[' && dialect is SqlDialect.SqlServer or SqlDialect.Sqlite)
                 || (c == '`' && dialect is SqlDialect.MySql or SqlDialect.Sqlite))
             {
-                // Doubling the quote escapes it inside, which the scan sees as two quoted runs.
+                // Doubling the closing character escapes it inside — 'it''s', [a]]b] — so a doubled one
+                // is stepped over rather than taken for the end. (For [ ] there is no other way to tell:
+                // ]] does not reopen a run the way '' does.)
                 var closing = c == '[' ? ']' : c;
                 var close = sql.IndexOf(closing, i + 1);
+                while (close >= 0 && close + 1 < sql.Length && sql[close + 1] == closing)
+                {
+                    close = sql.IndexOf(closing, close + 2);
+                }
 
                 // A backslash may escape the quote — in PostgreSQL's E'…' and in MySQL's strings — so
                 // where the run ends is not certain: the scan gives up rather than guess.

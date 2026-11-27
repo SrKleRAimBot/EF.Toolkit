@@ -75,4 +75,25 @@ public sealed class SqlServerObjectTests(SqlServerFixture fixture)
             await context.Database.CloseConnectionAsync();
         }
     }
+
+    [Fact]
+    public async Task An_escaped_bracket_in_a_column_alias_keeps_the_semicolon_after_it()
+    {
+        // ]] inside [ ] is an escaped ], not the end: the scan ended the alias there, read --tail] as a
+        // comment, and took the semicolon out of the column's name.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        await using var context = fixture.CreateContext();
+        var view = new ViewDefinition("BracketAlias", "SELECT 1 AS [a]]b;--tail];");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync([view], Token);
+
+            var columns = "SELECT name AS [Value] FROM sys.columns WHERE object_id = OBJECT_ID('BracketAlias')";
+            (await context.Database.SqlQueryRaw<string>(columns).SingleAsync(Token)).ShouldBe("a]b;--tail");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync([view], Token);
+        }
+    }
 }
