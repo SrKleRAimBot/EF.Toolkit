@@ -191,8 +191,10 @@ read it with `QueryProcedureAsync`.
 `QueryProcedureAsync<T>` materialises a `List<T>` rather than returning a query, because a procedure
 call cannot be composed over — `EXEC` and `CALL` cannot appear in a `FROM` clause, so a `Where` added
 to one would fail at execution. On PostgreSQL the rows are the single row of `OUT` / `INOUT` values that
-`CALL` returns; on SQL Server and MySQL, the procedure's first result set. For a scalar `T` the column
-must be named `Value`, as everywhere in EF's `SqlQuery`.
+`CALL` returns; on SQL Server and MySQL, the procedure's first result set. For a scalar `T` the single
+column is read whatever it is named — EF falls back to the first column when the query is not composed,
+and this one never is. (`QueryFunction<T>` is composed, so a scalar function's column must be named
+`Value`, as in EF's `SqlQuery` whenever a query is built on.)
 
 ## Functions
 

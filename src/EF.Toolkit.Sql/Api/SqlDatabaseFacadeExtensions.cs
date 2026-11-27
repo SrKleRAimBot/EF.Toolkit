@@ -158,7 +158,7 @@ public static class SqlDatabaseFacadeExtensions
     /// <summary>Calls a stored procedure and reads the rows it returns.</summary>
     /// <typeparam name="T">
     ///     The row type: an unmapped class whose properties match the result's column names, or a
-    ///     scalar, whose column must be named <c>Value</c>.
+    ///     scalar, read from the single column whatever it is named (the call is never composed over).
     /// </typeparam>
     /// <param name="database">The context's database facade.</param>
     /// <param name="name">The procedure name.</param>
