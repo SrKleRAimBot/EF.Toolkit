@@ -59,7 +59,7 @@ public sealed class MaterializedViewDefinition : IDatabaseObject
         RequirePostgreSql(dialect);
 
         var target = SqlSyntax.Qualify(dialect, Name, Schema);
-        var create = $"CREATE MATERIALIZED VIEW {target} AS\n{SqlSyntax.TrimQuery(Sql)}";
+        var create = $"CREATE MATERIALIZED VIEW {target} AS\n{SqlSyntax.TrimQuery(Sql, dialect)}";
         if (WithNoData)
         {
             create += "\nWITH NO DATA";

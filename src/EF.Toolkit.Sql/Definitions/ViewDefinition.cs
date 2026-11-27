@@ -43,7 +43,7 @@ public sealed class ViewDefinition : IDatabaseObject
     public IReadOnlyList<string> GetCreateSql(SqlDialect dialect)
     {
         var target = SqlSyntax.Qualify(dialect, Name, Schema);
-        var query = SqlSyntax.TrimQuery(Sql);
+        var query = SqlSyntax.TrimQuery(Sql, dialect);
 
         return dialect switch
         {

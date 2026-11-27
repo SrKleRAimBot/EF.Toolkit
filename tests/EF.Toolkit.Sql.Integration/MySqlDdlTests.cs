@@ -16,6 +16,7 @@ public sealed class MySqlDdlTests(MySqlFixture fixture)
     [Theory]
     [InlineData("SELECT 3--2 AS Value;", 1, 5)]
     [InlineData("SELECT 1 AS Value /*! FROM DUAL WHERE FALSE */;", 0, 0)]
+    [InlineData("SELECT 1 #note'\n + LENGTH('x;-- tail') AS Value;", 1, 10)]
     public async Task A_view_keeps_what_MySQL_runs_that_looks_like_a_comment(string query, int rows, int value)
     {
         // 3--2 is 3 - -2 on MySQL, and /*! … */ runs: the trim took both for comments and cut them away.

@@ -134,7 +134,7 @@ internal static partial class SqlSyntax
     ///     Queries are embedded in larger statements (<c>AS ... WITH NO DATA</c>, <c>RETURN (...)</c>),
     ///     where a trailing semicolon would end the statement early.
     /// </remarks>
-    public static string TrimQuery(string sql)
+    public static string TrimQuery(string sql, SqlDialect dialect)
     {
         ArgumentNullException.ThrowIfNull(sql);
 
@@ -144,7 +144,7 @@ internal static partial class SqlSyntax
         // are left exactly where they are (what follows the query is always put on a line of its own),
         // so nothing the engine would run can be cut away. A scan that cannot tell where the query ends
         // leaves a semicolon in place at worst, which the engine refuses, never a query that means less.
-        if (TrailingSemicolons(sql) is { } semicolons)
+        if (TrailingSemicolons(sql, dialect) is { } semicolons)
         {
             var builder = new System.Text.StringBuilder(sql);
             for (var k = semicolons.Count - 1; k >= 0; k--)
@@ -174,12 +174,13 @@ internal static partial class SqlSyntax
 
     // The positions of the semicolons after the last significant character — anything but whitespace,
     // a comment or a semicolon; null if the text ends inside a quoted string, a quoted identifier, a
-    // block comment or a dollar quote. Read conservatively, so that a doubt keeps SQL significant:
-    //   -- is a comment only when whitespace, a control character or the end follows it, as MySQL
-    //        requires (3--2 is 3 - -2 there), and it ends at a line feed or a carriage return;
-    //   /* */ is a comment, but /*! … */ and /*+ … */ are MySQL's executable comments and hints;
-    //   # is not a comment at all: one on MySQL alone, and an operator on PostgreSQL (#>).
-    private static List<int>? TrailingSemicolons(string sql)
+    // block comment or a dollar quote. Comments are read as the engine reads them — a comment taken
+    // for code could hide a quote, and code taken for a comment could hide one too:
+    //   -- starts a comment, ending at a line feed or a carriage return; on MySQL only when whitespace,
+    //        a control character or the end follows it (3--2 is 3 - -2 there);
+    //   #  starts one on MySQL alone — on PostgreSQL it is an operator (#>);
+    //   /* */ is a comment, but /*! … */ and /*+ … */ are MySQL's executable comments and hints.
+    private static List<int>? TrailingSemicolons(string sql, SqlDialect dialect)
     {
         var semicolons = new List<int>();
         var i = 0;
@@ -196,7 +197,9 @@ internal static partial class SqlSyntax
                 semicolons.Add(i);
                 i++;
             }
-            else if (c == '-' && next == '-' && (i + 2 == sql.Length || IsSqlWhitespace(sql[i + 2]) || char.IsControl(sql[i + 2])))
+            else if ((c == '-' && next == '-'
+                    && (dialect != SqlDialect.MySql || i + 2 == sql.Length || IsSqlWhitespace(sql[i + 2]) || char.IsControl(sql[i + 2])))
+                || (c == '#' && dialect == SqlDialect.MySql))
             {
                 var lineEnd = sql.IndexOfAny(['\n', '\r'], i);
                 i = lineEnd < 0 ? sql.Length : lineEnd + 1;

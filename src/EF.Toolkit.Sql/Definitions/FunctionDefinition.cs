@@ -209,7 +209,7 @@ public sealed class FunctionDefinition : IDatabaseObject
 
         return Kind == FunctionKind.Scalar
             ? head + $"RETURNS {ReturnType}\n" + with + $"AS\n{Body}"
-            : head + "RETURNS TABLE\n" + with + $"AS\nRETURN (\n{SqlSyntax.TrimQuery(Body)}\n)";
+            : head + "RETURNS TABLE\n" + with + $"AS\nRETURN (\n{SqlSyntax.TrimQuery(Body, SqlDialect.SqlServer)}\n)";
     }
 
     private string MySqlCreate(string target)

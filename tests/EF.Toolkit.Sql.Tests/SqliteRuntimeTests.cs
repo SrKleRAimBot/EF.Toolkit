@@ -155,6 +155,19 @@ public sealed class SqliteRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_quote_inside_a_line_comment_does_not_hide_a_semicolon_inside_a_string()
+    {
+        // SQLite needs no space after --: the scan read MySQL's rule, took the comment's apostrophe for
+        // an opening quote, and removed the semicolon inside 'x;-- tail'.
+        var view = new ViewDefinition("noted", "SELECT --note'\n 'x;-- tail' AS \"Value\";");
+
+        await _context.Database.CreateDatabaseObjectsAsync(view);
+
+        (await _context.Database.SqlQueryRaw<string>("SELECT \"Value\" FROM \"noted\"").SingleAsync(TestContext.Current.CancellationToken))
+            .ShouldBe("x;-- tail");
+    }
+
+    [Fact]
     public async Task A_callers_transaction_is_joined_rather_than_nested()
     {
         await using (var transaction = await _context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken))
