@@ -344,6 +344,42 @@ public sealed class ResetDataTests
     }
 
     [Fact]
+    public async Task A_reset_inside_a_transaction_holding_a_deferred_violation_is_refused_before_it_writes()
+    {
+        // The reset defers its checks with defer_foreign_keys, and SQLite counts a violation resolved under
+        // it apart from one an INITIALLY DEFERRED key deferred earlier: a trigger deleting the caller's
+        // pending orphan let the reset pass, and the caller's COMMIT then failed with every row valid.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        await ShopData.SeedEverythingAsync(context);
+        var before = await ShopData.CountsAsync(context);
+        await context.Database.OpenConnectionAsync(Ct);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(
+                "CREATE TABLE \"Owners\" (\"Id\" INTEGER PRIMARY KEY); "
+                    + "CREATE TABLE \"Pets\" (\"Id\" INTEGER PRIMARY KEY, \"OwnerId\" INTEGER REFERENCES \"Owners\" (\"Id\") DEFERRABLE INITIALLY DEFERRED); "
+                    + "CREATE TRIGGER \"ClearPets\" AFTER DELETE ON \"Tags\" BEGIN DELETE FROM \"Pets\"; END",
+                Ct);
+            await using var transaction = await context.Database.BeginTransactionAsync(Ct);
+            await context.Database.ExecuteSqlRawAsync("INSERT INTO \"Pets\" VALUES (1, 42)", Ct);
+
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("deferred to its commit");
+            Should.Throw<InvalidOperationException>(() => context.Database.ResetData())
+                .Message.ShouldContain("deferred to its commit");
+
+            (await ShopData.CountsAsync(context)).ShouldBe(before);
+            await context.Database.ExecuteSqlRawAsync("DELETE FROM \"Pets\"", Ct);
+            await transaction.CommitAsync(Ct);
+        }
+        finally
+        {
+            await context.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task A_trigger_writing_an_orphan_into_an_attached_database_rolls_the_reset_back()
     {
         // Both checks read pragma_foreign_key_check() unqualified, which is main alone: an orphan written

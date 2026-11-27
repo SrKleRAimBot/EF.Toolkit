@@ -356,6 +356,12 @@ public static class DatabaseResetExtensions
         var deferred = Convert.ToInt64(
             await ScalarAsync(connection, transaction, "PRAGMA defer_foreign_keys;", cancellationToken).ConfigureAwait(false),
             System.Globalization.CultureInfo.InvariantCulture) != 0;
+        if (inTransaction && foreignKeys && !deferred)
+        {
+            RefuseSqlitePendingViolations(Convert.ToInt64(
+                await ScalarAsync(connection, transaction, ResetSqlGenerator.SqliteViolationCount, cancellationToken).ConfigureAwait(false),
+                System.Globalization.CultureInfo.InvariantCulture));
+        }
 
         return new ResetConnectionState(
             options.RestartIdentity, inTransaction, foreignKeys, sequence, SqliteDeferForeignKeys: deferred);
@@ -395,9 +401,32 @@ public static class DatabaseResetExtensions
         var deferred = Convert.ToInt64(
             Scalar(connection, transaction, "PRAGMA defer_foreign_keys;"),
             System.Globalization.CultureInfo.InvariantCulture) != 0;
+        if (inTransaction && foreignKeys && !deferred)
+        {
+            RefuseSqlitePendingViolations(Convert.ToInt64(
+                Scalar(connection, transaction, ResetSqlGenerator.SqliteViolationCount),
+                System.Globalization.CultureInfo.InvariantCulture));
+        }
 
         return new ResetConnectionState(
             options.RestartIdentity, inTransaction, foreignKeys, sequence, SqliteDeferForeignKeys: deferred);
+    }
+
+    // Inside a transaction the deletes run with defer_foreign_keys on, and SQLite counts a violation
+    // resolved under it apart from one a DEFERRABLE INITIALLY DEFERRED key deferred before it: deleting
+    // an orphan the caller's transaction wrote leaves that first count standing, so the caller's COMMIT
+    // fails although no row violates anything. A pending violation cannot be told from one committed
+    // long ago, so any violation refuses the reset here, before it writes.
+    private static void RefuseSqlitePendingViolations(long violations)
+    {
+        if (violations != 0)
+        {
+            throw new InvalidOperationException(
+                $"Cannot reset: the database has {violations} foreign-key violation(s), and this transaction may be "
+                + "holding some of them deferred to its commit. A reset inside the transaction defers its own checks, "
+                + "and removing a row SQLite had deferred that way would leave the transaction unable to commit. "
+                + "Fix the violations first, or run PRAGMA defer_foreign_keys = ON in the transaction before the reset.");
+        }
     }
 
     private const string SqliteSequenceExists =

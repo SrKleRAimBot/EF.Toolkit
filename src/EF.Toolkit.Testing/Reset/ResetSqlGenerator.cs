@@ -464,6 +464,9 @@ internal static class ResetSqlGenerator
     // Every schema the connection has — main, temp and each attached database: a trigger on a reset table
     // can write anywhere, and an unqualified pragma_foreign_key_check() reads main alone. Called as
     // functions, so that a table of the same name cannot stand in for either.
+    /// <summary>Counts every foreign-key violation in every schema the connection has.</summary>
+    internal const string SqliteViolationCount = "SELECT COUNT(*) FROM " + SqliteAllViolations + " AS c;";
+
     private const string SqliteAllViolations =
         "(SELECT d.\"name\" AS s, k.\"table\" AS t, k.\"rowid\" AS r, k.\"fkid\" AS f "
         + "FROM pragma_database_list() AS d, pragma_foreign_key_check(NULL, d.\"name\") AS k)";

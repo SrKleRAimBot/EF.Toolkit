@@ -249,7 +249,11 @@ need different statements there: MySQL does not restart identity, because `ALTER
 open transaction; SQLite defers its foreign keys rather than switching them off, which it cannot do
 inside a transaction, and still checks for new violations before it releases its savepoint — an
 orphan a `DELETE` trigger wrote fails `ResetDataAsync()` itself and rolls the reset back, rather
-than surfacing at your commit.
+than surfacing at your commit. With `foreign_keys` on and `defer_foreign_keys` off, a database
+that already has a violation is refused there, before anything is deleted: your transaction may be
+holding it deferred (a `DEFERRABLE INITIALLY DEFERRED` key), and SQLite would still count it at your
+`COMMIT` after a reset with deferred checks removed the row. Fix the violation, or run
+`PRAGMA defer_foreign_keys = ON` yourself before the reset.
 
 The engine is read off `Database.ProviderName`: `Npgsql.EntityFrameworkCore.PostgreSQL`,
 `Microsoft.EntityFrameworkCore.SqlServer`, `MySql.EntityFrameworkCore`,
