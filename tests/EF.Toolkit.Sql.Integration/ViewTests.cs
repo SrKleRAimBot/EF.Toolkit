@@ -82,6 +82,42 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_escaped_quote_in_an_escape_string_keeps_its_value()
+    {
+        // E'a\';-- tail' is one string: the scan ended it at the escaped quote, dropped the semicolon
+        // inside it, and the view returned a'-- tail.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("escaped_value", "SELECT E'a\\';-- tail' AS \"Value\"");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            (await context.Database.SqlQueryRaw<string>("SELECT \"Value\" FROM escaped_value").SingleAsync(Token)).ShouldBe("a';-- tail");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
+    public async Task A_no_break_space_ending_a_column_alias_stays_part_of_it()
+    {
+        // PostgreSQL takes U+00A0 into an unquoted identifier; Trim() took it off and renamed the column.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("spaced_alias", "SELECT 1 AS value\u00A0");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            var columns = "SELECT column_name AS \"Value\" FROM information_schema.columns WHERE table_name = 'spaced_alias'";
+            (await context.Database.SqlQueryRaw<string>(columns).SingleAsync(Token)).ShouldBe("value\u00A0");
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
     public async Task A_materialized_view_holds_its_snapshot_until_refreshed()
     {
         await using var context = fixture.CreateAdminContext();

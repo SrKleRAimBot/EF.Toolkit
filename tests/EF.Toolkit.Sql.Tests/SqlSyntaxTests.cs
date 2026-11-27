@@ -89,6 +89,10 @@ public sealed class SqlSyntaxTests
     [InlineData("SELECT 1 AS id /*! WHERE FALSE */;", "SELECT 1 AS id /*! WHERE FALSE */")]
     [InlineData("SELECT 1 /*+ hint */ ; -- y", "SELECT 1 /*+ hint */  -- y")]
     [InlineData("SELECT 1 AS id -- note\rWHERE FALSE;", "SELECT 1 AS id -- note\rWHERE FALSE")]
+    [InlineData("SELECT E'a\\';-- tail' AS value", "SELECT E'a\\';-- tail' AS value")]
+    [InlineData("SELECT 'a\\';-- tail' AS value;", "SELECT 'a\\';-- tail' AS value")]
+    [InlineData("SELECT 1 AS value\u00A0", "SELECT 1 AS value\u00A0")]
+    [InlineData("SELECT 1 AS value\u00A0;", "SELECT 1 AS value\u00A0")]
     public void Queries_lose_surrounding_whitespace_and_trailing_semicolons(string sql, string expected)
         => SqlSyntax.TrimQuery(sql).ShouldBe(expected);
 

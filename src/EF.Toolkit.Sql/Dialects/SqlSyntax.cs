@@ -152,19 +152,25 @@ internal static partial class SqlSyntax
                 builder.Remove(semicolons[k], 1);
             }
 
-            return builder.ToString().Trim();
+            return builder.ToString().Trim(SqlWhitespace);
         }
 
-        // A string or comment the scan could not see the end of — a MySQL backslash escape, say: the
-        // trailing semicolons alone are trimmed, as they always were.
-        var trimmed = sql.Trim();
+        // A string or comment the scan could not see the end of — a backslash escape, say: the trailing
+        // semicolons alone are trimmed, as they always were.
+        var trimmed = sql.Trim(SqlWhitespace);
         while (trimmed.EndsWith(';'))
         {
-            trimmed = trimmed[..^1].TrimEnd();
+            trimmed = trimmed[..^1].TrimEnd(SqlWhitespace);
         }
 
         return trimmed;
     }
+
+    // What every engine reads as whitespace between tokens. Not char.IsWhiteSpace: PostgreSQL takes a
+    // no-break space into an unquoted identifier, so trimming one would rename a column.
+    private static readonly char[] SqlWhitespace = [' ', '\t', '\n', '\r', '\f', '\v'];
+
+    private static bool IsSqlWhitespace(char c) => Array.IndexOf(SqlWhitespace, c) >= 0;
 
     // The positions of the semicolons after the last significant character — anything but whitespace,
     // a comment or a semicolon; null if the text ends inside a quoted string, a quoted identifier, a
@@ -181,7 +187,7 @@ internal static partial class SqlSyntax
         {
             var c = sql[i];
             var next = i + 1 < sql.Length ? sql[i + 1] : '\0';
-            if (char.IsWhiteSpace(c))
+            if (IsSqlWhitespace(c))
             {
                 i++;
             }
@@ -190,7 +196,7 @@ internal static partial class SqlSyntax
                 semicolons.Add(i);
                 i++;
             }
-            else if (c == '-' && next == '-' && (i + 2 == sql.Length || char.IsWhiteSpace(sql[i + 2]) || char.IsControl(sql[i + 2])))
+            else if (c == '-' && next == '-' && (i + 2 == sql.Length || IsSqlWhitespace(sql[i + 2]) || char.IsControl(sql[i + 2])))
             {
                 var lineEnd = sql.IndexOfAny(['\n', '\r'], i);
                 i = lineEnd < 0 ? sql.Length : lineEnd + 1;
@@ -216,7 +222,10 @@ internal static partial class SqlSyntax
                 // Doubling the quote escapes it inside, which the scan sees as two quoted runs.
                 var closing = c == '[' ? ']' : c;
                 var close = sql.IndexOf(closing, i + 1);
-                if (close < 0)
+
+                // A backslash may escape the quote — in PostgreSQL's E'…' and in MySQL's strings — so
+                // where the run ends is not certain: the scan gives up rather than guess.
+                if (close < 0 || sql.AsSpan(i + 1, close - i - 1).Contains('\\'))
                 {
                     return null;
                 }
