@@ -563,8 +563,10 @@ way to emit SQL for the wrong engine.
 (`"we""ird"`, `[a]]b]`, `` `a``b` ``), even names that would be legal bare — a reserved-word list per
 engine and version is never complete, and names EF mapped (`Order`, `User`) are exactly the ones that
 collide. The exceptions are PostgreSQL languages and routine parameter names, which must be plain
-identifiers because the body refers to them unquoted. PostgreSQL quotes a parameter name only when it
-is reserved, since quoting would stop it folding to lower case; MySQL quotes every one. Values never reach SQL text at runtime: they are
+identifiers because the body refers to them unquoted. PostgreSQL writes every parameter name quoted in
+its lower-case form, in the definition and in named calls — the name a bare spelling folds to, so the
+body's unquoted references still find it — and a body refers to a key-word name quoted; MySQL quotes
+every one as written. Values never reach SQL text at runtime: they are
 `{0}` placeholders that EF binds as parameters. The only literal this package renders is a
 session-context key inside a generated policy, escaped per engine.
 

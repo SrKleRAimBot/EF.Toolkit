@@ -6,7 +6,9 @@ namespace EFToolkit.Sql.Definitions;
 /// <remarks>
 ///     The name is written without a prefix; SQL Server's <c>@</c> is added when rendering for it (a
 ///     leading <c>@</c> is accepted and ignored). It must be a plain identifier because the routine
-///     body refers to it bare, so it cannot be quoted the way table and column names are.
+///     body refers to it unquoted. On PostgreSQL it is written quoted in its lower-case form, in the
+///     definition and in named calls: the name an unquoted reference folds to, and the only way a key
+///     word such as <c>timestamp</c> can be a parameter — which the body then refers to quoted.
 /// </remarks>
 public sealed class SqlParameterDefinition
 {
