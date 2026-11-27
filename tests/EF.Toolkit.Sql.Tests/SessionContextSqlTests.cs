@@ -52,6 +52,8 @@ public sealed class SessionContextSqlTests
     [InlineData(SqlDialect.MySql, "x; DROP TABLE t")]
     [InlineData(SqlDialect.MySql, "a-b")]
     [InlineData(SqlDialect.PostgreSql, " ")]
+    [InlineData(SqlDialect.MySql, "tenant_id\n")]
+    [InlineData(SqlDialect.PostgreSql, "app.tenant_id\n")]
     public void Keys_the_engine_would_reject_are_refused(SqlDialect dialect, string key)
         => Should.Throw<ArgumentException>(() => SessionContextSql.ValidateKey(dialect, key));
 

@@ -199,9 +199,9 @@ internal static partial class SessionContextSql
             SqlDialect.Sqlite,
             "SQLite is an in-process database with no session state on the server side.");
 
-    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+\z", RegexOptions.CultureInvariant)]
     private static partial Regex PostgreSqlKey();
 
-    [GeneratedRegex(@"^[A-Za-z0-9._$]+$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z0-9._$]+\z", RegexOptions.CultureInvariant)]
     private static partial Regex MySqlVariable();
 }

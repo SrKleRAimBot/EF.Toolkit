@@ -148,4 +148,8 @@ public sealed class SqlSyntaxTests
     [InlineData(SqlDialect.Sqlite, "SQLite")]
     public void Engines_have_display_names(SqlDialect dialect, string expected)
         => SqlSyntax.EngineName(dialect).ShouldBe(expected);
+
+    [Fact]
+    public void A_simple_identifier_may_not_end_in_a_newline()
+        => Should.Throw<ArgumentException>(() => SqlSyntax.RequireSimpleIdentifier("name\n", "value"));
 }

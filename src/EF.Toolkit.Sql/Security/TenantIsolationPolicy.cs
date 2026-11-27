@@ -493,7 +493,7 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
 
     // Any number of dimensions, spaced or not, sized or not — real [], real[][], date[3] — or the SQL
     // standard's ARRAY and ARRAY[3].
-    [GeneratedRegex(@"((\s*\[\s*\d*\s*\])+|\s+array(\s*\[\s*\d*\s*\])?)$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"((\s*\[\s*\d*\s*\])+|\s+array(\s*\[\s*\d*\s*\])?)\z", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex ArraySuffix();
 
     [GeneratedRegex(@"\s*\(\s*-?\d+\s*(,\s*-?\d+\s*)?\)", RegexOptions.CultureInvariant)]

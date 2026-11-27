@@ -170,6 +170,6 @@ internal static partial class SqlSyntax
     public static ArgumentOutOfRangeException UndefinedDialect(SqlDialect dialect)
         => new(nameof(dialect), dialect, "Not a defined SqlDialect value.");
 
-    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*\z", RegexOptions.CultureInvariant)]
     private static partial Regex SimpleIdentifier();
 }
