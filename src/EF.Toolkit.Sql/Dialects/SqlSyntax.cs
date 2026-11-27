@@ -139,12 +139,20 @@ internal static partial class SqlSyntax
         ArgumentNullException.ThrowIfNull(sql);
 
         // A semicolon followed only by a comment ends the statement just as one at the very end does:
-        // "SELECT 1; -- note" embedded before WITH NO DATA would make that a second statement. So the
-        // query is cut after its last significant character — not whitespace, a comment or a semicolon
-        // — found by a scan that steps over quoted text, quoted identifiers and dollar-quoted bodies.
-        if (LastSignificantEnd(sql) is { } end)
+        // "SELECT 1; -- note" embedded before WITH NO DATA would make that a second statement. So every
+        // semicolon after the query's last significant character is removed — and only those: comments
+        // are left exactly where they are (what follows the query is always put on a line of its own),
+        // so nothing the engine would run can be cut away. A scan that cannot tell where the query ends
+        // leaves a semicolon in place at worst, which the engine refuses, never a query that means less.
+        if (TrailingSemicolons(sql) is { } semicolons)
         {
-            return sql[..end].Trim();
+            var builder = new System.Text.StringBuilder(sql);
+            for (var k = semicolons.Count - 1; k >= 0; k--)
+            {
+                builder.Remove(semicolons[k], 1);
+            }
+
+            return builder.ToString().Trim();
         }
 
         // A string or comment the scan could not see the end of — a MySQL backslash escape, say: the
@@ -158,31 +166,47 @@ internal static partial class SqlSyntax
         return trimmed;
     }
 
-    // The index just past the last character that is not whitespace, a comment or a semicolon; null if
-    // the text ends inside a quoted string, a quoted identifier, a block comment or a dollar quote.
-    // Only -- and /* */ are comments: # is one on MySQL alone, and an operator on PostgreSQL (#>).
-    private static int? LastSignificantEnd(string sql)
+    // The positions of the semicolons after the last significant character — anything but whitespace,
+    // a comment or a semicolon; null if the text ends inside a quoted string, a quoted identifier, a
+    // block comment or a dollar quote. Read conservatively, so that a doubt keeps SQL significant:
+    //   -- is a comment only when whitespace, a control character or the end follows it, as MySQL
+    //        requires (3--2 is 3 - -2 there), and it ends at a line feed or a carriage return;
+    //   /* */ is a comment, but /*! … */ and /*+ … */ are MySQL's executable comments and hints;
+    //   # is not a comment at all: one on MySQL alone, and an operator on PostgreSQL (#>).
+    private static List<int>? TrailingSemicolons(string sql)
     {
-        var end = 0;
+        var semicolons = new List<int>();
         var i = 0;
         while (i < sql.Length)
         {
             var c = sql[i];
-            if (char.IsWhiteSpace(c) || c == ';')
+            var next = i + 1 < sql.Length ? sql[i + 1] : '\0';
+            if (char.IsWhiteSpace(c))
             {
                 i++;
             }
-            else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+            else if (c == ';')
             {
-                var newline = sql.IndexOf('\n', i);
-                i = newline < 0 ? sql.Length : newline + 1;
+                semicolons.Add(i);
+                i++;
             }
-            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+            else if (c == '-' && next == '-' && (i + 2 == sql.Length || char.IsWhiteSpace(sql[i + 2]) || char.IsControl(sql[i + 2])))
+            {
+                var lineEnd = sql.IndexOfAny(['\n', '\r'], i);
+                i = lineEnd < 0 ? sql.Length : lineEnd + 1;
+            }
+            else if (c == '/' && next == '*')
             {
                 var close = sql.IndexOf("*/", i + 2, StringComparison.Ordinal);
                 if (close < 0)
                 {
                     return null;
+                }
+
+                var executable = i + 2 < sql.Length && sql[i + 2] is '!' or '+';
+                if (executable)
+                {
+                    semicolons.Clear();
                 }
 
                 i = close + 2;
@@ -197,7 +221,8 @@ internal static partial class SqlSyntax
                     return null;
                 }
 
-                i = end = close + 1;
+                semicolons.Clear();
+                i = close + 1;
             }
             else if (c == '$' && DollarTag().Match(sql, i) is { Success: true } tag)
             {
@@ -207,15 +232,17 @@ internal static partial class SqlSyntax
                     return null;
                 }
 
-                i = end = close + tag.Length;
+                semicolons.Clear();
+                i = close + tag.Length;
             }
             else
             {
-                i = end = i + 1;
+                semicolons.Clear();
+                i++;
             }
         }
 
-        return end;
+        return semicolons;
     }
 
     // $$ or $tag$ opening a dollar-quoted body; $1 is a parameter, not a quote.

@@ -18,7 +18,7 @@ public sealed class ViewDefinition : IDatabaseObject
 {
     /// <summary>Initializes a new instance of the <see cref="ViewDefinition" /> class.</summary>
     /// <param name="name">The view name.</param>
-    /// <param name="sql">The view's query, in the target engine's dialect. Trailing semicolons and comments are ignored.</param>
+    /// <param name="sql">The view's query, in the target engine's dialect. Trailing semicolons are dropped, even before a trailing comment.</param>
     /// <param name="schema">The schema, or <see langword="null" /> for the default schema.</param>
     public ViewDefinition(string name, string sql, string? schema = null)
     {

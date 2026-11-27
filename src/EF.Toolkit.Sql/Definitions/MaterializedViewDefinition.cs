@@ -24,7 +24,7 @@ public sealed class MaterializedViewDefinition : IDatabaseObject
 
     /// <summary>Initializes a new instance of the <see cref="MaterializedViewDefinition" /> class.</summary>
     /// <param name="name">The materialized view name.</param>
-    /// <param name="sql">The view's query. Trailing semicolons and comments are ignored.</param>
+    /// <param name="sql">The view's query. Trailing semicolons are dropped, even before a trailing comment.</param>
     /// <param name="schema">The schema, or <see langword="null" /> for the default schema.</param>
     /// <param name="withNoData">
     ///     Create the view unpopulated (<c>WITH NO DATA</c>), deferring the cost of the query to the

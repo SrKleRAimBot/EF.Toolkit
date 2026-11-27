@@ -13,6 +13,32 @@ public sealed class MySqlDdlTests(MySqlFixture fixture)
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Theory]
+    [InlineData("SELECT 3--2 AS Value;", 1, 5)]
+    [InlineData("SELECT 1 AS Value /*! FROM DUAL WHERE FALSE */;", 0, 0)]
+    public async Task A_view_keeps_what_MySQL_runs_that_looks_like_a_comment(string query, int rows, int value)
+    {
+        // 3--2 is 3 - -2 on MySQL, and /*! … */ runs: the trim took both for comments and cut them away.
+        Assert.SkipWhen(fixture.SkipReason is not null, fixture.SkipReason ?? "");
+        await using var context = fixture.CreateContext();
+        var view = new ViewDefinition("looks_commented", query);
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+
+            var values = await context.Database.SqlQueryRaw<long>("SELECT Value FROM looks_commented").ToListAsync(Token);
+            values.Count.ShouldBe(rows);
+            if (rows > 0)
+            {
+                values[0].ShouldBe(value);
+            }
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
     [Fact]
     public async Task Inside_a_transaction_creating_objects_is_refused_before_any_DDL_so_earlier_work_can_still_roll_back()
     {

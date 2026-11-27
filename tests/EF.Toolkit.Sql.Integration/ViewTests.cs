@@ -64,6 +64,24 @@ public sealed class ViewTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_filter_after_a_comment_ended_by_a_carriage_return_stays_in_the_view()
+    {
+        // PostgreSQL ends a -- comment at a carriage return too: the trim took the line for one comment
+        // and cut WHERE FALSE away, so the view returned a row.
+        await using var context = fixture.CreateAdminContext();
+        var view = new ViewDefinition("filtered_ids", "SELECT 1 AS \"Value\" -- note\rWHERE FALSE;");
+        try
+        {
+            await context.Database.CreateDatabaseObjectsAsync(view);
+            (await context.Database.SqlQueryRaw<int>("SELECT \"Value\" FROM filtered_ids").CountAsync(Token)).ShouldBe(0);
+        }
+        finally
+        {
+            await context.Database.DropDatabaseObjectsAsync(view);
+        }
+    }
+
+    [Fact]
     public async Task A_materialized_view_holds_its_snapshot_until_refreshed()
     {
         await using var context = fixture.CreateAdminContext();
