@@ -80,9 +80,10 @@ internal static class RoutineSyntax
 
     /// <summary>A PostgreSQL routine's argument signature, as <c>DROP</c> takes it to name one overload.</summary>
     /// <remarks>
-    ///     A function is identified by its input types alone. A procedure's <c>OUT</c> arguments are part of
-    ///     its identity too, so for one every argument is listed with its mode, which PostgreSQL accepts for
-    ///     both.
+    ///     A function is identified by its input types alone. For a procedure every argument is listed with
+    ///     its mode, mirroring its <c>CREATE</c>: with the modes written, PostgreSQL reads the list exactly —
+    ///     it ignores an argument marked <c>OUT</c> when looking the procedure up, rather than having to
+    ///     guess which of an unmarked list are inputs.
     /// </remarks>
     public static string PostgreSqlSignature(IReadOnlyList<SqlParameterDefinition> parameters, bool withDirection)
         => string.Join(", ", parameters.Select(p => withDirection ? $"{Direction(p.Direction)} {p.StoreType}" : p.StoreType));
