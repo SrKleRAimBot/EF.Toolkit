@@ -121,6 +121,39 @@ public sealed class SqliteRuntimeTests : IAsyncLifetime
         (await _context.ActiveCustomers.CountAsync(TestContext.Current.CancellationToken)).ShouldBe(2);
     }
 
+    private sealed class RefuseRollbackToSavepoint : Microsoft.EntityFrameworkCore.Diagnostics.DbTransactionInterceptor
+    {
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult> RollingBackToSavepointAsync(
+            System.Data.Common.DbTransaction transaction,
+            Microsoft.EntityFrameworkCore.Diagnostics.TransactionEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult result,
+            CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("rollback to savepoint refused");
+    }
+
+    [Fact]
+    public async Task A_failed_rollback_to_the_savepoint_says_the_earlier_statements_may_remain()
+    {
+        // The rollback can fail while the transaction stays committable: the message said it could no
+        // longer be committed, yet committing kept the view the failed call had created.
+        await using var context = new ShopContext(new DbContextOptionsBuilder<ShopContext>()
+            .UseSqlite(_connection)
+            .AddInterceptors(new RefuseRollbackToSavepoint())
+            .Options);
+        var broken = new ViewDefinition("Broken", "SELEC nothing");
+
+        await using var transaction = await context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        var error = await Should.ThrowAsync<AggregateException>(
+            () => context.Database.CreateDatabaseObjectsAsync([ActiveCustomers, broken], TestContext.Current.CancellationToken));
+
+        error.InnerExceptions[0].ShouldBeOfType<SqliteException>();
+        error.InnerExceptions[1].Message.ShouldBe("rollback to savepoint refused");
+        error.Message.ShouldContain("may still be part of the transaction");
+        error.Message.ShouldContain("Roll the whole transaction back");
+        error.Message.ShouldNotContain("can no longer be committed");
+        await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public async Task A_callers_transaction_is_joined_rather_than_nested()
     {

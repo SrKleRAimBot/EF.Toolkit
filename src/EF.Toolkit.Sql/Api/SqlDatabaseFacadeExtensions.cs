@@ -335,11 +335,14 @@ public static class SqlDatabaseFacadeExtensions
                 catch (Exception rollbackError)
                 {
                     // An error that dooms the transaction — SQL Server under XACT_ABORT — leaves no
-                    // savepoint to go back to. The statement's error is the one that explains it; the
-                    // transaction cannot be committed either way.
+                    // savepoint to go back to, and the rollback can fail on its own as well. The
+                    // statement's error is the one that explains it, so it comes first. Whether the
+                    // transaction can still be committed is not known here; what is known is that the
+                    // statements before the failed one may still be in it.
                     throw new AggregateException(
                         "A statement failed and the transaction could not be rolled back to the savepoint "
-                        + "taken before it; the transaction can no longer be committed.",
+                        + "taken before the statements, so those that ran before it may still be part of the "
+                        + "transaction. Roll the whole transaction back.",
                         error,
                         rollbackError);
                 }
