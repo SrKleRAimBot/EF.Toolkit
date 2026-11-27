@@ -193,9 +193,11 @@ call cannot be composed over — `EXEC` and `CALL` cannot appear in a `FROM` cla
 to one would fail at execution. On PostgreSQL the rows are the single row of `OUT` / `INOUT` values that
 `CALL` returns; on SQL Server and MySQL, the procedure's first result set. For a scalar `T` the single
 column is read whatever it is named — EF falls back to the first column when the query is not composed,
-and this one never is. (`QueryFunction<T>` returns a query you may compose over: read directly, a scalar
-function's column may have any name too, but to add LINQ to it — `Where`, `OrderBy` — name the column
-`Value`, which is what EF's outer query refers to.)
+and this one never is. (`QueryFunction<T>` returns a query you may compose over: with a scalar `T` —
+a table-valued function returning one column — read directly, the column may have any name too, but to
+add LINQ to it — `Where`, `OrderBy` — name the column `Value`, which is what EF's outer query refers
+to. `QueryFunction` selects `FROM` the function, which SQL Server allows only for a table-valued one;
+call a SQL Server scalar function through `SqlQuery`: `SELECT dbo.AddTax(@amount) AS [Value]`.)
 
 ## Functions
 
