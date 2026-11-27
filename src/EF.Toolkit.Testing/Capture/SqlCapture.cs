@@ -174,17 +174,23 @@ public sealed class SqlCapture : IDisposable
         }
     }
 
-    internal static void Record(DbContext? context, SqlCaptureInterceptor interceptor, CapturedCommand command)
+    /// <summary>Whether this flow has any capture started — the one read made while there is none.</summary>
+    internal static bool AnyActive => Active.Value is { Count: > 0 };
+
+    internal static void Record(DbContext? context, SqlCaptureInterceptor interceptor, Func<CapturedCommand> snapshot)
     {
         if (Active.Value is not { Count: > 0 } active)
         {
             return;
         }
 
+        // Taken for the first capture that wants it, and shared by the rest.
+        CapturedCommand? command = null;
         foreach (var capture in active)
         {
             if (!capture._disposed && capture._accepts(context, interceptor))
             {
+                command ??= snapshot();
                 lock (capture._lock)
                 {
                     capture._commands.Add(command);

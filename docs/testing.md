@@ -340,7 +340,7 @@ sql.ShouldHaveExecutedAtMost(1);                // fails, listing every command 
 
 | | |
 | --- | --- |
-| `Commands` | Each command's text, parameters (as they were when it ran), kind — `Reader`, `NonQuery` or `Scalar` — duration and whether it succeeded. |
+| `Commands` | Each command's text, parameters (as they were when it ran: an array, such as a `byte[]`, is copied; any other mutable value is kept as the object it is), kind — `Reader`, `NonQuery` or `Scalar` — duration and whether it succeeded. |
 | `ShouldHaveExecuted(n)` | Exactly `n` commands. |
 | `ShouldHaveExecutedAtMost(n)` | No more than `n` — the N+1 guard. |
 | `ShouldContain(text)` / `ShouldNotContain(text)` | Case-insensitive by default; pass a `StringComparison` to change it. |

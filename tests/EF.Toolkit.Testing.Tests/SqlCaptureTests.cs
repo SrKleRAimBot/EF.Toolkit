@@ -26,6 +26,24 @@ public sealed class SqlCaptureTests
     }
 
     [Fact]
+    public async Task A_buffer_filled_again_after_the_command_does_not_rewrite_what_was_recorded()
+    {
+        // The parameter's byte[] was kept by reference: filled again for the next command, the first
+        // command's recorded value changed with it.
+        await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);
+        await using var context = db.CreateContext();
+        using var sql = db.CaptureSql();
+
+        var buffer = new byte[] { 1 };
+        await context.Database.SqlQueryRaw<int>("SELECT length({0}) AS \"Value\"", buffer).SingleAsync(Ct);
+        buffer[0] = 2;
+        await context.Database.SqlQueryRaw<int>("SELECT length({0}) AS \"Value\"", buffer).SingleAsync(Ct);
+
+        sql.Commands[0].Parameters.ShouldHaveSingleItem().Value.ShouldBe(new byte[] { 1 });
+        sql.Commands[1].Parameters.ShouldHaveSingleItem().Value.ShouldBe(new byte[] { 2 });
+    }
+
+    [Fact]
     public async Task Kind_text_and_parameters_are_recorded()
     {
         await using var db = await SqliteTestDatabase<ShopContext>.CreateAsync(cancellationToken: Ct);

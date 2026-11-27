@@ -84,8 +84,15 @@ public sealed class SqlCaptureInterceptor : DbCommandInterceptor
         return Task.CompletedTask;
     }
 
+    // The command is only read once a capture wants it: with none started, recording costs the one
+    // AsyncLocal read SqlCapture.Record makes.
     private void Record(DbCommand command, CommandEndEventData eventData, bool succeeded)
-        => SqlCapture.Record(eventData.Context, this, Capture(command, eventData, succeeded));
+    {
+        if (SqlCapture.AnyActive)
+        {
+            SqlCapture.Record(eventData.Context, this, () => Capture(command, eventData, succeeded));
+        }
+    }
 
     private static CapturedCommand Capture(DbCommand command, CommandEndEventData eventData, bool succeeded)
     {
@@ -94,7 +101,7 @@ public sealed class SqlCaptureInterceptor : DbCommandInterceptor
             .Cast<DbParameter>()
             .Select(p => new CapturedParameter(
                 p.ParameterName,
-                p.Value is DBNull ? null : p.Value,
+                Snapshot(p.Value),
                 p.DbType,
                 p.Direction))
             .ToList();
@@ -108,4 +115,14 @@ public sealed class SqlCaptureInterceptor : DbCommandInterceptor
 
         return new CapturedCommand(command.CommandText, parameters, kind, eventData.Duration, succeeded);
     }
+
+    // An array — a byte[] above all — is copied, so a buffer the caller fills again after the command
+    // ran does not rewrite what was recorded. Other values are kept as they are.
+    private static object? Snapshot(object? value)
+        => value switch
+        {
+            DBNull => null,
+            Array array => array.Clone(),
+            _ => value,
+        };
 }
