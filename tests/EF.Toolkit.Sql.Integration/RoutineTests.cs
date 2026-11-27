@@ -69,6 +69,22 @@ public sealed class RoutineTests(PostgreSqlFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_parameter_named_like_an_unreserved_key_word_is_called_by_name()
+    {
+        // timestamp is accepted bare as a parameter, but timestamp => 1 does not parse: the call quotes it.
+        var stamped = new StoredProcedureDefinition(
+            "orders_stamped",
+            [new("timestamp", "integer"), new("tenant", "integer")],
+            """BEGIN INSERT INTO "Orders" ("TenantId", "Total", "Note") VALUES (tenant, "timestamp", 'stamped'); END;""");
+
+        await using var context = fixture.CreateAdminContext();
+        await context.Database.CreateDatabaseObjectsAsync(stamped);
+        await context.Database.ExecuteProcedureAsync("orders_stamped", new { timestamp = 7, tenant = 5 }, cancellationToken: Token);
+
+        (await context.Orders.SingleAsync(o => o.Note == "stamped", Token)).Total.ShouldBe(7m);
+    }
+
+    [Fact]
     public async Task Dropping_an_overload_that_was_never_created_leaves_its_sibling()
     {
         // By name alone, DROP FUNCTION IF EXISTS lookup dropped lookup(text), the only match.

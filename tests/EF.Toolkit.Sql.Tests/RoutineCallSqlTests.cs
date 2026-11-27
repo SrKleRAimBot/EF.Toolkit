@@ -11,18 +11,18 @@ public sealed class RoutineCallSqlTests
     {
         var (sql, args) = RoutineCallSql.Procedure(SqlDialect.PostgreSql, "close_month", "billing", new { tenant_id = 7, note = "x" });
 
-        sql.ShouldBe("CALL \"billing\".\"close_month\"(tenant_id => {0}, note => {1})");
+        sql.ShouldBe("CALL \"billing\".\"close_month\"(\"tenant_id\" => {0}, \"note\" => {1})");
         args.ShouldBe([7, "x"]);
     }
 
     [Fact]
-    public void PostgreSql_quotes_a_reserved_argument_name_and_leaves_others_to_fold()
+    public void PostgreSql_quotes_every_argument_name_in_its_folded_form()
     {
-        // `from => ...` does not parse; `"from" => ...` does. A mixed-case name stays bare, folding to the
-        // lowercase name an unquoted parameter of the routine has.
+        // `from => ...` does not parse, nor does `timestamp => ...`, a key word that is not even reserved.
+        // Quoted in its folded form, an argument names the lowercase parameter a bare declaration made.
         var (sql, _) = RoutineCallSql.Procedure(SqlDialect.PostgreSql, "report", null, new { From = 1, tenantId = 2 });
 
-        sql.ShouldBe("CALL \"report\"(\"from\" => {0}, tenantId => {1})");
+        sql.ShouldBe("CALL \"report\"(\"from\" => {0}, \"tenantid\" => {1})");
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public sealed class RoutineCallSqlTests
     {
         var (sql, args) = RoutineCallSql.Function(SqlDialect.PostgreSql, "orders_for", null, new Dictionary<string, object?> { ["tenant"] = 3 });
 
-        sql.ShouldBe("SELECT * FROM \"orders_for\"(tenant => {0})");
+        sql.ShouldBe("SELECT * FROM \"orders_for\"(\"tenant\" => {0})");
         args.ShouldBe([3]);
     }
 
@@ -94,8 +94,8 @@ public sealed class RoutineCallSqlTests
     {
         var (sql, _) = RoutineCallSql.Procedure(SqlDialect.PostgreSql, "we{ird}", null, new { a = 1 });
 
-        sql.ShouldBe("CALL \"we{{ird}}\"(a => {0})");
-        string.Format(System.Globalization.CultureInfo.InvariantCulture, sql, "@p0").ShouldBe("CALL \"we{ird}\"(a => @p0)");
+        sql.ShouldBe("CALL \"we{{ird}}\"(\"a\" => {0})");
+        string.Format(System.Globalization.CultureInfo.InvariantCulture, sql, "@p0").ShouldBe("CALL \"we{ird}\"(\"a\" => @p0)");
     }
 
     [Fact]

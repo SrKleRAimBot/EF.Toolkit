@@ -145,11 +145,13 @@ to go through the `mysql` client, which no EF provider writes — apply those mi
 `language: "sql"` for a PostgreSQL procedure in plain SQL.
 
 Parameter names must be plain identifiers (letters, digits, underscores), because the body refers to
-them bare. SQL Server's `@` is added for you. On PostgreSQL a name
-that is a reserved word there (`from`, `order`, `user`, …) is quoted in the definition and in named
-calls, as `"from"`; refer to it quoted inside the body too. Other names stay bare, so PostgreSQL folds
-them to lower case. On MySQL every parameter name is quoted (`` `select` ``), which changes nothing for
-the body's bare references; a reserved one must be quoted in the body as well.
+them bare. SQL Server's `@` is added for you. On PostgreSQL every parameter name is quoted in its
+lower-case form, in the definition and in named calls (`"tenantid"`, `"from"`, `"timestamp"`): that is
+the name a bare spelling folds to, so the body's bare references still find it, and it lets a key word
+be a parameter at all — `from` is reserved, and even `timestamp`, which is not, cannot be written bare
+there. A body refers to a key-word name quoted (`"from"`). On MySQL every parameter name is quoted
+(`` `select` ``), which changes nothing for the body's bare references; a reserved one must be quoted
+in the body as well.
 
 ### Calling them
 

@@ -20,7 +20,7 @@ public sealed class FunctionDefinitionTests
         => Scalar.GetCreateSql(SqlDialect.PostgreSql).ShouldBe(
         [
             """
-            CREATE OR REPLACE FUNCTION "math"."add"(a integer, b integer)
+            CREATE OR REPLACE FUNCTION "math"."add"("a" integer, "b" integer)
             RETURNS integer
             LANGUAGE plpgsql
             AS $$
@@ -34,7 +34,7 @@ public sealed class FunctionDefinitionTests
         => Table.GetCreateSql(SqlDialect.PostgreSql).ShouldBe(
         [
             """
-            CREATE OR REPLACE FUNCTION "orders_for"(tenant integer)
+            CREATE OR REPLACE FUNCTION "orders_for"("tenant" integer)
             RETURNS TABLE ("Id" integer, "Total" numeric)
             LANGUAGE sql
             AS $$

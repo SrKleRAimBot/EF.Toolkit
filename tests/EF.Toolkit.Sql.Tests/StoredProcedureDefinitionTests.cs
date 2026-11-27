@@ -17,7 +17,7 @@ public sealed class StoredProcedureDefinitionTests
         var procedure = new StoredProcedureDefinition(
             "report", [new SqlParameterDefinition("from", "int"), new SqlParameterDefinition("tenantId", "int")], "BEGIN END;");
 
-        procedure.GetCreateSql(SqlDialect.PostgreSql)[0].ShouldContain("(IN \"from\" int, IN tenantId int)");
+        procedure.GetCreateSql(SqlDialect.PostgreSql)[0].ShouldContain("(IN \"from\" int, IN \"tenantid\" int)");
         procedure.GetCreateSql(SqlDialect.MySql)[1].ShouldContain("IN `from` int");
     }
 
@@ -28,7 +28,7 @@ public sealed class StoredProcedureDefinitionTests
             .ShouldBe(
             [
                 """
-                CREATE OR REPLACE PROCEDURE "billing"."close_month"(IN tenant_id integer, OUT total numeric(10,2), INOUT counter integer)
+                CREATE OR REPLACE PROCEDURE "billing"."close_month"(IN "tenant_id" integer, OUT "total" numeric(10,2), INOUT "counter" integer)
                 LANGUAGE plpgsql
                 AS $$
                 BEGIN

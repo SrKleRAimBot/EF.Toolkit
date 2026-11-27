@@ -58,30 +58,14 @@ internal static class RoutineSyntax
 
     /// <summary>A PostgreSQL routine parameter name as written in DDL and in a named-notation call.</summary>
     /// <remarks>
-    ///     Bare, so it folds to lowercase like any unquoted identifier: a routine body refers to its
-    ///     parameters unquoted, and quoting a mixed-case name here would leave those references pointing
-    ///     at nothing. A reserved word cannot be written bare at all, so it is quoted — in its folded form,
-    ///     which is the name the bare spelling would have had.
+    ///     Quoted, in its folded form. That is the name a bare spelling would have had, so a body that
+    ///     refers to its parameters unquoted still finds them (TenantId folds to tenantid). And a key word
+    ///     cannot be written bare as a parameter — not only the reserved ones: IN timestamp integer reads
+    ///     timestamp as the type, and timestamp => 1 is a syntax error in a call. Quoted, any name works;
+    ///     a body has to quote a key-word name to refer to it, as it always must.
     /// </remarks>
     public static string PostgreSqlParameterName(string name)
-    {
-        var folded = name.ToLowerInvariant();
-        return PostgreSqlReserved.Contains(folded) ? SqlSyntax.Quote(SqlDialect.PostgreSql, folded) : name;
-    }
-
-    // PostgreSQL's reserved key words: the ones it refuses as a bare parameter or argument name.
-    private static readonly HashSet<string> PostgreSqlReserved = new(StringComparer.Ordinal)
-    {
-        "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric", "both", "case",
-        "cast", "check", "collate", "column", "constraint", "create", "current_catalog", "current_date",
-        "current_role", "current_time", "current_timestamp", "current_user", "default", "deferrable",
-        "desc", "distinct", "do", "else", "end", "except", "false", "fetch", "for", "foreign", "from",
-        "grant", "group", "having", "in", "initially", "intersect", "into", "lateral", "leading", "limit",
-        "localtime", "localtimestamp", "not", "null", "offset", "on", "only", "or", "order", "placing",
-        "primary", "references", "returning", "select", "session_user", "some", "symmetric",
-        "system_user", "table", "then", "to", "trailing", "true", "union", "unique", "user", "using",
-        "variadic", "when", "where", "window", "with",
-    };
+        => SqlSyntax.Quote(SqlDialect.PostgreSql, name.ToLowerInvariant());
 
     /// <summary>SQL Server's procedure parameter list, which is not parenthesised.</summary>
     public static string SqlServerProcedureParameters(IReadOnlyList<SqlParameterDefinition> parameters)
