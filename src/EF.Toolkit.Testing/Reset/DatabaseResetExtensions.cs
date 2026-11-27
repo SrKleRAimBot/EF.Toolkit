@@ -64,7 +64,7 @@ public static class DatabaseResetExtensions
                     plan.RefuseSqliteKeptAndReset();
                 }
 
-                if (engine == DatabaseEngine.MySql && plan.Retained.Count > 0)
+                if (engine == DatabaseEngine.MySql)
                 {
                     var current = await ScalarAsync(connection, transaction, "SELECT DATABASE();", cancellationToken).ConfigureAwait(false);
                     var lowerCase = await ScalarAsync(connection, transaction, "SELECT @@lower_case_table_names;", cancellationToken)
@@ -196,7 +196,7 @@ public static class DatabaseResetExtensions
                     plan.RefuseSqliteKeptAndReset();
                 }
 
-                if (engine == DatabaseEngine.MySql && plan.Retained.Count > 0)
+                if (engine == DatabaseEngine.MySql)
                 {
                     var current = Scalar(connection, transaction, "SELECT DATABASE();");
                     var lowerCase = Scalar(connection, transaction, "SELECT @@lower_case_table_names;");

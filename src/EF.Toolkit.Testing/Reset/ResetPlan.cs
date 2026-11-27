@@ -231,6 +231,19 @@ internal sealed class ResetPlan
     /// <param name="ignoreCase">Whether the server compares table names ignoring case.</param>
     internal void RefuseMySqlKeptAndReset(string? database, bool ignoreCase)
     {
+        // Every check before a MySQL reset — foreign keys that would cascade, engines that ignore a
+        // rollback, views — reads the connection's own database. A table mapped into another one would
+        // be deleted from unchecked, so it is refused instead.
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (Tables.FirstOrDefault(t => t.Schema is not null && !string.Equals(t.Schema, database, comparison)) is { } elsewhere)
+        {
+            throw new InvalidOperationException(
+                $"Cannot reset '{elsewhere.Schema}.{elsewhere.Name}': it is in another database than the "
+                + $"connection's ('{database}'), and the checks a MySQL reset makes before deleting — foreign "
+                + "keys that would cascade, tables that ignore a rollback — read the connection's database "
+                + "only. Exclude it, or reset it through a context connected to that database.");
+        }
+
         string Identity(ResetTable table)
         {
             var identity = (table.Schema ?? database ?? "") + "." + table.Name;

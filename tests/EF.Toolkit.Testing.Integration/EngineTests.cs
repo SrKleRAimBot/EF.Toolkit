@@ -1225,6 +1225,44 @@ public sealed class MySqlEngineTests(MySqlFixture fixture) : EngineTests(fixture
         }
     }
 
+    private sealed class ArchivedOrder
+    {
+        public int Id { get; set; }
+    }
+
+    /// <summary>A table mapped into another database than the connection's.</summary>
+    private sealed class ArchiveContext(DbContextOptions<ArchiveContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+            => modelBuilder.Entity<ArchivedOrder>().ToTable("ArchivedOrders", "reset_archive");
+    }
+
+    [Fact]
+    public async Task A_table_in_another_database_is_refused_before_anything_is_deleted()
+    {
+        // The checks before a MySQL reset read the connection's database only: a cascade into a kept table
+        // there, or a MyISAM table there, went unseen while DELETE FROM reset_archive.ArchivedOrders ran.
+        Assert.SkipWhen(Fixture.SkipReason is not null, Fixture.SkipReason ?? "");
+        await using var context = new ArchiveContext(
+            new DbContextOptionsBuilder<ArchiveContext>().UseMySQL(Fixture.ConnectionString).Options);
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE DATABASE IF NOT EXISTS reset_archive; "
+                + "CREATE TABLE reset_archive.ArchivedOrders (Id int PRIMARY KEY); "
+                + "INSERT INTO reset_archive.ArchivedOrders VALUES (1)",
+            Ct);
+        try
+        {
+            (await Should.ThrowAsync<InvalidOperationException>(() => context.Database.ResetDataAsync(cancellationToken: Ct)))
+                .Message.ShouldContain("another database");
+
+            (await ScalarAsync(context, "SELECT COUNT(*) FROM reset_archive.ArchivedOrders")).ShouldBe(1);
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlRawAsync("DROP DATABASE IF EXISTS reset_archive", Ct);
+        }
+    }
+
     [Fact]
     public async Task A_table_kept_under_one_mapping_is_not_emptied_under_another()
     {
