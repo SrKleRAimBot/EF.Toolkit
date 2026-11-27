@@ -181,17 +181,21 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
         SessionContextSql.ValidateKey(SqlDialect.PostgreSql, SessionKey);
         RequireDistinctPostgreSqlNames();
 
-        // Two kinds of type cannot be cast losslessly from text, so they are refused as keys. An interval's
-        // input takes fractions of any unit — '0.4 microseconds' — and rounds them away to the microsecond;
-        // a floating-point type rounds to its nearest value — 16777217 as real is 16777216. No check on
-        // the text can stop a session value from landing on a tenant it does not name.
-        // An array of a type casts each element as that type, so it is judged by its element type.
+        // Only built-in types this policy knows how to cast losslessly are taken as keys. Each other
+        // built-in loses something on the way from text in its own way — an interval rounds '0.4
+        // microseconds' away, a real 16777217 to 16777216, a daterange a bound's time of day — and an
+        // array casts every element so: no check on the text keeps up with all of them. A name that is
+        // no built-in is a type of the developer's own, cast by its own rules (see the docs).
         var typeName = PostgreSqlTypeName(ColumnStoreType, out var isArray);
-        if (UnkeyableName().IsMatch(typeName) || (isArray && typeName == "date"))
+        // An interval may also carry its fields — interval day to second — which no set of names lists.
+        if (isArray
+            || IntervalWithFields().IsMatch(typeName)
+            || (PostgreSqlBuiltInTypes.Contains(typeName) && !PostgreSqlKeyTypes.Contains(typeName)))
         {
             throw new ArgumentException(
-                $"'{ColumnStoreType}' cannot be a PostgreSQL tenant key: a cast to it rounds, so a session value "
-                + "could match a tenant it does not name. Use an integer, numeric, text, uuid or timestamp key.",
+                $"'{ColumnStoreType}' cannot be a PostgreSQL tenant key: a cast to it can lose data, so a session "
+                + "value could match a tenant it does not name. Use an integer, numeric, text, uuid, date or "
+                + "timestamp key.",
                 "columnStoreType");
         }
 
@@ -441,14 +445,42 @@ public sealed partial class TenantIsolationPolicy : IDatabaseObject
     [GeneratedRegex(@"^(timestamp|timestamptz|time|timetz|interval)\b(?!_)", RegexOptions.CultureInvariant)]
     private static partial Regex TemporalName();
 
-    // Whole names: interval_id or a type called "realm" is someone's own type, not these.
-    // A date array is refused too: its elements drop their time of day, and PostgreSQL has no
-    // date[] = timestamp[] comparison to catch it with.
-    [GeneratedRegex(@"^(interval\b(?!_)|(real|float|float4|float8|double precision)$)", RegexOptions.CultureInvariant)]
-    private static partial Regex UnkeyableName();
+    /// <summary>The built-in types a tenant key may have: each is cast losslessly, or checked so it is.</summary>
+    private static readonly HashSet<string> PostgreSqlKeyTypes = new(StringComparer.Ordinal)
+    {
+        "smallint", "int2", "integer", "int", "int4", "bigint", "int8", "numeric", "decimal",
+        "text", "varchar", "character varying", "char", "character", "bpchar", "nchar", "national character",
+        "national char", "national character varying", "national char varying", "nchar varying", "name",
+        "bit", "varbit", "bit varying", "uuid", "date",
+        "timestamp", "timestamp without time zone", "timestamptz", "timestamp with time zone",
+        "time", "time without time zone", "timetz", "time with time zone",
+    };
 
-    // Any number of dimensions, spaced or not, sized or not: real [], real[][], date[3].
-    [GeneratedRegex(@"(\s*\[\s*\d*\s*\])+$", RegexOptions.CultureInvariant)]
+    /// <summary>
+    ///     Every type pg_catalog defines (PostgreSQL 17), under its own name and its SQL spellings: a name
+    ///     among these and not a key type is refused; a name among neither is a type of the developer's own.
+    /// </summary>
+    private static readonly HashSet<string> PostgreSqlBuiltInTypes = new(StringComparer.Ordinal)
+    {
+        "aclitem", "bit", "bool", "boolean", "box", "bpchar", "bytea", "char", "cid", "cidr", "circle", "date",
+        "datemultirange", "daterange", "float4", "float8", "real", "double precision", "float", "gtsvector",
+        "inet", "int2", "int2vector", "int4", "int4multirange", "int4range", "int8", "int8multirange",
+        "int8range", "interval", "json", "jsonb", "jsonpath", "line", "lseg", "macaddr", "macaddr8", "money",
+        "name", "numeric", "nummultirange", "numrange", "oid", "oidvector", "path", "pg_brin_bloom_summary",
+        "pg_brin_minmax_multi_summary", "pg_dependencies", "pg_lsn", "pg_mcv_list", "pg_ndistinct",
+        "pg_node_tree", "pg_snapshot", "point", "polygon", "refcursor", "regclass", "regcollation",
+        "regconfig", "regdictionary", "regnamespace", "regoper", "regoperator", "regproc", "regprocedure",
+        "regrole", "regtype", "text", "tid", "time", "timestamp", "timestamptz", "timetz", "tsmultirange",
+        "tsquery", "tsrange", "tstzmultirange", "tstzrange", "tsvector", "txid_snapshot", "uuid", "varbit",
+        "varchar", "xid", "xid8", "xml",
+    };
+
+    [GeneratedRegex(@"^interval\s", RegexOptions.CultureInvariant)]
+    private static partial Regex IntervalWithFields();
+
+    // Any number of dimensions, spaced or not, sized or not — real [], real[][], date[3] — or the SQL
+    // standard's ARRAY and ARRAY[3].
+    [GeneratedRegex(@"((\s*\[\s*\d*\s*\])+|\s+array(\s*\[\s*\d*\s*\])?)$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex ArraySuffix();
 
     [GeneratedRegex(@"\s*\(\s*-?\d+\s*(,\s*-?\d+\s*)?\)", RegexOptions.CultureInvariant)]

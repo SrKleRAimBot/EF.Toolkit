@@ -280,17 +280,18 @@ likewise `name`, which keeps only its first 63 bytes. And PostgreSQL keeps a `ti
 only to the microsecond, rounding finer digits away even without a modifier, so a session value with a
 nonzero digit past the sixth (`12:30:00.0000004`) matches nothing; the seven digits .NET writes for a
 `DateTime` still match when the last is `0`. A `DateTime` with ticks finer than a microsecond is a
-different instant from any stored one, and reaches no rows. An `interval` tenant column is refused
-outright: its input takes fractions of any unit (`0.4 microseconds`) and rounds them away, so no check
-on the session value could keep the cast lossless. So is a floating-point one (`real`, `double
-precision`, `float`), which rounds to its nearest value — `16777217` as `real` is `16777216`. A column
-type containing a SQL comment is refused on every engine, since it could hide what the cast is to.
-An array is judged by its element type, however its brackets are written, so `real[]` and
-`interval[]` are refused too — and so is `date[]`, whose elements drop their time of day with no
-array comparison that could catch it.
-The type is read by its name, as EF and you write it: a domain or other type of your own is cast by its
-own rules, which the policy cannot see into, so a domain over a type that rounds is yours to keep
-lossless.
+different instant from any stored one, and reaches no rows.
+
+So on PostgreSQL a tenant key must be one of the built-in types above, which the policy casts
+losslessly or checks so that it is: an integer, `numeric`/`decimal`, `text`, `varchar`, `character`,
+`name`, `bit`, `varbit`, `uuid`, `date`, `timestamp`/`timestamptz` or `time`/`timetz`, with or without
+a modifier. Every other built-in type is refused, because each loses something on the way from text
+in its own way: an `interval` rounds `0.4 microseconds` away, a `real` makes `16777217` `16777216`, a
+`daterange` drops a bound's time of day. So is any array, in `[]` or `ARRAY` form, which casts every
+element that way. A type that is not built in — a domain or a type of your own — is cast by its own
+rules, which the policy cannot see into, so a domain over a type that loses data is yours to keep
+lossless. A column type containing a SQL comment is refused on every engine, since it could hide what
+the cast is to.
 
 On SQL Server a string holding a GUID followed by anything converts to that GUID, and its string
 equality ignores trailing spaces. There the converted value must either equal the session value as a

@@ -159,11 +159,9 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("CHARACTER(8)", "bpchar")]
     [InlineData("pg_catalog.bpchar(8)", "pg_catalog.bpchar")]
     [InlineData("bit(3)", "varbit")]
-    [InlineData("varchar(8)[]", "varchar[]")]
     [InlineData("character", "bpchar")]
     [InlineData("char", "bpchar")]
     [InlineData("pg_catalog.bit", "pg_catalog.varbit")]
-    [InlineData("char[]", "bpchar[]")]
     [InlineData("name", "text")]
     [InlineData("pg_catalog.name", "pg_catalog.text")]
     [InlineData("pg_catalog.\"name\"", "pg_catalog.text")]
@@ -224,6 +222,20 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("interval[]")]
     [InlineData("date[]")]
     [InlineData("pg_catalog.date []")]
+    [InlineData("real ARRAY")]
+    [InlineData("real array[3]")]
+    [InlineData("date ARRAY")]
+    [InlineData("varchar(8)[]")]
+    [InlineData("character [ 3 ]")]
+    [InlineData("\"char\"[][]")]
+    [InlineData("bit[]")]
+    [InlineData("name[]")]
+    [InlineData("tsrange")]
+    [InlineData("pg_catalog.daterange")]
+    [InlineData("tstzmultirange")]
+    [InlineData("money")]
+    [InlineData("boolean")]
+    [InlineData("jsonb")]
     public void PostgreSql_refuses_a_tenant_type_whose_cast_rounds(string storeType)
     {
         // '0.4 microseconds' rounds to the tenant keyed by 0 seconds; no check on the text can prevent it.
@@ -236,6 +248,9 @@ public sealed class TenantIsolationPolicyTests
     [InlineData("realm")]
     [InlineData("interval_id")]
     [InlineData("floating")]
+    [InlineData("public.tenant_key")]
+    [InlineData("\"Money\"")]
+    [InlineData("arrayish")]
     public void PostgreSql_takes_a_type_whose_name_only_begins_like_a_refused_one(string storeType)
         => Should.NotThrow(() => new TenantIsolationPolicy("Orders", "TenantId", "app.tenant_id", storeType).GetCreateSql(SqlDialect.PostgreSql));
 
