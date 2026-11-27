@@ -61,7 +61,7 @@ public sealed class MigrationBuilderExtensionsTests
 
         builder.CreateView("v", "SELECT 1").ShouldBeSameAs(builder);
 
-        Sql(builder).ShouldBe(["DROP VIEW IF EXISTS \"v\"", "CREATE VIEW \"v\" AS\nSELECT 1"]);
+        Sql(builder).ShouldBe(["DROP VIEW IF EXISTS \"main\".\"v\"", "CREATE VIEW \"main\".\"v\" AS\nSELECT 1"]);
     }
 
     [Fact]

@@ -42,7 +42,7 @@ public sealed class ViewDefinition : IDatabaseObject
     /// <inheritdoc />
     public IReadOnlyList<string> GetCreateSql(SqlDialect dialect)
     {
-        var target = SqlSyntax.Qualify(dialect, Name, Schema);
+        var target = SqlSyntax.Qualify(dialect, Name, SchemaFor(dialect, Schema));
         var query = SqlSyntax.TrimQuery(Sql);
 
         return dialect switch
@@ -58,5 +58,11 @@ public sealed class ViewDefinition : IDatabaseObject
     public IReadOnlyList<string> GetDropSql(SqlDialect dialect) => DropSql(dialect, Name, Schema);
 
     internal static IReadOnlyList<string> DropSql(SqlDialect dialect, string name, string? schema)
-        => [$"DROP VIEW IF EXISTS {SqlSyntax.Qualify(dialect, name, SqlSyntax.OptionalName(schema, nameof(schema)))}"];
+        => [$"DROP VIEW IF EXISTS {SqlSyntax.Qualify(dialect, name, SchemaFor(dialect, SqlSyntax.OptionalName(schema, nameof(schema))))}"];
+
+    // SQLite looks up an unqualified name in temp before main, so an unqualified DROP VIEW would remove
+    // a temporary view of the same name — and the CREATE then put the view in main beside it. With no
+    // schema given the view is main's, which is where an unqualified CREATE VIEW puts it anyway.
+    private static string? SchemaFor(SqlDialect dialect, string? schema)
+        => dialect == SqlDialect.Sqlite ? schema ?? "main" : schema;
 }

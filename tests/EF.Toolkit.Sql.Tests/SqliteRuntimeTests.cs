@@ -181,6 +181,22 @@ public sealed class SqliteRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Replacing_a_view_leaves_a_temporary_view_of_the_same_name_alone()
+    {
+        // SQLite resolves an unqualified name in temp first: the DROP VIEW removed the temporary view,
+        // and the CREATE put the replacement in main.
+        await _context.Database.ExecuteSqlRawAsync("CREATE TEMP VIEW \"ActiveCustomers\" AS SELECT 99 AS \"Id\", 'temp' AS \"Name\"", TestContext.Current.CancellationToken);
+
+        await _context.Database.CreateDatabaseObjectsAsync(ActiveCustomers);
+
+        (await _context.Database.SqlQueryRaw<string>("SELECT \"Name\" AS \"Value\" FROM \"temp\".\"ActiveCustomers\"")
+            .SingleAsync(TestContext.Current.CancellationToken)).ShouldBe("temp");
+        (await _context.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS \"Value\" FROM \"main\".\"ActiveCustomers\"")
+            .SingleAsync(TestContext.Current.CancellationToken)).ShouldBe(2);
+        await _context.Database.ExecuteSqlRawAsync("DROP VIEW \"temp\".\"ActiveCustomers\"", TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task A_callers_transaction_is_joined_rather_than_nested()
     {
         await using (var transaction = await _context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken))
