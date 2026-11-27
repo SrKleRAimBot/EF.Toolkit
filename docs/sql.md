@@ -137,7 +137,11 @@ inventing one would be worse than not. Only the parts around it are rendered per
 
 On PostgreSQL the dollar-quote tag is chosen so that it does not occur in the body: a body containing
 `$$` is quoted with `$body$`, and so on. On MySQL the drop and create are separate statements, never a
-`DELIMITER` script — `DELIMITER` belongs to the `mysql` command-line client, not to the server. Pass
+`DELIMITER` script — `DELIMITER` belongs to the `mysql` command-line client, not to the server.
+Each migration operation ends in its own `;`, so a `dotnet ef migrations script` runs them one after
+another; on MySQL, though, a script holding a procedure or function needs `DELIMITER` around its body
+to go through the `mysql` client, which no EF provider writes — apply those migrations with
+`Database.Migrate()` (or `migrations bundle`), which sends each statement on its own. Pass
 `language: "sql"` for a PostgreSQL procedure in plain SQL.
 
 Parameter names must be plain identifiers (letters, digits, underscores), because the body refers to
