@@ -493,6 +493,19 @@ public sealed class TenantIsolationTests(PostgreSqlFixture fixture) : IAsyncLife
     }
 
     [Fact]
+    public async Task A_key_overridden_in_another_case_ends_on_the_last_value_set()
+    {
+        // PostgreSQL setting names ignore case. Kept apart by spelling, 1 → 3 replaced the first entry
+        // in place while APP.TENANT_ID = 2 ran after it, and the session landed on tenant 2.
+        await using var context = new AppDb(PostgreSqlFixture.Options(fixture.AppConnectionString)
+            .UseSessionContext(s => s.Set("app.tenant_id", () => 1).Set("APP.TENANT_ID", () => 2).Set("app.tenant_id", () => 3))
+            .Options);
+
+        (await context.Database.SqlQueryRaw<string>("SELECT current_setting('app.tenant_id') AS \"Value\"").SingleAsync(Token))
+            .ShouldBe("3");
+    }
+
+    [Fact]
     public async Task A_bare_character_tenant_is_one_character_long_and_a_longer_session_value_reaches_nothing()
     {
         // character with no length is character(1): 'acme' casts to 'a'.

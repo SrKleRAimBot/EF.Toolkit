@@ -55,8 +55,12 @@ public sealed class SessionContextBuilder
     private SessionContextBuilder Add(SessionContextValue value)
     {
         // A key set twice keeps the last value, in its original position, so a second
-        // UseSessionContext call can override a default configured by the first.
-        var index = _values.FindIndex(v => string.Equals(v.Key, value.Key, StringComparison.Ordinal));
+        // UseSessionContext call can override a default configured by the first. Keys are compared
+        // ignoring case, as PostgreSQL compares setting names and MySQL user variables: kept apart by
+        // spelling, app.tenant_id and APP.TENANT_ID would both be sent, and whichever ran last would
+        // decide the tenant whatever was set last. (SQL Server keeps keys that differ only in case
+        // apart; here they are one key on every engine.)
+        var index = _values.FindIndex(v => string.Equals(v.Key, value.Key, StringComparison.OrdinalIgnoreCase));
         if (index >= 0)
         {
             _values[index] = value;

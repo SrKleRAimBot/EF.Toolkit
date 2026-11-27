@@ -459,6 +459,10 @@ queries that quietly return nothing.
 `AddDbContext` is the request scope's. Under `AddDbContextPool` the options are shared by every pooled
 context and the provider is the root one, where scoped services cannot be resolved — use the
 `Set(key, () => …)` overload with an ambient source of the tenant there. A `null` value clears the key.
+Setting a key again — in a later `UseSessionContext` call, say — replaces its value in place, and keys
+are compared ignoring case, as PostgreSQL and MySQL compare them: `APP.TENANT_ID` overrides
+`app.tenant_id`. On SQL Server, whose session context keeps keys differing only in case apart, they
+are still one key here.
 PostgreSQL values are sent as text formatted with the invariant culture, so the policy's cast reads
 `1.5` and ISO dates however the server's culture is set.
 

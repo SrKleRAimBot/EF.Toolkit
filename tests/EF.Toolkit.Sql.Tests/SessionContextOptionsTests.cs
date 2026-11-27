@@ -24,6 +24,20 @@ public sealed class SessionContextOptionsTests
     }
 
     [Fact]
+    public void A_key_set_again_in_another_case_is_the_same_key()
+    {
+        // PostgreSQL and MySQL ignore case in these names: kept apart, both were sent and the one sent
+        // last won, whichever had been set last.
+        var builder = new DbContextOptionsBuilder()
+            .UseNpgsql("Host=unused")
+            .UseSessionContext(s => s.Set("app.tenant_id", () => 1).Set("APP.TENANT_ID", () => 2).Set("app.tenant_id", () => 3));
+
+        var values = builder.Options.FindExtension<SessionContextOptionsExtension>()!.Values;
+
+        values.ShouldHaveSingleItem().Resolve(null).ShouldBe(3);
+    }
+
+    [Fact]
     public void A_key_set_twice_keeps_the_later_value_in_its_original_place()
     {
         var builder = new DbContextOptionsBuilder()
